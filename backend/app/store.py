@@ -24,12 +24,14 @@ class EventRecord:
 
 
 _sessions: dict[str, SessionRecord] = {}
+_session_order: list[str] = []
 _events: dict[str, EventRecord] = {}
 _event_order: list[str] = []
 
 
 def reset_store() -> None:
     _sessions.clear()
+    _session_order.clear()
     _events.clear()
     _event_order.clear()
 
@@ -47,6 +49,7 @@ def create_session(device_id: str) -> SessionRecord:
         started_at=_now_iso(),
     )
     _sessions[session_id] = record
+    _session_order.append(session_id)
     return record
 
 
@@ -61,6 +64,13 @@ def stop_session(session_id: str) -> Optional[SessionRecord]:
 
 def get_session(session_id: str) -> Optional[SessionRecord]:
     return _sessions.get(session_id)
+
+
+def list_sessions(device_id: Optional[str] = None) -> list[SessionRecord]:
+    sessions = [_sessions[session_id] for session_id in _session_order]
+    if device_id:
+        sessions = [session for session in sessions if session.device_id == device_id]
+    return sessions
 
 
 def create_event(session_id: str, device_id: str, trigger_type: str) -> Optional[EventRecord]:

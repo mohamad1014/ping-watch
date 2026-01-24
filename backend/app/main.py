@@ -2,6 +2,7 @@ import time
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.logging import setup_logging
 from app.routes.events import router as events_router
@@ -10,6 +11,12 @@ from app.routes.sessions import router as sessions_router
 logger = setup_logging()
 
 app = FastAPI(title="ping-watch-api")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(sessions_router)
 app.include_router(events_router)
 

@@ -1,7 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from app.store import create_session, session_to_dict, stop_session
+from app.store import create_session, list_sessions, session_to_dict, stop_session
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -26,3 +26,9 @@ async def stop_session_endpoint(payload: StopSessionRequest):
     if record is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session_to_dict(record)
+
+
+@router.get("")
+async def list_sessions_endpoint(device_id: str | None = Query(default=None)):
+    sessions = list_sessions(device_id=device_id)
+    return [session_to_dict(session) for session in sessions]
