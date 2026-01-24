@@ -1,4 +1,20 @@
 import { expect, test } from '@playwright/test'
+import { postSummaryForEvent } from './helpers/worker'
+
+const pollFor = async <T>(
+  fn: () => Promise<T | undefined>,
+  timeoutMs = 5000
+): Promise<T> => {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const value = await fn()
+    if (value) {
+      return value
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  throw new Error('Timed out waiting for value')
+}
 
 test('shows the app shell and backend health', async ({ page, request }) => {
   const response = await request.get('http://localhost:8000/health')
@@ -11,25 +27,35 @@ test('shows the app shell and backend health', async ({ page, request }) => {
   ).toBeVisible()
 })
 
-test('starts a session from the UI and reports to the backend', async ({ page, request }) => {
+test('creates an event and shows summary after worker update', async ({
+  page,
+  request,
+}) => {
   await page.goto('/')
 
   await page.getByRole('button', { name: 'Start monitoring' }).click()
   await expect(page.getByText('Active')).toBeVisible()
 
-  await expect
-    .poll(async () => {
-      const response = await request.get(
-        'http://localhost:8000/sessions?device_id=device-1'
-      )
-      const sessions = await response.json()
-      return sessions.some(
-        (session: { device_id: string; status: string }) =>
-          session.device_id === 'device-1' && session.status === 'active'
-      )
-    })
-    .toBeTruthy()
+  const sessionId = await pollFor(async () => {
+    const response = await request.get(
+      'http://localhost:8000/sessions?device_id=device-1'
+    )
+    const sessions = await response.json()
+    return sessions[0]?.session_id as string | undefined
+  })
 
-  await page.getByRole('button', { name: 'Stop' }).click()
-  await expect(page.getByText('Stopped')).toBeVisible()
+  await page.getByRole('button', { name: 'Create event' }).click()
+
+  const eventId = await pollFor(async () => {
+    const response = await request.get(
+      `http://localhost:8000/events?session_id=${sessionId}`
+    )
+    const events = await response.json()
+    return events[0]?.event_id as string | undefined
+  })
+
+  await postSummaryForEvent('http://localhost:8000', eventId)
+
+  await expect(page.getByText('Motion detected')).toBeVisible()
+  await expect(page.getByText('done')).toBeVisible()
 })

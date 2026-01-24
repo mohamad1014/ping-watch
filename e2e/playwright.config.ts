@@ -13,6 +13,9 @@ export default defineConfig({
       cwd: '../frontend',
       port: 5173,
       reuseExistingServer: true,
+      env: {
+        VITE_POLL_INTERVAL_MS: '1000',
+      },
     },
     {
       command: '../backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000',
