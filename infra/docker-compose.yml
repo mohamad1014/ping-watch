@@ -1,0 +1,30 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: pingwatch
+      POSTGRES_PASSWORD: pingwatch
+      POSTGRES_DB: pingwatch
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    command: "azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --location /data --debug /data/debug.log"
+    ports:
+      - "10000:10000"
+    volumes:
+      - azurite:/data
+
+volumes:
+  pgdata:
+  azurite:

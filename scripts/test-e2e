@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "TODO: run Playwright E2E tests against full stack."
+exit 1
