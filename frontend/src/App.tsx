@@ -1,6 +1,25 @@
+import { useState } from 'react'
 import './App.css'
 
+const statusLabels = {
+  idle: 'Idle',
+  active: 'Active',
+  stopped: 'Stopped',
+} as const
+
+type SessionStatus = keyof typeof statusLabels
+
 function App() {
+  const [sessionStatus, setSessionStatus] = useState<SessionStatus>('idle')
+
+  const handleStart = () => {
+    setSessionStatus('active')
+  }
+
+  const handleStop = () => {
+    setSessionStatus('stopped')
+  }
+
   return (
     <div className="app">
       <header className="app-header">
@@ -12,7 +31,7 @@ function App() {
         <section className="status-card" aria-label="Session status">
           <div className="status-row">
             <span className="status-label">Session</span>
-            <span className="status-value">Idle</span>
+            <span className="status-value">{statusLabels[sessionStatus]}</span>
           </div>
           <div className="status-row">
             <span className="status-label">Last event</span>
@@ -21,10 +40,20 @@ function App() {
         </section>
 
         <div className="controls">
-          <button className="primary" type="button">
+          <button
+            className="primary"
+            type="button"
+            onClick={handleStart}
+            disabled={sessionStatus === 'active'}
+          >
             Start monitoring
           </button>
-          <button className="secondary" type="button" disabled>
+          <button
+            className="secondary"
+            type="button"
+            onClick={handleStop}
+            disabled={sessionStatus !== 'active'}
+          >
             Stop
           </button>
         </div>
