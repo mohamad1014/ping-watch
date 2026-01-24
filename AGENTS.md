@@ -62,6 +62,7 @@ No formatter or linter is configured yet. If you introduce one, document it and 
 
 - Frontend: Vite + React + TypeScript, unit tests with Vitest + Testing Library.
 - Backend: FastAPI (Python 3.11+), tests with pytest.
+- Database: SQLAlchemy with Alembic migrations; default SQLite for local dev.
 - Worker: RQ + Redis locally; Azure Service Bus adapter planned for prod.
 - E2E: Playwright against the full local stack.
 - Local dependencies: Docker (Postgres, Azurite for Blob, queue emulator or local queue).
