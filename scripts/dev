@@ -1,5 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "TODO: wire frontend + backend dev servers."
-exit 1
+scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$scripts_dir/.." && pwd)
+
+pids=()
+cleanup() {
+  for pid in "${pids[@]}"; do
+    kill "$pid" 2>/dev/null || true
+  done
+}
+trap cleanup EXIT
+
+(
+  cd "$repo_root/frontend"
+  npm run dev -- --host 0.0.0.0 --port 5173
+) &
+pids+=("$!")
+
+(
+  cd "$repo_root/backend"
+  .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+) &
+pids+=("$!")
+
+wait -n

@@ -3,8 +3,7 @@
 ## Project Structure & Module Organization
 
 - `PLAN.md` is the primary product/architecture plan and source of truth for scope.
-- `README.md` is currently a placeholder and should be expanded as features land.
-- No source code directories are present yet (e.g., `frontend/`, `backend/`, `tests/`). When added, keep a clear top-level split by runtime or service.
+- `README.md` documents the current scaffold and local setup.
 - Default layout (adjust only if we agree to change stacks):
   - `frontend/` — PWA (React + TypeScript).
   - `backend/` — FastAPI API service (Python).
@@ -15,13 +14,7 @@
 
 ## Build, Test, and Development Commands
 
-There are no build or test commands in this repository yet. When adding tooling, document it here with one-line explanations, for example:
-
-- `npm run dev` — start the PWA dev server
-- `uvicorn app.main:app --reload` — run the FastAPI API locally
-- `pytest` — run the backend test suite
-
-Target command set to standardize on once tooling lands:
+Primary scripts:
 
 - `./scripts/dev-up` — start all local dependencies (db, blob emulator, queue).
 - `./scripts/dev` — run frontend + backend concurrently.
@@ -41,8 +34,6 @@ No formatter or linter is configured yet. If you introduce one, document it and 
 
 ## Testing Guidelines
 
-No test framework is set up yet. Once tests exist:
-
 - Use `tests/` with file names like `test_<module>.py` or `<component>.test.ts`.
 - Favor unit tests for trigger logic and integration tests for upload/inference flows.
 - Document minimum coverage expectations if enforced.
@@ -60,14 +51,14 @@ No test framework is set up yet. Once tests exist:
 - Use environment variables or a local, untracked `.env`.
 - Do not commit API keys or service credentials.
 
-## Local Dev & Observability (planned)
+## Local Dev & Observability
 
 - Backend logs must be structured and include timestamps in ISO 8601, log level, request id, device id, session id, and event id where applicable.
-- Log to stdout; local dev uses `docker compose logs -f backend`.
+- Log to stdout; local dev runs via `./scripts/dev`.
 - Prefer UTC time everywhere; store timezone only for display.
 - Local queue is Redis for dev/E2E; production queue remains Azure Service Bus via a small queue abstraction.
 
-## Tooling Baseline (planned)
+## Tooling Baseline
 
 - Frontend: Vite + React + TypeScript, unit tests with Vitest + Testing Library.
 - Backend: FastAPI (Python 3.11+), tests with pytest.

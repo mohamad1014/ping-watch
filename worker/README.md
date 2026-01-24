@@ -1,10 +1,5 @@
 # Worker
 
-Planned stack: Python worker using Redis queue locally; Azure Service Bus adapter in prod.
+Planned: Python worker with Redis queue locally and Azure Service Bus adapter in production.
 
-Scaffold target (to be run):
-- `python -m venv .venv`
-- `pip install celery redis`
-
-Testing target:
-- pytest for worker logic.
+Scaffold pending.

@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "TODO: run frontend + backend unit tests."
-exit 1
+scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$scripts_dir/.." && pwd)
+
+(
+  cd "$repo_root/frontend"
+  npm test -- --run
+)
+
+(
+  cd "$repo_root/backend"
+  .venv/bin/python -m pytest -q
+)

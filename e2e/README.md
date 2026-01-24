@@ -1,11 +1,13 @@
 # End-to-End Tests
 
-Planned stack: Playwright.
+Playwright-based E2E tests.
 
-Scaffold target (to be run):
-- `npm init playwright@latest`
+Setup:
+- `npm install`
+- `npx playwright install`
 
-E2E scope:
-- start/stop monitoring session
-- clip upload flow
-- event timeline updates
+Run:
+- `npm test`
+
+Notes:
+- Playwright may require system dependencies. If you see missing deps, run `sudo npx playwright install-deps`.

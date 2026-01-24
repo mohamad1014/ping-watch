@@ -82,3 +82,24 @@ Scaffolding started: repo layout, local infra compose, and decision log.
 - `./scripts/logs` — tail backend logs.
 
 These scripts exist as stubs until the service scaffolds are added.
+
+## Getting Started (local)
+
+Prereqs:
+- Node.js 20+
+- Python 3.12+
+- Docker
+
+Setup:
+1) `cp .env.example .env`
+2) `./scripts/dev-up` (Postgres, Redis, Azurite)
+3) Frontend deps: `cd frontend && npm install`
+4) Backend deps: `python3 -m venv backend/.venv && backend/.venv/bin/pip install -r backend/requirements.txt -r backend/requirements-dev.txt`
+5) E2E deps: `cd e2e && npm install && npx playwright install`
+
+Run:
+- `./scripts/dev`
+
+Test:
+- `./scripts/test-unit`
+- `./scripts/test-e2e` (requires Playwright system deps; see output of `npx playwright install` if missing)

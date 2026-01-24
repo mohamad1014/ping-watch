@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "TODO: tail structured backend logs."
-exit 1
+echo "Backend logs are emitted to stdout when running ./scripts/dev."
+echo "Infra logs (Postgres/Redis/Azurite): docker compose -f infra/docker-compose.yml logs -f"

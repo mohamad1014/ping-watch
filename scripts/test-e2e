@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "TODO: run Playwright E2E tests against full stack."
-exit 1
+scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$scripts_dir/.." && pwd)
+
+(
+  cd "$repo_root/e2e"
+  npm test
+)

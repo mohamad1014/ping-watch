@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "TODO: run unit + integration + e2e test suites."
-exit 1
+scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$scripts_dir/.." && pwd)
+
+"$repo_root/scripts/test-unit"
+"$repo_root/scripts/test-integration"
+"$repo_root/scripts/test-e2e"
