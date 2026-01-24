@@ -7,7 +7,10 @@ Setup:
 - `.venv/bin/pip install -r requirements.txt -r requirements-dev.txt`
 
 Run:
-- `.venv/bin/python -m app.cli --queue clip_uploaded`
+- `.venv/bin/python -m app.cli run --queue clip_uploaded`
+
+Manual event summary (dev):
+- `.venv/bin/python -m app.cli process-event <event_id> --summary "Motion detected" --label person --confidence 0.88`
 
 Test:
 - `.venv/bin/python -m pytest -q`
