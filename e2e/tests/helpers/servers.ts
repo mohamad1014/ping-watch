@@ -66,6 +66,7 @@ export const startServers = async () => {
       env: {
         ...process.env,
         PYTHONPATH: backendDir,
+        DATABASE_URL: 'sqlite:///./integration.db',
       },
       stdio: 'inherit',
     }

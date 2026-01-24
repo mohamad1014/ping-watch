@@ -22,6 +22,9 @@ export default defineConfig({
       cwd: '../backend',
       port: 8000,
       reuseExistingServer: true,
+      env: {
+        DATABASE_URL: 'sqlite:///./e2e.db',
+      },
     },
   ],
 })

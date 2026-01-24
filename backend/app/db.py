@@ -3,7 +3,9 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./pingwatch.db")
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL", "postgresql+psycopg://pingwatch:pingwatch@localhost:5432/pingwatch"
+)
 
 connect_args = {}
 if DATABASE_URL.startswith("sqlite"):

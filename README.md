@@ -81,8 +81,6 @@ Scaffolding started: repo layout, local infra compose, and decision log.
 - `./scripts/test-all` — run all tests.
 - `./scripts/logs` — tail backend logs.
 
-These scripts are wired; see below for prereqs.
-
 ## Getting Started (local)
 
 Prereqs:
@@ -111,4 +109,4 @@ Test:
 
 - `VITE_API_URL` — backend base URL for the frontend (default `http://localhost:8000`).
 - `VITE_POLL_INTERVAL_MS` — polling interval for event refresh (default 5000).
-- `DATABASE_URL` — backend DB URL (default `sqlite:///./pingwatch.db`).
+- `DATABASE_URL` — backend DB URL (default Postgres in local dev).
