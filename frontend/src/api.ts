@@ -31,11 +31,14 @@ export type SessionResponse = {
 
 export type EventResponse = {
   event_id: string
-  session_id: string
-  device_id: string
+  session_id?: string
+  device_id?: string
   status: string
   trigger_type: string
-  created_at: string
+  created_at?: string
+  summary?: string | null
+  label?: string | null
+  confidence?: number | null
 }
 
 export const startSession = (deviceId: string) =>

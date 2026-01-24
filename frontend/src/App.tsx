@@ -21,6 +21,13 @@ const getPollIntervalMs = () => {
   return envValue ? Number(envValue) : 5000
 }
 
+function formatConfidence(value: number | null | undefined) {
+  if (value === null || value === undefined) {
+    return null
+  }
+  return `${Math.round(value * 100)}%`
+}
+
 function App() {
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('idle')
   const [sessionId, setSessionId] = useState<string | null>(null)
@@ -145,17 +152,35 @@ function App() {
             <p className="events-empty">No clips captured yet.</p>
           ) : (
             <ul className="events-list">
-              {events.map((event) => (
-                <li key={event.event_id} className="event-item">
-                  <div>
-                    <span className="event-id">{event.event_id}</span>
-                    <span className="event-trigger">{event.trigger_type}</span>
-                  </div>
-                  <span className={`event-status status-${event.status}`}>
-                    {event.status}
-                  </span>
-                </li>
-              ))}
+              {events.map((event) => {
+                const confidence = formatConfidence(event.confidence)
+                return (
+                  <li key={event.event_id} className="event-item">
+                    <div>
+                      <div className="event-header">
+                        <span className="event-id">{event.event_id}</span>
+                        <span className="event-trigger">{event.trigger_type}</span>
+                      </div>
+                      {event.summary ? (
+                        <p className="event-summary">{event.summary}</p>
+                      ) : null}
+                      {event.label || confidence ? (
+                        <div className="event-meta">
+                          {event.label ? (
+                            <span className="event-label">{event.label}</span>
+                          ) : null}
+                          {confidence ? (
+                            <span className="event-confidence">{confidence}</span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                    <span className={`event-status status-${event.status}`}>
+                      {event.status}
+                    </span>
+                  </li>
+                )
+              })}
             </ul>
           )}
         </section>

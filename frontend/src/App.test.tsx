@@ -98,13 +98,19 @@ describe('App', () => {
         [
           {
             event_id: 'evt_1',
-            status: 'processing',
+            status: 'done',
             trigger_type: 'motion',
+            summary: 'Motion detected',
+            label: 'person',
+            confidence: 0.82,
           },
           {
             event_id: 'evt_2',
             status: 'done',
             trigger_type: 'audio',
+            summary: 'Audio spike',
+            label: 'bang',
+            confidence: 0.91,
           },
         ],
       ],
@@ -125,6 +131,9 @@ describe('App', () => {
 
     expect(await screen.findByText('2 captured')).toBeInTheDocument()
     expect(within(list).getByText('evt_2')).toBeInTheDocument()
+    expect(within(list).getByText('Motion detected')).toBeInTheDocument()
+    expect(within(list).getByText('Audio spike')).toBeInTheDocument()
+    expect(within(list).getAllByText('done').length).toBeGreaterThan(0)
 
     await user.click(screen.getByRole('button', { name: /stop/i }))
 

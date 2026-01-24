@@ -150,13 +150,34 @@ button:not(:disabled):hover {
   background: #f6f1e9;
 }
 
+.event-header {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+
 .event-id {
   font-weight: 600;
-  margin-right: 0.5rem;
 }
 
 .event-trigger {
-  font-size: 0.85rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6a6a6a;
+}
+
+.event-summary {
+  margin: 0.4rem 0 0;
+  font-size: 0.95rem;
+  color: #2a2a2a;
+}
+
+.event-meta {
+  margin-top: 0.3rem;
+  display: flex;
+  gap: 0.75rem;
+  font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: #6a6a6a;
