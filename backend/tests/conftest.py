@@ -2,7 +2,9 @@ import os
 
 import pytest
 
-os.environ.setdefault("DATABASE_URL", "sqlite:///./test.db")
+os.environ.setdefault(
+    "DATABASE_URL", "postgresql+psycopg://pingwatch:pingwatch@localhost:5432/pingwatch"
+)
 
 from app.db import SessionLocal, init_db  # noqa: E402
 from app.store import reset_store  # noqa: E402

@@ -105,6 +105,8 @@ Test:
 - `./scripts/test-e2e` (requires Playwright system deps; see output of `npx playwright install` if missing)
 - `./scripts/test-integration` (runs backend live-server test + Playwright integration test)
 
+Note: backend tests default to Postgres. Run `./scripts/dev-up` first, or set `DATABASE_URL=sqlite:///./test.db` to use SQLite locally.
+
 ## Environment
 
 - `VITE_API_URL` — backend base URL for the frontend (default `http://localhost:8000`).

@@ -8,4 +8,4 @@
 - Local dependencies: Docker Compose with Postgres, Redis, Azurite Blob emulator.
 - Testing: test-first for all new behavior; Vitest (frontend), pytest (backend), Playwright (E2E).
 - Observability: structured backend logs (ISO 8601 timestamps, request/device/session/event ids).
-- Persistence: SQLAlchemy with Alembic migrations; SQLite default for local dev.
+- Persistence: SQLAlchemy with Alembic migrations; Postgres default for local dev and backend tests, SQLite for integration/E2E fixtures.
