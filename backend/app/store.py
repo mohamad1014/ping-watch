@@ -21,6 +21,9 @@ class EventRecord:
     status: str
     trigger_type: str
     created_at: str
+    summary: Optional[str] = None
+    label: Optional[str] = None
+    confidence: Optional[float] = None
 
 
 _sessions: dict[str, SessionRecord] = {}
@@ -90,6 +93,26 @@ def create_event(session_id: str, device_id: str, trigger_type: str) -> Optional
     return record
 
 
+def get_event(event_id: str) -> Optional[EventRecord]:
+    return _events.get(event_id)
+
+
+def update_event_summary(
+    event_id: str,
+    summary: str,
+    label: Optional[str],
+    confidence: Optional[float],
+) -> Optional[EventRecord]:
+    record = _events.get(event_id)
+    if record is None:
+        return None
+    record.summary = summary
+    record.label = label
+    record.confidence = confidence
+    record.status = "done"
+    return record
+
+
 def list_events(session_id: Optional[str] = None) -> list[EventRecord]:
     events = [_events[event_id] for event_id in _event_order]
     if session_id:
@@ -115,4 +138,7 @@ def event_to_dict(record: EventRecord) -> dict:
         "status": record.status,
         "trigger_type": record.trigger_type,
         "created_at": record.created_at,
+        "summary": record.summary,
+        "label": record.label,
+        "confidence": record.confidence,
     }
