@@ -33,6 +33,7 @@ def test_live_server_session_flow():
 
     env = os.environ.copy()
     env["PYTHONPATH"] = os.path.dirname(__file__) + "/.."
+    env["DATABASE_URL"] = "sqlite:///./test-live.db"
 
     process = subprocess.Popen(
         [
@@ -67,6 +68,10 @@ def test_live_server_session_flow():
                 "session_id": session_id,
                 "device_id": "dev_1",
                 "trigger_type": "motion",
+                "duration_seconds": 4.2,
+                "clip_uri": "local://clip-1",
+                "clip_mime": "video/mp4",
+                "clip_size_bytes": 321,
             },
         )
         assert created.status_code == 200

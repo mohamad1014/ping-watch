@@ -90,7 +90,15 @@ function App() {
     setError(null)
 
     try {
-      await createEvent(sessionId, 'device-1', 'motion')
+      await createEvent({
+        sessionId,
+        deviceId: 'device-1',
+        triggerType: 'motion',
+        durationSeconds: 8.5,
+        clipUri: `local://event-${Date.now()}`,
+        clipMime: 'video/mp4',
+        clipSizeBytes: 1024,
+      })
       const nextEvents = await listEvents(sessionId)
       setEvents(nextEvents)
     } catch (err) {

@@ -36,12 +36,24 @@ export type EventResponse = {
   status: string
   trigger_type: string
   created_at?: string
+  duration_seconds?: number
+  clip_uri?: string
+  clip_mime?: string
+  clip_size_bytes?: number
   summary?: string | null
   label?: string | null
   confidence?: number | null
 }
 
-export type CreateEventResponse = EventResponse
+export type CreateEventPayload = {
+  sessionId: string
+  deviceId: string
+  triggerType: string
+  durationSeconds: number
+  clipUri: string
+  clipMime: string
+  clipSizeBytes: number
+}
 
 export const startSession = (deviceId: string) =>
   request<SessionResponse>('/sessions/start', {
@@ -58,16 +70,16 @@ export const stopSession = (sessionId: string) =>
 export const listEvents = (sessionId: string) =>
   request<EventResponse[]>(`/events?session_id=${encodeURIComponent(sessionId)}`)
 
-export const createEvent = (
-  sessionId: string,
-  deviceId: string,
-  triggerType: string
-) =>
-  request<CreateEventResponse>('/events', {
+export const createEvent = (payload: CreateEventPayload) =>
+  request<EventResponse>('/events', {
     method: 'POST',
     body: {
-      session_id: sessionId,
-      device_id: deviceId,
-      trigger_type: triggerType,
+      session_id: payload.sessionId,
+      device_id: payload.deviceId,
+      trigger_type: payload.triggerType,
+      duration_seconds: payload.durationSeconds,
+      clip_uri: payload.clipUri,
+      clip_mime: payload.clipMime,
+      clip_size_bytes: payload.clipSizeBytes,
     },
   })

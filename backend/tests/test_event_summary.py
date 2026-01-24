@@ -17,6 +17,10 @@ async def test_update_event_summary_marks_done():
                 "session_id": session_id,
                 "device_id": "dev_1",
                 "trigger_type": "motion",
+                "duration_seconds": 9.5,
+                "clip_uri": "local://clip-1",
+                "clip_mime": "video/mp4",
+                "clip_size_bytes": 100,
             },
         )
         event_id = created.json()["event_id"]
@@ -36,6 +40,7 @@ async def test_update_event_summary_marks_done():
     assert payload["summary"] == "Motion detected"
     assert payload["label"] == "person"
     assert payload["confidence"] == 0.88
+    assert payload["duration_seconds"] == 9.5
 
 
 @pytest.mark.anyio
@@ -51,6 +56,10 @@ async def test_get_event_summary():
                 "session_id": session_id,
                 "device_id": "dev_1",
                 "trigger_type": "motion",
+                "duration_seconds": 2.0,
+                "clip_uri": "local://clip-2",
+                "clip_mime": "video/mp4",
+                "clip_size_bytes": 200,
             },
         )
         event_id = created.json()["event_id"]

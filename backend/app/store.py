@@ -54,7 +54,14 @@ def list_sessions(db: Session, device_id: Optional[str] = None) -> list[SessionM
 
 
 def create_event(
-    db: Session, session_id: str, device_id: str, trigger_type: str
+    db: Session,
+    session_id: str,
+    device_id: str,
+    trigger_type: str,
+    duration_seconds: float,
+    clip_uri: str,
+    clip_mime: str,
+    clip_size_bytes: int,
 ) -> Optional[EventModel]:
     session = db.get(SessionModel, session_id)
     if session is None:
@@ -66,6 +73,10 @@ def create_event(
         status="processing",
         trigger_type=trigger_type,
         created_at=_now(),
+        duration_seconds=duration_seconds,
+        clip_uri=clip_uri,
+        clip_mime=clip_mime,
+        clip_size_bytes=clip_size_bytes,
     )
     db.add(record)
     db.commit()
@@ -127,6 +138,10 @@ def event_to_dict(record: EventModel) -> dict:
         "status": record.status,
         "trigger_type": record.trigger_type,
         "created_at": _format_dt(record.created_at),
+        "duration_seconds": record.duration_seconds,
+        "clip_uri": record.clip_uri,
+        "clip_mime": record.clip_mime,
+        "clip_size_bytes": record.clip_size_bytes,
         "summary": record.summary,
         "label": record.label,
         "confidence": record.confidence,

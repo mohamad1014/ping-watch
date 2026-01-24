@@ -18,6 +18,10 @@ class CreateEventRequest(BaseModel):
     session_id: str
     device_id: str
     trigger_type: str
+    duration_seconds: float
+    clip_uri: str
+    clip_mime: str
+    clip_size_bytes: int
 
 
 class EventSummaryRequest(BaseModel):
@@ -30,7 +34,16 @@ class EventSummaryRequest(BaseModel):
 async def create_event_endpoint(
     payload: CreateEventRequest, db: Session = Depends(get_db)
 ):
-    record = create_event(db, payload.session_id, payload.device_id, payload.trigger_type)
+    record = create_event(
+        db,
+        payload.session_id,
+        payload.device_id,
+        payload.trigger_type,
+        payload.duration_seconds,
+        payload.clip_uri,
+        payload.clip_mime,
+        payload.clip_size_bytes,
+    )
     if record is None:
         raise HTTPException(status_code=404, detail="session not found")
     return event_to_dict(record)

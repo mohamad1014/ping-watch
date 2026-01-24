@@ -17,6 +17,10 @@ async def test_create_event_records_processing_state():
                 "session_id": session_id,
                 "device_id": "dev_1",
                 "trigger_type": "motion",
+                "duration_seconds": 12.5,
+                "clip_uri": "local://clip-1",
+                "clip_mime": "video/mp4",
+                "clip_size_bytes": 1024,
             },
         )
 
@@ -24,6 +28,10 @@ async def test_create_event_records_processing_state():
     data = response.json()
     assert data["status"] == "processing"
     assert data["event_id"]
+    assert data["duration_seconds"] == 12.5
+    assert data["clip_uri"] == "local://clip-1"
+    assert data["clip_mime"] == "video/mp4"
+    assert data["clip_size_bytes"] == 1024
 
 
 @pytest.mark.anyio
@@ -39,6 +47,10 @@ async def test_list_events_returns_created_event():
                 "session_id": session_id,
                 "device_id": "dev_1",
                 "trigger_type": "motion",
+                "duration_seconds": 8.0,
+                "clip_uri": "local://clip-2",
+                "clip_mime": "video/mp4",
+                "clip_size_bytes": 2048,
             },
         )
         event_id = created.json()["event_id"]
@@ -48,6 +60,7 @@ async def test_list_events_returns_created_event():
     data = response.json()
     assert len(data) == 1
     assert data[0]["event_id"] == event_id
+    assert data[0]["duration_seconds"] == 8.0
 
 
 @pytest.mark.anyio
@@ -61,6 +74,10 @@ async def test_create_event_unknown_session_returns_404():
                 "session_id": "missing",
                 "device_id": "dev_1",
                 "trigger_type": "motion",
+                "duration_seconds": 3.2,
+                "clip_uri": "local://clip-3",
+                "clip_mime": "video/mp4",
+                "clip_size_bytes": 512,
             },
         )
 

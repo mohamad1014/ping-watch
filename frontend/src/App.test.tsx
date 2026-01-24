@@ -113,6 +113,7 @@ describe('App', () => {
       'http://localhost:8000/events',
       expect.objectContaining({
         method: 'POST',
+        body: expect.stringContaining('duration_seconds'),
       })
     )
 

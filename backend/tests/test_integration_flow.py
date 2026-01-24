@@ -19,6 +19,10 @@ async def test_session_event_flow():
                 "session_id": session_id,
                 "device_id": "dev_1",
                 "trigger_type": "motion",
+                "duration_seconds": 5.5,
+                "clip_uri": "local://clip-1",
+                "clip_mime": "video/mp4",
+                "clip_size_bytes": 1234,
             },
         )
         assert created.status_code == 200
