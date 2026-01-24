@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "No integration tests yet."
+scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$scripts_dir/.." && pwd)
+
+(
+  cd "$repo_root/backend"
+  .venv/bin/python -m pytest -q tests/test_live_server.py
+)
