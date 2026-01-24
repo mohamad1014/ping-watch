@@ -1,10 +1,16 @@
 # Backend (API)
 
-Planned stack: FastAPI (Python 3.11+).
+FastAPI service.
 
-Scaffold target (to be run):
-- `python -m venv .venv`
-- `pip install fastapi uvicorn[standard]`
+Setup:
+- `python3 -m venv .venv`
+- `.venv/bin/pip install -r requirements.txt -r requirements-dev.txt`
 
-Testing target:
-- pytest for unit + API tests.
+Run:
+- `.venv/bin/uvicorn app.main:app --reload`
+
+Test:
+- `.venv/bin/python -m pytest -q`
+
+Logging:
+- Structured JSON logs to stdout with ISO 8601 timestamps and request metadata.
