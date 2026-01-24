@@ -7,6 +7,7 @@ import {
   startSession,
   stopSession,
 } from './api'
+import { captureClipMetadata } from './recorder'
 
 const statusLabels = {
   idle: 'Idle',
@@ -90,14 +91,15 @@ function App() {
     setError(null)
 
     try {
+      const clipMetadata = await captureClipMetadata({ recordMs: 2000 })
       await createEvent({
         sessionId,
         deviceId: 'device-1',
         triggerType: 'motion',
-        durationSeconds: 8.5,
+        durationSeconds: clipMetadata.durationSeconds,
         clipUri: `local://event-${Date.now()}`,
-        clipMime: 'video/mp4',
-        clipSizeBytes: 1024,
+        clipMime: clipMetadata.mimeType,
+        clipSizeBytes: clipMetadata.sizeBytes,
       })
       const nextEvents = await listEvents(sessionId)
       setEvents(nextEvents)

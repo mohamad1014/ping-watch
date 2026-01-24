@@ -66,3 +66,7 @@ No formatter or linter is configured yet. If you introduce one, document it and 
 - Worker: RQ + Redis locally; Azure Service Bus adapter planned for prod.
 - E2E: Playwright against the full local stack.
 - Local dependencies: Docker (Postgres, Azurite for Blob, queue emulator or local queue).
+
+## Environment Flags
+
+- `VITE_DISABLE_MEDIA=true` — skip `getUserMedia`/`MediaRecorder` capture (useful for tests/E2E).

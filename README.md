@@ -109,4 +109,5 @@ Test:
 
 - `VITE_API_URL` — backend base URL for the frontend (default `http://localhost:8000`).
 - `VITE_POLL_INTERVAL_MS` — polling interval for event refresh (default 5000).
+- `VITE_DISABLE_MEDIA` — set to `true` to skip `getUserMedia`/`MediaRecorder` capture (useful for tests/E2E).
 - `DATABASE_URL` — backend DB URL (default Postgres in local dev).

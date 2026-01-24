@@ -15,6 +15,7 @@ export default defineConfig({
       reuseExistingServer: true,
       env: {
         VITE_POLL_INTERVAL_MS: '1000',
+        VITE_DISABLE_MEDIA: 'true',
       },
     },
     {

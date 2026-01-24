@@ -2,6 +2,13 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import App from './App'
+import { captureClipMetadata } from './recorder'
+
+vi.mock('./recorder', () => ({
+  captureClipMetadata: vi.fn(),
+}))
+
+const mockedCaptureClipMetadata = vi.mocked(captureClipMetadata)
 
 const buildResponse = (payload: unknown) =>
   Promise.resolve({
@@ -99,6 +106,12 @@ describe('App', () => {
       events: [[{ event_id: 'evt_1', status: 'processing', trigger_type: 'motion' }]],
     })
 
+    mockedCaptureClipMetadata.mockResolvedValue({
+      durationSeconds: 3.4,
+      sizeBytes: 2048,
+      mimeType: 'video/webm',
+    })
+
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
@@ -109,13 +122,20 @@ describe('App', () => {
 
     await user.click(screen.getByRole('button', { name: /create event/i }))
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:8000/events',
-      expect.objectContaining({
-        method: 'POST',
-        body: expect.stringContaining('duration_seconds'),
-      })
+    const createCall = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        input.toString().endsWith('/events') && init?.method === 'POST'
     )
+
+    expect(createCall).toBeDefined()
+    const [, createInit] = createCall ?? []
+    const createBody = JSON.parse((createInit?.body ?? '{}') as string)
+
+    expect(createBody).toMatchObject({
+      duration_seconds: 3.4,
+      clip_size_bytes: 2048,
+      clip_mime: 'video/webm',
+    })
 
     expect(await screen.findByText('1 captured')).toBeInTheDocument()
     const list = screen.getByRole('list')

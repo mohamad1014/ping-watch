@@ -81,6 +81,7 @@ export const startServers = async () => {
         ...process.env,
         VITE_API_URL: backendUrl,
         VITE_POLL_INTERVAL_MS: '1000',
+        VITE_DISABLE_MEDIA: 'true',
       },
       stdio: 'inherit',
     }
