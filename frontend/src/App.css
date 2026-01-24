@@ -133,6 +133,49 @@ button:not(:disabled):hover {
   color: #6a6a6a;
 }
 
+.events-list {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.event-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  background: #f6f1e9;
+}
+
+.event-id {
+  font-weight: 600;
+  margin-right: 0.5rem;
+}
+
+.event-trigger {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6a6a6a;
+}
+
+.event-status {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.status-processing {
+  color: #a96b00;
+}
+
+.status-done {
+  color: #0b6e3f;
+}
+
 @media (max-width: 640px) {
   .status-row {
     flex-direction: column;
@@ -140,6 +183,11 @@ button:not(:disabled):hover {
   }
 
   .events-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .event-item {
     flex-direction: column;
     align-items: flex-start;
   }

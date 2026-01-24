@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import './App.css'
-import { listEvents, startSession, stopSession } from './api'
+import { type EventResponse, listEvents, startSession, stopSession } from './api'
 
 const statusLabels = {
   idle: 'Idle',
@@ -10,12 +10,25 @@ const statusLabels = {
 
 type SessionStatus = keyof typeof statusLabels
 
+const getPollIntervalMs = () => {
+  const override = (globalThis as { __PING_WATCH_POLL_INTERVAL__?: number })
+    .__PING_WATCH_POLL_INTERVAL__
+  if (typeof override === 'number') {
+    return override
+  }
+
+  const envValue = import.meta.env.VITE_POLL_INTERVAL_MS
+  return envValue ? Number(envValue) : 5000
+}
+
 function App() {
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('idle')
   const [sessionId, setSessionId] = useState<string | null>(null)
-  const [eventCount, setEventCount] = useState(0)
+  const [events, setEvents] = useState<EventResponse[]>([])
   const [isBusy, setIsBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const lastEvent = useMemo(() => events[events.length - 1], [events])
 
   const handleStart = async () => {
     setIsBusy(true)
@@ -26,8 +39,8 @@ function App() {
       setSessionId(session.session_id)
       setSessionStatus('active')
 
-      const events = await listEvents(session.session_id)
-      setEventCount(events.length)
+      const nextEvents = await listEvents(session.session_id)
+      setEvents(nextEvents)
     } catch (err) {
       console.error(err)
       setError('Unable to start session')
@@ -55,6 +68,32 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    if (sessionStatus !== 'active' || !sessionId) {
+      return
+    }
+
+    let cancelled = false
+
+    const refresh = async () => {
+      try {
+        const nextEvents = await listEvents(sessionId)
+        if (!cancelled) {
+          setEvents(nextEvents)
+        }
+      } catch (err) {
+        console.error(err)
+      }
+    }
+
+    const interval = setInterval(refresh, getPollIntervalMs())
+
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [sessionId, sessionStatus])
+
   return (
     <div className="app">
       <header className="app-header">
@@ -70,7 +109,9 @@ function App() {
           </div>
           <div className="status-row">
             <span className="status-label">Last event</span>
-            <span className="status-value">No events yet</span>
+            <span className="status-value">
+              {lastEvent ? lastEvent.event_id : 'No events yet'}
+            </span>
           </div>
         </section>
 
@@ -98,9 +139,25 @@ function App() {
         <section className="events">
           <div className="events-header">
             <h2>Recent events</h2>
-            <span className="events-meta">{eventCount} captured</span>
+            <span className="events-meta">{events.length} captured</span>
           </div>
-          <p className="events-empty">No clips captured yet.</p>
+          {events.length === 0 ? (
+            <p className="events-empty">No clips captured yet.</p>
+          ) : (
+            <ul className="events-list">
+              {events.map((event) => (
+                <li key={event.event_id} className="event-item">
+                  <div>
+                    <span className="event-id">{event.event_id}</span>
+                    <span className="event-trigger">{event.trigger_type}</span>
+                  </div>
+                  <span className={`event-status status-${event.status}`}>
+                    {event.status}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
       </main>
     </div>
