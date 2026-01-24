@@ -2,12 +2,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
-from app.store import reset_store
 
 
 @pytest.mark.anyio
 async def test_session_event_flow():
-    reset_store()
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:

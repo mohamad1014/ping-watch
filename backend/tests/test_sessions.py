@@ -2,12 +2,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
-from app.store import reset_store
 
 
 @pytest.mark.anyio
 async def test_start_session_creates_session():
-    reset_store()
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -22,7 +20,6 @@ async def test_start_session_creates_session():
 
 @pytest.mark.anyio
 async def test_stop_session_sets_status():
-    reset_store()
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -40,7 +37,6 @@ async def test_stop_session_sets_status():
 
 @pytest.mark.anyio
 async def test_stop_session_unknown_returns_404():
-    reset_store()
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:

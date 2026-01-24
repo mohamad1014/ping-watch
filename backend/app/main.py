@@ -4,6 +4,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.db import init_db
 from app.logging import setup_logging
 from app.routes.events import router as events_router
 from app.routes.sessions import router as sessions_router
@@ -19,6 +20,11 @@ app.add_middleware(
 )
 app.include_router(sessions_router)
 app.include_router(events_router)
+
+
+@app.on_event("startup")
+async def startup():
+    init_db()
 
 
 @app.middleware("http")

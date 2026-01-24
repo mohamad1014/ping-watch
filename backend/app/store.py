@@ -1,143 +1,132 @@
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
 
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
-@dataclass
-class SessionRecord:
-    session_id: str
-    device_id: str
-    status: str
-    started_at: str
-    stopped_at: Optional[str] = None
+from app.models import EventModel, SessionModel
 
 
-@dataclass
-class EventRecord:
-    event_id: str
-    session_id: str
-    device_id: str
-    status: str
-    trigger_type: str
-    created_at: str
-    summary: Optional[str] = None
-    label: Optional[str] = None
-    confidence: Optional[float] = None
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-_sessions: dict[str, SessionRecord] = {}
-_session_order: list[str] = []
-_events: dict[str, EventRecord] = {}
-_event_order: list[str] = []
+def reset_store(db: Session) -> None:
+    db.execute(delete(EventModel))
+    db.execute(delete(SessionModel))
+    db.commit()
 
 
-def reset_store() -> None:
-    _sessions.clear()
-    _session_order.clear()
-    _events.clear()
-    _event_order.clear()
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def create_session(device_id: str) -> SessionRecord:
-    session_id = str(uuid4())
-    record = SessionRecord(
-        session_id=session_id,
+def create_session(db: Session, device_id: str) -> SessionModel:
+    record = SessionModel(
+        session_id=str(uuid4()),
         device_id=device_id,
         status="active",
-        started_at=_now_iso(),
+        started_at=_now(),
     )
-    _sessions[session_id] = record
-    _session_order.append(session_id)
+    db.add(record)
+    db.commit()
+    db.refresh(record)
     return record
 
 
-def stop_session(session_id: str) -> Optional[SessionRecord]:
-    record = _sessions.get(session_id)
+def stop_session(db: Session, session_id: str) -> Optional[SessionModel]:
+    record = db.get(SessionModel, session_id)
     if record is None:
         return None
     record.status = "stopped"
-    record.stopped_at = _now_iso()
+    record.stopped_at = _now()
+    db.commit()
+    db.refresh(record)
     return record
 
 
-def get_session(session_id: str) -> Optional[SessionRecord]:
-    return _sessions.get(session_id)
+def get_session(db: Session, session_id: str) -> Optional[SessionModel]:
+    return db.get(SessionModel, session_id)
 
 
-def list_sessions(device_id: Optional[str] = None) -> list[SessionRecord]:
-    sessions = [_sessions[session_id] for session_id in _session_order]
+def list_sessions(db: Session, device_id: Optional[str] = None) -> list[SessionModel]:
+    stmt = select(SessionModel).order_by(SessionModel.started_at)
     if device_id:
-        sessions = [session for session in sessions if session.device_id == device_id]
-    return sessions
+        stmt = stmt.where(SessionModel.device_id == device_id)
+    return list(db.scalars(stmt))
 
 
-def create_event(session_id: str, device_id: str, trigger_type: str) -> Optional[EventRecord]:
-    if session_id not in _sessions:
+def create_event(
+    db: Session, session_id: str, device_id: str, trigger_type: str
+) -> Optional[EventModel]:
+    session = db.get(SessionModel, session_id)
+    if session is None:
         return None
-    event_id = str(uuid4())
-    record = EventRecord(
-        event_id=event_id,
+    record = EventModel(
+        event_id=str(uuid4()),
         session_id=session_id,
         device_id=device_id,
         status="processing",
         trigger_type=trigger_type,
-        created_at=_now_iso(),
+        created_at=_now(),
     )
-    _events[event_id] = record
-    _event_order.append(event_id)
+    db.add(record)
+    db.commit()
+    db.refresh(record)
     return record
 
 
-def get_event(event_id: str) -> Optional[EventRecord]:
-    return _events.get(event_id)
+def get_event(db: Session, event_id: str) -> Optional[EventModel]:
+    return db.get(EventModel, event_id)
 
 
 def update_event_summary(
+    db: Session,
     event_id: str,
     summary: str,
     label: Optional[str],
     confidence: Optional[float],
-) -> Optional[EventRecord]:
-    record = _events.get(event_id)
+) -> Optional[EventModel]:
+    record = db.get(EventModel, event_id)
     if record is None:
         return None
     record.summary = summary
     record.label = label
     record.confidence = confidence
     record.status = "done"
+    db.commit()
+    db.refresh(record)
     return record
 
 
-def list_events(session_id: Optional[str] = None) -> list[EventRecord]:
-    events = [_events[event_id] for event_id in _event_order]
+def list_events(db: Session, session_id: Optional[str] = None) -> list[EventModel]:
+    stmt = select(EventModel).order_by(EventModel.created_at)
     if session_id:
-        events = [event for event in events if event.session_id == session_id]
-    return events
+        stmt = stmt.where(EventModel.session_id == session_id)
+    return list(db.scalars(stmt))
 
 
-def session_to_dict(record: SessionRecord) -> dict:
+def _format_dt(value: Optional[datetime]) -> Optional[str]:
+    if value is None:
+        return None
+    return value.isoformat()
+
+
+def session_to_dict(record: SessionModel) -> dict:
     return {
         "session_id": record.session_id,
         "device_id": record.device_id,
         "status": record.status,
-        "started_at": record.started_at,
-        "stopped_at": record.stopped_at,
+        "started_at": _format_dt(record.started_at),
+        "stopped_at": _format_dt(record.stopped_at),
     }
 
 
-def event_to_dict(record: EventRecord) -> dict:
+def event_to_dict(record: EventModel) -> dict:
     return {
         "event_id": record.event_id,
         "session_id": record.session_id,
         "device_id": record.device_id,
         "status": record.status,
         "trigger_type": record.trigger_type,
-        "created_at": record.created_at,
+        "created_at": _format_dt(record.created_at),
         "summary": record.summary,
         "label": record.label,
         "confidence": record.confidence,

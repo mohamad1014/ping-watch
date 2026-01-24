@@ -2,12 +2,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
-from app.store import reset_store
 
 
 @pytest.mark.anyio
 async def test_update_event_summary_marks_done():
-    reset_store()
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -42,7 +40,6 @@ async def test_update_event_summary_marks_done():
 
 @pytest.mark.anyio
 async def test_get_event_summary():
-    reset_store()
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -81,7 +78,6 @@ async def test_get_event_summary():
 
 @pytest.mark.anyio
 async def test_summary_for_unknown_event_returns_404():
-    reset_store()
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
