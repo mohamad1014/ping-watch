@@ -144,6 +144,44 @@ describe('App', () => {
     vi.restoreAllMocks()
   })
 
+  it('copies event ids for manual testing', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[{ event_id: 'evt_1', status: 'done', trigger_type: 'motion' }]],
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    const originalClipboard = navigator.clipboard
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    })
+
+    render(<App />)
+
+    await user.click(
+      screen.getByRole('button', { name: /start monitoring/i })
+    )
+
+    const copyButton = await screen.findByRole('button', {
+      name: /copy id/i,
+    })
+    await user.click(copyButton)
+
+    expect(writeText).toHaveBeenCalledWith('evt_1')
+
+    vi.restoreAllMocks()
+    Object.defineProperty(navigator, 'clipboard', {
+      value: originalClipboard,
+      configurable: true,
+    })
+  })
+
   it('polls and renders events when active', async () => {
     const user = userEvent.setup()
     ;(globalThis as { __PING_WATCH_POLL_INTERVAL__?: number }).__PING_WATCH_POLL_INTERVAL__ = 20

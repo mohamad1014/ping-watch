@@ -154,10 +154,33 @@ button:not(:disabled):hover {
   display: flex;
   gap: 0.6rem;
   align-items: center;
+  flex-wrap: wrap;
+}
+
+.event-id-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
 }
 
 .event-id {
   font-weight: 600;
+}
+
+.event-copy {
+  border: 1px solid #d9d2c8;
+  background: #fff;
+  color: #2a2a2a;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  box-shadow: none;
+}
+
+.event-copy.copied {
+  border-color: #0b6e3f;
+  color: #0b6e3f;
 }
 
 .event-trigger {

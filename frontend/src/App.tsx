@@ -41,6 +41,7 @@ function App() {
   const [events, setEvents] = useState<EventResponse[]>([])
   const [isBusy, setIsBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [copiedEventId, setCopiedEventId] = useState<string | null>(null)
 
   const lastEvent = useMemo(() => events[events.length - 1], [events])
 
@@ -111,6 +112,20 @@ function App() {
     }
   }
 
+  const handleCopyEventId = async (eventId: string) => {
+    try {
+      if (!navigator.clipboard?.writeText) {
+        setError('Clipboard unavailable')
+        return
+      }
+      await navigator.clipboard.writeText(eventId)
+      setCopiedEventId(eventId)
+    } catch (err) {
+      console.error(err)
+      setError('Unable to copy event id')
+    }
+  }
+
   useEffect(() => {
     if (sessionStatus !== 'active' || !sessionId) {
       return
@@ -136,6 +151,20 @@ function App() {
       clearInterval(interval)
     }
   }, [sessionId, sessionStatus])
+
+  useEffect(() => {
+    if (!copiedEventId) {
+      return
+    }
+
+    const timeout = window.setTimeout(() => {
+      setCopiedEventId(null)
+    }, 1500)
+
+    return () => {
+      window.clearTimeout(timeout)
+    }
+  }, [copiedEventId])
 
   return (
     <div className="app">
@@ -198,11 +227,21 @@ function App() {
             <ul className="events-list">
               {events.map((event) => {
                 const confidence = formatConfidence(event.confidence)
+                const isCopied = copiedEventId === event.event_id
                 return (
                   <li key={event.event_id} className="event-item">
                     <div>
                       <div className="event-header">
-                        <span className="event-id">{event.event_id}</span>
+                        <div className="event-id-row">
+                          <span className="event-id">{event.event_id}</span>
+                          <button
+                            type="button"
+                            className={`event-copy${isCopied ? ' copied' : ''}`}
+                            onClick={() => handleCopyEventId(event.event_id)}
+                          >
+                            {isCopied ? 'Copied' : 'Copy ID'}
+                          </button>
+                        </div>
                         <span className="event-trigger">{event.trigger_type}</span>
                       </div>
                       {event.summary ? (
