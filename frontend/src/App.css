@@ -1,0 +1,138 @@
+.app {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 3.5rem 1.5rem 4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2.5rem;
+}
+
+.app-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.app-header h1 {
+  font-size: clamp(2.2rem, 2.2rem + 1vw, 3.2rem);
+  margin: 0;
+  letter-spacing: -0.03em;
+}
+
+.app-tagline {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #4d4d4d;
+}
+
+.app-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.status-card {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1.5rem;
+  border-radius: 18px;
+  background: #111111;
+  color: #f5f2ed;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.16);
+}
+
+.status-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.95rem;
+}
+
+.status-label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.7rem;
+  color: rgba(245, 242, 237, 0.7);
+}
+
+.status-value {
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+button {
+  border-radius: 999px;
+  border: none;
+  padding: 0.85rem 1.8rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+button.primary {
+  background: #ff7a59;
+  color: #fff;
+  box-shadow: 0 12px 24px rgba(255, 122, 89, 0.3);
+}
+
+button.secondary {
+  background: #efe9df;
+  color: #2a2a2a;
+}
+
+button:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.events {
+  padding: 1.5rem;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+}
+
+.events-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.events-header h2 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.events-meta {
+  font-size: 0.85rem;
+  color: #6a6a6a;
+}
+
+.events-empty {
+  margin: 0.8rem 0 0;
+  color: #6a6a6a;
+}
+
+@media (max-width: 640px) {
+  .status-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .events-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

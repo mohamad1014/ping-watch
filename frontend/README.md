@@ -1,9 +1,12 @@
 # Frontend (PWA)
 
-Planned stack: React + TypeScript + Vite.
+React + TypeScript + Vite.
 
-Scaffold target (to be run):
-- `npm create vite@latest . -- --template react-ts`
+Commands:
+- `npm install`
+- `npm run dev` — start the dev server
+- `npm test -- --run` — run unit tests (Vitest)
 
-Testing target:
-- Vitest + Testing Library for unit/integration tests.
+Notes:
+- App shell lives in `src/App.tsx`.
+- Global styles in `src/index.css`.
