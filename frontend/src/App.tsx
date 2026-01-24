@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import './App.css'
-import { type EventResponse, listEvents, startSession, stopSession } from './api'
+import {
+  createEvent,
+  type EventResponse,
+  listEvents,
+  startSession,
+  stopSession,
+} from './api'
 
 const statusLabels = {
   idle: 'Idle',
@@ -75,6 +81,26 @@ function App() {
     }
   }
 
+  const handleCreateEvent = async () => {
+    if (!sessionId) {
+      return
+    }
+
+    setIsBusy(true)
+    setError(null)
+
+    try {
+      await createEvent(sessionId, 'device-1', 'motion')
+      const nextEvents = await listEvents(sessionId)
+      setEvents(nextEvents)
+    } catch (err) {
+      console.error(err)
+      setError('Unable to create event')
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
   useEffect(() => {
     if (sessionStatus !== 'active' || !sessionId) {
       return
@@ -138,6 +164,14 @@ function App() {
             disabled={sessionStatus !== 'active' || isBusy}
           >
             Stop
+          </button>
+          <button
+            className="secondary"
+            type="button"
+            onClick={handleCreateEvent}
+            disabled={sessionStatus !== 'active' || isBusy}
+          >
+            Create event
           </button>
         </div>
 

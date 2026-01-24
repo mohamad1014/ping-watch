@@ -41,6 +41,8 @@ export type EventResponse = {
   confidence?: number | null
 }
 
+export type CreateEventResponse = EventResponse
+
 export const startSession = (deviceId: string) =>
   request<SessionResponse>('/sessions/start', {
     method: 'POST',
@@ -55,3 +57,17 @@ export const stopSession = (sessionId: string) =>
 
 export const listEvents = (sessionId: string) =>
   request<EventResponse[]>(`/events?session_id=${encodeURIComponent(sessionId)}`)
+
+export const createEvent = (
+  sessionId: string,
+  deviceId: string,
+  triggerType: string
+) =>
+  request<CreateEventResponse>('/events', {
+    method: 'POST',
+    body: {
+      session_id: sessionId,
+      device_id: deviceId,
+      trigger_type: triggerType,
+    },
+  })

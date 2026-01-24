@@ -12,14 +12,19 @@ const buildResponse = (payload: unknown) =>
 const createFetchMock = (routes: {
   start: unknown
   stop: unknown
+  createEvent: unknown
   events: unknown[]
 }) => {
   const eventQueue = [...routes.events]
-  return vi.fn((input: RequestInfo | URL) => {
+  return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = input.toString()
 
     if (url.endsWith('/sessions/start')) {
       return buildResponse(routes.start)
+    }
+
+    if (url.endsWith('/events') && init?.method === 'POST') {
+      return buildResponse(routes.createEvent)
     }
 
     if (url.includes('/events')) {
@@ -48,6 +53,7 @@ describe('App', () => {
     const fetchMock = createFetchMock({
       start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
       stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
       events: [[]],
     })
 
@@ -80,6 +86,43 @@ describe('App', () => {
     vi.restoreAllMocks()
   })
 
+  it('creates an event from the UI', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {
+        event_id: 'evt_1',
+        status: 'processing',
+        trigger_type: 'motion',
+      },
+      events: [[{ event_id: 'evt_1', status: 'processing', trigger_type: 'motion' }]],
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    await user.click(
+      screen.getByRole('button', { name: /start monitoring/i })
+    )
+
+    await user.click(screen.getByRole('button', { name: /create event/i }))
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/events',
+      expect.objectContaining({
+        method: 'POST',
+      })
+    )
+
+    expect(await screen.findByText('1 captured')).toBeInTheDocument()
+    const list = screen.getByRole('list')
+    expect(within(list).getByText('evt_1')).toBeInTheDocument()
+
+    vi.restoreAllMocks()
+  })
+
   it('polls and renders events when active', async () => {
     const user = userEvent.setup()
     ;(globalThis as { __PING_WATCH_POLL_INTERVAL__?: number }).__PING_WATCH_POLL_INTERVAL__ = 20
@@ -87,6 +130,7 @@ describe('App', () => {
     const fetchMock = createFetchMock({
       start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
       stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
       events: [
         [
           {
