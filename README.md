@@ -71,7 +71,7 @@ Scaffolding started: repo layout, local infra compose, and decision log.
 - Testing: test-first; Vitest (frontend), pytest (backend), Playwright (E2E).
 - Observability: structured backend logs with ISO 8601 timestamps and request/device/session/event ids.
 
-## Local Dev Commands (planned)
+## Local Dev Commands
 
 - `./scripts/dev-up` — start local dependencies.
 - `./scripts/dev` — run frontend + backend together.
@@ -81,7 +81,7 @@ Scaffolding started: repo layout, local infra compose, and decision log.
 - `./scripts/test-all` — run all tests.
 - `./scripts/logs` — tail backend logs.
 
-These scripts exist as stubs until the service scaffolds are added.
+These scripts are wired; see below for prereqs.
 
 ## Getting Started (local)
 
@@ -96,6 +96,8 @@ Setup:
 3) Frontend deps: `cd frontend && npm install`
 4) Backend deps: `python3 -m venv backend/.venv && backend/.venv/bin/pip install -r backend/requirements.txt -r backend/requirements-dev.txt`
 5) E2E deps: `cd e2e && npm install && npx playwright install`
+6) Worker deps: `python3 -m venv worker/.venv && worker/.venv/bin/pip install -r worker/requirements.txt -r worker/requirements-dev.txt`
+7) Migrations: `cd backend && .venv/bin/alembic upgrade head`
 
 Run:
 - `./scripts/dev`
@@ -103,3 +105,10 @@ Run:
 Test:
 - `./scripts/test-unit`
 - `./scripts/test-e2e` (requires Playwright system deps; see output of `npx playwright install` if missing)
+- `./scripts/test-integration` (runs backend live-server test + Playwright integration test)
+
+## Environment
+
+- `VITE_API_URL` — backend base URL for the frontend (default `http://localhost:8000`).
+- `VITE_POLL_INTERVAL_MS` — polling interval for event refresh (default 5000).
+- `DATABASE_URL` — backend DB URL (default `sqlite:///./pingwatch.db`).

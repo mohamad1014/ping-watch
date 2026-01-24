@@ -15,6 +15,59 @@ Two tiers:
 
 ---
 
+## Current status (2026-01-24)
+
+### What is done
+
+- Project scaffold with `frontend/`, `backend/`, `worker/`, `e2e/`, `infra/`, `scripts/`.
+- Frontend app shell with session start/stop and **Create event** UI.
+- Frontend polling of events and rendering of status + summary fields.
+- Backend API:
+  - Sessions: start/stop/list.
+  - Events: create/list.
+  - Event summaries: post/get (status transitions to `done`).
+- Worker stub posts event summaries to backend (HTTP).
+- DB persistence via SQLAlchemy (SQLite default) and Alembic migrations scaffolding.
+- Local infra compose (Postgres/Redis/Azurite) and automation scripts.
+- Tests:
+  - Frontend unit tests (Vitest).
+  - Backend unit + integration tests (ASGI + live server).
+  - Worker unit tests.
+  - Playwright E2E tests (webServer and live-spawn modes).
+
+### What is not done yet
+
+- On-device capture (getUserMedia/MediaRecorder), ring buffer, triggers, clip builder.
+- Upload pipeline (SAS URLs, blob storage, retries, offline queue).
+- Auth, device registration, credits, and tier limits.
+- Queueing via Service Bus, GPU inference pipeline, and model integration.
+- Notifications (Telegram) and WebSocket monitoring.
+- Cost controls beyond basic guardrails.
+
+### Roadmap position
+
+- **Phase 0 (Project skeleton):** complete.
+- **Phase 1 (Local capture + trigger):** not started.
+- **Phase 2 (Upload + event sync):** partial (session/event APIs + UI polling); upload flow not started.
+- **Phase 3 (Inference pipeline):** partial stub (summary endpoints + worker posting); no queue/VLM.
+- **Phase 4 (Notifications + monitoring):** not started.
+- **Phase 5 (Refinement + cost control):** not started.
+
+### Testing readiness
+
+You can test **now**:
+
+- Frontend unit tests (UI state + API calls).
+- Backend API tests (unit + integration live server).
+- Worker summary posting (unit).
+- E2E flows:
+  - App shell + backend health.
+  - Start session → create event → worker posts summary → UI updates.
+
+See `README.md` for commands.
+
+---
+
 ## Constraints (kept)
 
 * **MVP = PWA foreground** (screen on; best with plugged-in old phone)
