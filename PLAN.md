@@ -22,12 +22,14 @@ Two tiers:
 - Project scaffold with `frontend/`, `backend/`, `worker/`, `e2e/`, `infra/`, `scripts/`.
 - Frontend app shell with session start/stop and **Create event** UI.
 - Frontend polling of events and rendering of status + summary fields.
+- On-device clip metadata capture (duration + size) via MediaRecorder where available; opt-out flag for tests.
+- Event ID copy actions for manual worker testing.
 - Backend API:
   - Sessions: start/stop/list.
   - Events: create/list.
   - Event summaries: post/get (status transitions to `done`).
 - Worker stub posts event summaries to backend (HTTP).
-- DB persistence via SQLAlchemy (SQLite default) and Alembic migrations scaffolding.
+- DB persistence via SQLAlchemy (Postgres default) and Alembic migrations scaffolding.
 - Local infra compose (Postgres/Redis/Azurite) and automation scripts.
 - Tests:
   - Frontend unit tests (Vitest).
@@ -38,6 +40,7 @@ Two tiers:
 ### What is not done yet
 
 - On-device capture (getUserMedia/MediaRecorder), ring buffer, triggers, clip builder.
+- Real clip capture pipeline beyond metadata (buffering, trigger-driven clip assembly).
 - Upload pipeline (SAS URLs, blob storage, retries, offline queue).
 - Auth, device registration, credits, and tier limits.
 - Queueing via Service Bus, GPU inference pipeline, and model integration.
@@ -58,7 +61,7 @@ Two tiers:
 You can test **now**:
 
 - Frontend unit tests (UI state + API calls).
-- Backend API tests (unit + integration live server).
+- Backend API tests (unit + integration live server; defaults to Postgres).
 - Worker summary posting (unit).
 - E2E flows:
   - App shell + backend health.
