@@ -1,5 +1,10 @@
 # Worker
 
-Planned: Python worker with Redis queue locally and Azure Service Bus adapter in production.
+Redis-backed queue worker (RQ) for local dev; production will adapt to Azure Service Bus.
 
-Scaffold pending.
+Setup:
+- `python3 -m venv .venv`
+- `.venv/bin/pip install -r requirements.txt -r requirements-dev.txt`
+
+Test:
+- `.venv/bin/python -m pytest -q`

@@ -13,3 +13,8 @@ repo_root=$(cd "$scripts_dir/.." && pwd)
   cd "$repo_root/backend"
   .venv/bin/python -m pytest -q
 )
+
+(
+  cd "$repo_root/worker"
+  .venv/bin/python -m pytest -q
+)
