@@ -96,6 +96,14 @@ button:not(:disabled):hover {
   transform: translateY(-1px);
 }
 
+.error-banner {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  background: #ffe3de;
+  border-radius: 12px;
+  color: #7c2c1f;
+}
+
 .events {
   padding: 1.5rem;
   border-radius: 18px;

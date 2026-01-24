@@ -1,7 +1,13 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import App from './App'
+
+const buildResponse = (payload: unknown) =>
+  Promise.resolve({
+    ok: true,
+    json: async () => payload,
+  } as Response)
 
 describe('App', () => {
   it('shows the Ping Watch title', () => {
@@ -11,22 +17,52 @@ describe('App', () => {
     ).toBeInTheDocument()
   })
 
-  it('toggles session state from idle to active to stopped', async () => {
+  it('starts and stops a session via the API', async () => {
     const user = userEvent.setup()
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        buildResponse({
+          session_id: 'sess_1',
+          device_id: 'device-1',
+          status: 'active',
+        })
+      )
+      .mockResolvedValueOnce(buildResponse([]))
+      .mockResolvedValueOnce(
+        buildResponse({
+          session_id: 'sess_1',
+          device_id: 'device-1',
+          status: 'stopped',
+        })
+      )
+
+    vi.stubGlobal('fetch', fetchMock)
+
     render(<App />)
 
-    expect(screen.getByText('Idle')).toBeInTheDocument()
+    await user.click(
+      screen.getByRole('button', { name: /start monitoring/i })
+    )
 
-    const startButton = screen.getByRole('button', {
-      name: /start monitoring/i,
-    })
-    const stopButton = screen.getByRole('button', { name: /stop/i })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/sessions/start',
+      expect.objectContaining({
+        method: 'POST',
+      })
+    )
+    expect(await screen.findByText('Active')).toBeInTheDocument()
 
-    await user.click(startButton)
-    expect(screen.getByText('Active')).toBeInTheDocument()
-    expect(stopButton).toBeEnabled()
+    await user.click(screen.getByRole('button', { name: /stop/i }))
 
-    await user.click(stopButton)
-    expect(screen.getByText('Stopped')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/sessions/stop',
+      expect.objectContaining({
+        method: 'POST',
+      })
+    )
+    expect(await screen.findByText('Stopped')).toBeInTheDocument()
+
+    vi.restoreAllMocks()
   })
 })

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import './App.css'
+import { listEvents, startSession, stopSession } from './api'
 
 const statusLabels = {
   idle: 'Idle',
@@ -11,13 +12,47 @@ type SessionStatus = keyof typeof statusLabels
 
 function App() {
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('idle')
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [eventCount, setEventCount] = useState(0)
+  const [isBusy, setIsBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const handleStart = () => {
-    setSessionStatus('active')
+  const handleStart = async () => {
+    setIsBusy(true)
+    setError(null)
+
+    try {
+      const session = await startSession('device-1')
+      setSessionId(session.session_id)
+      setSessionStatus('active')
+
+      const events = await listEvents(session.session_id)
+      setEventCount(events.length)
+    } catch (err) {
+      console.error(err)
+      setError('Unable to start session')
+    } finally {
+      setIsBusy(false)
+    }
   }
 
-  const handleStop = () => {
-    setSessionStatus('stopped')
+  const handleStop = async () => {
+    if (!sessionId) {
+      return
+    }
+
+    setIsBusy(true)
+    setError(null)
+
+    try {
+      await stopSession(sessionId)
+      setSessionStatus('stopped')
+    } catch (err) {
+      console.error(err)
+      setError('Unable to stop session')
+    } finally {
+      setIsBusy(false)
+    }
   }
 
   return (
@@ -44,7 +79,7 @@ function App() {
             className="primary"
             type="button"
             onClick={handleStart}
-            disabled={sessionStatus === 'active'}
+            disabled={sessionStatus === 'active' || isBusy}
           >
             Start monitoring
           </button>
@@ -52,16 +87,18 @@ function App() {
             className="secondary"
             type="button"
             onClick={handleStop}
-            disabled={sessionStatus !== 'active'}
+            disabled={sessionStatus !== 'active' || isBusy}
           >
             Stop
           </button>
         </div>
 
+        {error ? <p className="error-banner">{error}</p> : null}
+
         <section className="events">
           <div className="events-header">
             <h2>Recent events</h2>
-            <span className="events-meta">0 captured</span>
+            <span className="events-meta">{eventCount} captured</span>
           </div>
           <p className="events-empty">No clips captured yet.</p>
         </section>
