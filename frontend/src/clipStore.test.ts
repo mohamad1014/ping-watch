@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { deleteClip, getClip, listClips, saveClip } from './clipStore'
+import {
+  deleteClip,
+  getClip,
+  listClips,
+  markClipUploaded,
+  saveClip,
+} from './clipStore'
 
 const makeClip = (label: string) => ({
   blob: new Blob([label]),
@@ -21,5 +27,25 @@ describe('clipStore', () => {
     expect(fetched?.id).toBe(stored.id)
     expect(fetched?.sizeBytes).toBe(3)
     expect(fetched?.mimeType).toBe('video/webm')
+    expect(fetched?.uploaded).toBe(false)
+  })
+
+  it('marks clips as uploaded', async () => {
+    const stored = await saveClip(makeClip('bbb'))
+
+    await markClipUploaded(stored.id)
+    const fetched = await getClip(stored.id)
+
+    expect(fetched?.uploaded).toBe(true)
+  })
+
+  it('lists only pending clips when filtered', async () => {
+    const clipA = await saveClip(makeClip('a'))
+    const clipB = await saveClip(makeClip('bb'))
+    await markClipUploaded(clipB.id)
+
+    const pending = await listClips({ uploaded: false })
+
+    expect(pending.map((clip) => clip.id)).toEqual([clipA.id])
   })
 })

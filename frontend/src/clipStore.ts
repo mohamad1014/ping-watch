@@ -13,6 +13,7 @@ type ClipInput = {
 export type StoredClip = ClipInput & {
   id: string
   createdAt: number
+  uploaded: boolean
 }
 
 let dbPromise: Promise<IDBDatabase> | null = null
@@ -67,6 +68,7 @@ export const saveClip = async (clip: ClipInput): Promise<StoredClip> => {
   const record: StoredClip = {
     id: buildId(),
     createdAt: clip.createdAt ?? Date.now(),
+    uploaded: false,
     ...clip,
   }
 
@@ -84,17 +86,38 @@ export const getClip = async (id: string): Promise<StoredClip | null> => {
   return record ?? null
 }
 
-export const listClips = async (): Promise<StoredClip[]> => {
+type ClipListFilter = {
+  uploaded?: boolean
+}
+
+export const listClips = async (
+  filter: ClipListFilter = {}
+): Promise<StoredClip[]> => {
   const db = await openDb()
   const tx = db.transaction(STORE_NAME, 'readonly')
   const records = await requestToPromise(tx.objectStore(STORE_NAME).getAll())
   await waitForTransaction(tx)
-  return records ?? []
+  const result = records ?? []
+  if (typeof filter.uploaded === 'boolean') {
+    return result.filter((clip) => clip.uploaded === filter.uploaded)
+  }
+  return result
 }
 
 export const deleteClip = async (id: string) => {
   const db = await openDb()
   const tx = db.transaction(STORE_NAME, 'readwrite')
   tx.objectStore(STORE_NAME).delete(id)
+  await waitForTransaction(tx)
+}
+
+export const markClipUploaded = async (id: string) => {
+  const db = await openDb()
+  const tx = db.transaction(STORE_NAME, 'readwrite')
+  const store = tx.objectStore(STORE_NAME)
+  const record = await requestToPromise(store.get(id))
+  if (record) {
+    store.put({ ...record, uploaded: true })
+  }
   await waitForTransaction(tx)
 }
