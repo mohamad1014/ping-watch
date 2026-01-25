@@ -24,6 +24,7 @@ Two tiers:
 - Frontend polling of events and rendering of status + summary fields.
 - On-device clip metadata capture (duration + size) via MediaRecorder where available; opt-out flag for tests.
 - Event ID copy actions for manual worker testing.
+- Clip ring buffer + clip selection helpers (frontend utilities, not yet wired to capture).
 - Backend API:
   - Sessions: start/stop/list.
   - Events: create/list.
