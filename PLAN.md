@@ -28,6 +28,9 @@ Two tiers:
 - Clip ring buffer wired to MediaRecorder chunking + pre/post clip assembly.
 - IndexedDB clip persistence (local clip storage).
 - Basic motion trigger (frame differencing) that fires clip creation.
+- Motion controls UI (threshold/cooldown/ROI inset sliders).
+- Clip timeline UI with preview playback from IndexedDB.
+- Upload stub that pushes stored clips to the API.
 - Backend API:
   - Sessions: start/stop/list.
   - Events: create/list.

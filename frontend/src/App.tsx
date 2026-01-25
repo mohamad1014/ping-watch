@@ -10,8 +10,12 @@ import {
 import { captureClipMetadata } from './recorder'
 import { ClipRingBuffer } from './clipBuffer'
 import { assembleClip } from './clipAssembler'
-import { saveClip } from './clipStore'
-import { computeMotionScore, startMotionTrigger } from './motion'
+import { getClip, listClips, saveClip, type StoredClip } from './clipStore'
+import { uploadPendingClips } from './clipUpload'
+import {
+  computeMotionScoreInRegion,
+  startMotionTrigger,
+} from './motion'
 
 const statusLabels = {
   idle: 'Idle',
@@ -55,6 +59,18 @@ const isMediaDisabled = () =>
     .__PING_WATCH_DISABLE_MEDIA__ === true ||
   import.meta.env.VITE_DISABLE_MEDIA === 'true'
 
+const formatBytes = (value: number) => {
+  if (value < 1024) {
+    return `${value} B`
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
+}
+
+const formatDuration = (seconds: number) => `${seconds.toFixed(1)}s`
+
 function formatConfidence(value: number | null | undefined) {
   if (value === null || value === undefined) {
     return null
@@ -69,14 +85,27 @@ function App() {
   const [isBusy, setIsBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copiedEventId, setCopiedEventId] = useState<string | null>(null)
+  const [clips, setClips] = useState<StoredClip[]>([])
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null)
+  const [selectedClipUrl, setSelectedClipUrl] = useState<string | null>(null)
+  const [motionThreshold, setMotionThreshold] = useState(0.08)
+  const [motionCooldown, setMotionCooldown] = useState(15)
+  const [roiInsetPercent, setRoiInsetPercent] = useState(0)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const motionStopRef = useRef<(() => void) | null>(null)
   const bufferRef = useRef(
     new ClipRingBuffer({ windowMs: getPreMs() + getPostMs() + 2000 })
   )
+  const clipUrlRef = useRef<string | null>(null)
 
   const lastEvent = useMemo(() => events[events.length - 1], [events])
+
+  const refreshClips = async () => {
+    const nextClips = await listClips()
+    nextClips.sort((a, b) => b.createdAt - a.createdAt)
+    setClips(nextClips)
+  }
 
   const handleStart = async () => {
     setIsBusy(true)
@@ -90,6 +119,7 @@ function App() {
       const nextEvents = await listEvents(session.session_id)
       setEvents(nextEvents)
       await startCapture()
+      await refreshClips()
     } catch (err) {
       console.error(err)
       setError('Unable to start session')
@@ -155,6 +185,7 @@ function App() {
           durationSeconds,
         })
         clipUri = `idb://clips/${stored.id}`
+        await refreshClips()
       } else {
         const clipMetadata = await captureClipMetadata({ recordMs: 2000 })
         durationSeconds = clipMetadata.durationSeconds
@@ -176,6 +207,42 @@ function App() {
     } catch (err) {
       console.error(err)
       setError('Unable to create event')
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  const handlePreviewClip = async (clipId: string) => {
+    const clip = await getClip(clipId)
+    if (!clip) {
+      return
+    }
+    if (clipUrlRef.current) {
+      URL.revokeObjectURL(clipUrlRef.current)
+    }
+    const url = URL.createObjectURL(clip.blob)
+    clipUrlRef.current = url
+    setSelectedClipUrl(url)
+    setSelectedClipId(clipId)
+  }
+
+  const handleUploadClips = async () => {
+    if (!sessionId) {
+      setError('Start a session before uploading')
+      return
+    }
+    setIsBusy(true)
+    setError(null)
+    try {
+      await uploadPendingClips({
+        sessionId,
+        deviceId: 'device-1',
+        triggerType: 'motion',
+      })
+      await refreshClips()
+    } catch (err) {
+      console.error(err)
+      setError('Unable to upload clips')
     } finally {
       setIsBusy(false)
     }
@@ -269,7 +336,16 @@ function App() {
         previous = data
         return 0
       }
-      const score = computeMotionScore(previous, data, 30)
+      const insetX = Math.floor((roiInsetPercent / 100) * width)
+      const insetY = Math.floor((roiInsetPercent / 100) * height)
+      const score = computeMotionScoreInRegion(previous, data, 30, {
+        x: insetX,
+        y: insetY,
+        width: width - insetX * 2,
+        height: height - insetY * 2,
+        frameWidth: width,
+        frameHeight: height,
+      })
       previous = data
       return score
     }
@@ -277,9 +353,9 @@ function App() {
     const trigger = startMotionTrigger({
       getScore,
       intervalMs: 500,
-      threshold: 0.08,
+      threshold: motionThreshold,
       consecutive: 2,
-      cooldownMs: 15000,
+      cooldownMs: motionCooldown * 1000,
       onTrigger: () => {
         void handleCreateEvent()
       },
@@ -341,6 +417,24 @@ function App() {
     }
   }, [copiedEventId])
 
+  useEffect(() => {
+    void refreshClips()
+    return () => {
+      if (clipUrlRef.current) {
+        URL.revokeObjectURL(clipUrlRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (sessionStatus !== 'active' || !streamRef.current) {
+      return
+    }
+
+    motionStopRef.current?.()
+    startMotionMonitoring(streamRef.current)
+  }, [motionThreshold, motionCooldown, roiInsetPercent, sessionStatus])
+
   return (
     <div className="app">
       <header className="app-header">
@@ -387,9 +481,68 @@ function App() {
           >
             Create event
           </button>
+          <button
+            className="secondary"
+            type="button"
+            onClick={handleUploadClips}
+            disabled={!sessionId || isBusy}
+          >
+            Upload stored clips
+          </button>
         </div>
 
         {error ? <p className="error-banner">{error}</p> : null}
+
+        <section className="motion-controls" aria-label="Motion controls">
+          <h2>Motion controls</h2>
+          <div className="motion-grid">
+            <label className="motion-field">
+              <span>Motion threshold</span>
+              <input
+                type="range"
+                min={0.02}
+                max={0.3}
+                step={0.01}
+                value={motionThreshold}
+                aria-label="Motion threshold"
+                onChange={(event) =>
+                  setMotionThreshold(Number(event.target.value))
+                }
+              />
+              <span className="motion-value">{motionThreshold.toFixed(2)}</span>
+            </label>
+            <label className="motion-field">
+              <span>Cooldown (s)</span>
+              <input
+                type="range"
+                min={5}
+                max={60}
+                step={1}
+                value={motionCooldown}
+                aria-label="Cooldown"
+                onChange={(event) =>
+                  setMotionCooldown(Number(event.target.value))
+                }
+              />
+              <span className="motion-value">{motionCooldown}s</span>
+            </label>
+            <label className="motion-field">
+              <span>ROI inset (%)</span>
+              <input
+                type="range"
+                min={0}
+                max={40}
+                step={2}
+                value={roiInsetPercent}
+                aria-label="ROI inset"
+                onChange={(event) =>
+                  setRoiInsetPercent(Number(event.target.value))
+                }
+              />
+              <span className="motion-value">{roiInsetPercent}%</span>
+            </label>
+          </div>
+        </section>
 
         <section className="events">
           <div className="events-header">
@@ -441,6 +594,51 @@ function App() {
               })}
             </ul>
           )}
+        </section>
+
+        <section className="clip-timeline">
+          <div className="clip-header">
+            <h2>Stored clips</h2>
+            <span className="events-meta">{clips.length} stored</span>
+          </div>
+          {clips.length === 0 ? (
+            <p className="events-empty">No stored clips yet.</p>
+          ) : (
+            <ul className="clip-list">
+              {clips.map((clip) => (
+                <li key={clip.id} className="clip-item">
+                  <div>
+                    <div className="clip-id">{clip.id}</div>
+                    <div className="clip-meta">
+                      <span>{formatDuration(clip.durationSeconds)}</span>
+                      <span>{formatBytes(clip.sizeBytes)}</span>
+                      <span>{clip.uploaded ? 'uploaded' : 'pending'}</span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => handlePreviewClip(clip.id)}
+                    aria-label={`Preview ${clip.id}`}
+                  >
+                    Preview
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {selectedClipUrl ? (
+            <div className="clip-preview">
+              <div className="clip-preview-header">
+                <span>Preview: {selectedClipId}</span>
+              </div>
+              <video
+                data-testid="clip-preview"
+                src={selectedClipUrl}
+                controls
+              />
+            </div>
+          ) : null}
         </section>
       </main>
     </div>

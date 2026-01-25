@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { captureClipMetadata } from './recorder'
 import { assembleClip } from './clipAssembler'
-import { saveClip } from './clipStore'
+import { getClip, listClips, saveClip } from './clipStore'
 
 vi.mock('./recorder', () => ({
   captureClipMetadata: vi.fn(),
@@ -18,10 +18,15 @@ vi.mock('./clipAssembler', () => ({
 
 vi.mock('./clipStore', () => ({
   saveClip: vi.fn(),
+  listClips: vi.fn(),
+  getClip: vi.fn(),
+  markClipUploaded: vi.fn(),
 }))
 
 const mockedAssembleClip = vi.mocked(assembleClip)
 const mockedSaveClip = vi.mocked(saveClip)
+const mockedListClips = vi.mocked(listClips)
+const mockedGetClip = vi.mocked(getClip)
 
 const buildResponse = (payload: unknown) =>
   Promise.resolve({
@@ -70,6 +75,7 @@ describe('App', () => {
   beforeEach(() => {
     runtimeFlags.__PING_WATCH_DISABLE_MEDIA__ = true
     runtimeFlags.__PING_WATCH_POST_MS__ = 0
+    mockedListClips.mockResolvedValue([])
   })
 
   afterEach(() => {
@@ -77,10 +83,10 @@ describe('App', () => {
     runtimeFlags.__PING_WATCH_POST_MS__ = undefined
   })
 
-  it('shows the Ping Watch title', () => {
+  it('shows the Ping Watch title', async () => {
     render(<App />)
     expect(
-      screen.getByRole('heading', { name: /ping watch/i })
+      await screen.findByRole('heading', { name: /ping watch/i })
     ).toBeInTheDocument()
   })
 
@@ -226,6 +232,64 @@ describe('App', () => {
       value: originalClipboard,
       configurable: true,
     })
+  })
+
+  it('renders clip timeline and previews a clip', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    const clip = {
+      id: 'clip-1',
+      blob: new Blob(['clip']),
+      sizeBytes: 4,
+      mimeType: 'video/webm',
+      durationSeconds: 2,
+      createdAt: 0,
+      uploaded: false,
+    }
+    mockedListClips.mockResolvedValue([clip])
+    mockedGetClip.mockResolvedValue(clip)
+
+    const createObjectURL = vi.fn().mockReturnValue('blob:clip-1')
+    const revokeObjectURL = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL,
+      revokeObjectURL,
+    })
+
+    render(<App />)
+
+    const previewButton = await screen.findByRole('button', {
+      name: /preview clip-1/i,
+    })
+    await user.click(previewButton)
+
+    expect(screen.getByTestId('clip-preview')).toHaveAttribute(
+      'src',
+      'blob:clip-1'
+    )
+
+    vi.restoreAllMocks()
+  })
+
+  it('shows motion controls', async () => {
+    render(<App />)
+
+    expect(
+      await screen.findByRole('slider', { name: /motion threshold/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('slider', { name: /cooldown/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('slider', { name: /roi inset/i })
+    ).toBeInTheDocument()
   })
 
   it('polls and renders events when active', async () => {

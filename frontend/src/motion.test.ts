@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MotionGate, computeMotionScore, startMotionTrigger } from './motion'
+import {
+  MotionGate,
+  computeMotionScore,
+  computeMotionScoreInRegion,
+  startMotionTrigger,
+} from './motion'
 
 describe('computeMotionScore', () => {
   it('returns fraction of pixels above threshold', () => {
@@ -9,6 +14,30 @@ describe('computeMotionScore', () => {
     const score = computeMotionScore(prev, curr, 50)
 
     expect(score).toBeCloseTo(0.5)
+  })
+})
+
+describe('computeMotionScoreInRegion', () => {
+  it('ignores pixels outside the ROI', () => {
+    const prev = new Uint8ClampedArray([
+      0, 0, 0, 255, 0, 0, 0, 255,
+      0, 0, 0, 255, 0, 0, 0, 255,
+    ])
+    const curr = new Uint8ClampedArray([
+      255, 255, 255, 255, 0, 0, 0, 255,
+      255, 255, 255, 255, 0, 0, 0, 255,
+    ])
+
+    const score = computeMotionScoreInRegion(prev, curr, 50, {
+      x: 1,
+      y: 0,
+      width: 1,
+      height: 2,
+      frameWidth: 2,
+      frameHeight: 2,
+    })
+
+    expect(score).toBe(0)
   })
 })
 

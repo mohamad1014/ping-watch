@@ -65,6 +65,59 @@ export const computeMotionScore = (
   return changed / totalPixels
 }
 
+type MotionRegion = {
+  x: number
+  y: number
+  width: number
+  height: number
+  frameWidth: number
+  frameHeight: number
+}
+
+export const computeMotionScoreInRegion = (
+  prev: Uint8ClampedArray,
+  curr: Uint8ClampedArray,
+  diffThreshold: number,
+  region: MotionRegion
+) => {
+  if (prev.length !== curr.length) {
+    return 0
+  }
+
+  const startX = Math.max(0, Math.floor(region.x))
+  const startY = Math.max(0, Math.floor(region.y))
+  const endX = Math.min(
+    region.frameWidth,
+    Math.floor(region.x + region.width)
+  )
+  const endY = Math.min(
+    region.frameHeight,
+    Math.floor(region.y + region.height)
+  )
+
+  const width = Math.max(0, endX - startX)
+  const height = Math.max(0, endY - startY)
+  const totalPixels = width * height
+  if (totalPixels === 0) {
+    return 0
+  }
+
+  let changed = 0
+  for (let y = startY; y < endY; y += 1) {
+    for (let x = startX; x < endX; x += 1) {
+      const index = (y * region.frameWidth + x) * 4
+      const dr = Math.abs(curr[index] - prev[index])
+      const dg = Math.abs(curr[index + 1] - prev[index + 1])
+      const db = Math.abs(curr[index + 2] - prev[index + 2])
+      if (dr + dg + db > diffThreshold) {
+        changed += 1
+      }
+    }
+  }
+
+  return changed / totalPixels
+}
+
 type MotionTriggerOptions = MotionGateOptions & {
   intervalMs: number
   getScore: () => number
