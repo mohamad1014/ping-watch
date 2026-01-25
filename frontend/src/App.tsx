@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import {
   createEvent,
@@ -8,6 +8,10 @@ import {
   stopSession,
 } from './api'
 import { captureClipMetadata } from './recorder'
+import { ClipRingBuffer } from './clipBuffer'
+import { assembleClip } from './clipAssembler'
+import { saveClip } from './clipStore'
+import { computeMotionScore, startMotionTrigger } from './motion'
 
 const statusLabels = {
   idle: 'Idle',
@@ -28,6 +32,29 @@ const getPollIntervalMs = () => {
   return envValue ? Number(envValue) : 5000
 }
 
+const getPreMs = () => {
+  const override = (globalThis as { __PING_WATCH_PRE_MS__?: number })
+    .__PING_WATCH_PRE_MS__
+  if (typeof override === 'number') {
+    return override
+  }
+  return 2000
+}
+
+const getPostMs = () => {
+  const override = (globalThis as { __PING_WATCH_POST_MS__?: number })
+    .__PING_WATCH_POST_MS__
+  if (typeof override === 'number') {
+    return override
+  }
+  return 2000
+}
+
+const isMediaDisabled = () =>
+  (globalThis as { __PING_WATCH_DISABLE_MEDIA__?: boolean })
+    .__PING_WATCH_DISABLE_MEDIA__ === true ||
+  import.meta.env.VITE_DISABLE_MEDIA === 'true'
+
 function formatConfidence(value: number | null | undefined) {
   if (value === null || value === undefined) {
     return null
@@ -42,6 +69,12 @@ function App() {
   const [isBusy, setIsBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copiedEventId, setCopiedEventId] = useState<string | null>(null)
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const motionStopRef = useRef<(() => void) | null>(null)
+  const bufferRef = useRef(
+    new ClipRingBuffer({ windowMs: getPreMs() + getPostMs() + 2000 })
+  )
 
   const lastEvent = useMemo(() => events[events.length - 1], [events])
 
@@ -56,6 +89,7 @@ function App() {
 
       const nextEvents = await listEvents(session.session_id)
       setEvents(nextEvents)
+      await startCapture()
     } catch (err) {
       console.error(err)
       setError('Unable to start session')
@@ -75,6 +109,7 @@ function App() {
     try {
       await stopSession(sessionId)
       setSessionStatus('stopped')
+      stopCapture()
     } catch (err) {
       console.error(err)
       setError('Unable to stop session')
@@ -92,15 +127,49 @@ function App() {
     setError(null)
 
     try {
-      const clipMetadata = await captureClipMetadata({ recordMs: 2000 })
+      const triggerMs = Date.now()
+      const postMs = getPostMs()
+      if (postMs > 0) {
+        await new Promise((resolve) => window.setTimeout(resolve, postMs))
+      }
+
+      const bufferChunks = bufferRef.current.getChunks()
+      const assembled = assembleClip({
+        chunks: bufferChunks,
+        triggerMs,
+        preMs: getPreMs(),
+        postMs,
+        fallbackMime: recorderRef.current?.mimeType || 'video/webm',
+      })
+
+      let durationSeconds = assembled?.durationSeconds ?? 0
+      let clipMime = assembled?.mimeType ?? 'video/webm'
+      let clipSizeBytes = assembled?.sizeBytes ?? 0
+      let clipUri = `local://event-${Date.now()}`
+
+      if (assembled?.blob) {
+        const stored = await saveClip({
+          blob: assembled.blob,
+          mimeType: clipMime,
+          sizeBytes: clipSizeBytes,
+          durationSeconds,
+        })
+        clipUri = `idb://clips/${stored.id}`
+      } else {
+        const clipMetadata = await captureClipMetadata({ recordMs: 2000 })
+        durationSeconds = clipMetadata.durationSeconds
+        clipMime = clipMetadata.mimeType
+        clipSizeBytes = clipMetadata.sizeBytes
+      }
+
       await createEvent({
         sessionId,
         deviceId: 'device-1',
         triggerType: 'motion',
-        durationSeconds: clipMetadata.durationSeconds,
-        clipUri: `local://event-${Date.now()}`,
-        clipMime: clipMetadata.mimeType,
-        clipSizeBytes: clipMetadata.sizeBytes,
+        durationSeconds,
+        clipUri,
+        clipMime,
+        clipSizeBytes,
       })
       const nextEvents = await listEvents(sessionId)
       setEvents(nextEvents)
@@ -110,6 +179,112 @@ function App() {
     } finally {
       setIsBusy(false)
     }
+  }
+
+  const startCapture = async () => {
+    if (isMediaDisabled()) {
+      return
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setError('Media capture unavailable')
+      return
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      })
+      streamRef.current = stream
+
+      const preferredTypes = [
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm',
+      ]
+      const mimeType = preferredTypes.find((type) =>
+        MediaRecorder.isTypeSupported(type)
+      )
+      const recorder = new MediaRecorder(
+        stream,
+        mimeType ? { mimeType } : undefined
+      )
+      recorderRef.current = recorder
+
+      recorder.addEventListener('dataavailable', (event) => {
+        if (event.data.size > 0) {
+          bufferRef.current.addChunk(event.data, Date.now())
+        }
+      })
+
+      recorder.start(1000)
+      startMotionMonitoring(stream)
+    } catch (err) {
+      console.error(err)
+      setError('Unable to access camera')
+    }
+  }
+
+  const stopCapture = () => {
+    motionStopRef.current?.()
+    motionStopRef.current = null
+
+    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+      recorderRef.current.stop()
+    }
+    recorderRef.current = null
+
+    streamRef.current?.getTracks().forEach((track) => track.stop())
+    streamRef.current = null
+    bufferRef.current.clear()
+  }
+
+  const startMotionMonitoring = (stream: MediaStream) => {
+    const video = document.createElement('video')
+    video.srcObject = stream
+    video.muted = true
+    video.playsInline = true
+    void video.play().catch(() => undefined)
+
+    const canvas = document.createElement('canvas')
+    const width = 160
+    const height = 90
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    let previous: Uint8ClampedArray | null = null
+
+    if (!ctx) {
+      return
+    }
+
+    const getScore = () => {
+      if (video.readyState < 2) {
+        return 0
+      }
+      ctx.drawImage(video, 0, 0, width, height)
+      const data = ctx.getImageData(0, 0, width, height).data
+      if (!previous) {
+        previous = data
+        return 0
+      }
+      const score = computeMotionScore(previous, data, 30)
+      previous = data
+      return score
+    }
+
+    const trigger = startMotionTrigger({
+      getScore,
+      intervalMs: 500,
+      threshold: 0.08,
+      consecutive: 2,
+      cooldownMs: 15000,
+      onTrigger: () => {
+        void handleCreateEvent()
+      },
+    })
+    motionStopRef.current = trigger.stop
   }
 
   const handleCopyEventId = async (eventId: string) => {

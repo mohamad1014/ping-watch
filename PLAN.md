@@ -25,6 +25,9 @@ Two tiers:
 - On-device clip metadata capture (duration + size) via MediaRecorder where available; opt-out flag for tests.
 - Event ID copy actions for manual worker testing.
 - Clip ring buffer + clip selection helpers (frontend utilities, not yet wired to capture).
+- Clip ring buffer wired to MediaRecorder chunking + pre/post clip assembly.
+- IndexedDB clip persistence (local clip storage).
+- Basic motion trigger (frame differencing) that fires clip creation.
 - Backend API:
   - Sessions: start/stop/list.
   - Events: create/list.
@@ -40,8 +43,7 @@ Two tiers:
 
 ### What is not done yet
 
-- On-device capture (getUserMedia/MediaRecorder), ring buffer, triggers, clip builder.
-- Real clip capture pipeline beyond metadata (buffering, trigger-driven clip assembly).
+- On-device capture UX (permissions, background-safe behavior), ring buffer, triggers, clip builder refinements.
 - Upload pipeline (SAS URLs, blob storage, retries, offline queue).
 - Auth, device registration, credits, and tier limits.
 - Queueing via Service Bus, GPU inference pipeline, and model integration.

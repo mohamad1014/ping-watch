@@ -1,14 +1,27 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { captureClipMetadata } from './recorder'
+import { assembleClip } from './clipAssembler'
+import { saveClip } from './clipStore'
 
 vi.mock('./recorder', () => ({
   captureClipMetadata: vi.fn(),
 }))
 
 const mockedCaptureClipMetadata = vi.mocked(captureClipMetadata)
+
+vi.mock('./clipAssembler', () => ({
+  assembleClip: vi.fn(),
+}))
+
+vi.mock('./clipStore', () => ({
+  saveClip: vi.fn(),
+}))
+
+const mockedAssembleClip = vi.mocked(assembleClip)
+const mockedSaveClip = vi.mocked(saveClip)
 
 const buildResponse = (payload: unknown) =>
   Promise.resolve({
@@ -48,6 +61,22 @@ const createFetchMock = (routes: {
 }
 
 describe('App', () => {
+  const runtimeFlags = globalThis as {
+    __PING_WATCH_DISABLE_MEDIA__?: boolean
+    __PING_WATCH_PRE_MS__?: number
+    __PING_WATCH_POST_MS__?: number
+  }
+
+  beforeEach(() => {
+    runtimeFlags.__PING_WATCH_DISABLE_MEDIA__ = true
+    runtimeFlags.__PING_WATCH_POST_MS__ = 0
+  })
+
+  afterEach(() => {
+    runtimeFlags.__PING_WATCH_DISABLE_MEDIA__ = undefined
+    runtimeFlags.__PING_WATCH_POST_MS__ = undefined
+  })
+
   it('shows the Ping Watch title', () => {
     render(<App />)
     expect(
@@ -111,6 +140,22 @@ describe('App', () => {
       sizeBytes: 2048,
       mimeType: 'video/webm',
     })
+    mockedAssembleClip.mockReturnValue({
+      blob: new Blob(['clip']),
+      sizeBytes: 4,
+      mimeType: 'video/webm',
+      durationSeconds: 2,
+      startMs: 0,
+      endMs: 2000,
+    })
+    mockedSaveClip.mockResolvedValue({
+      id: 'clip-1',
+      blob: new Blob(['clip']),
+      sizeBytes: 4,
+      mimeType: 'video/webm',
+      durationSeconds: 2,
+      createdAt: 0,
+    })
 
     vi.stubGlobal('fetch', fetchMock)
 
@@ -132,9 +177,10 @@ describe('App', () => {
     const createBody = JSON.parse((createInit?.body ?? '{}') as string)
 
     expect(createBody).toMatchObject({
-      duration_seconds: 3.4,
-      clip_size_bytes: 2048,
+      duration_seconds: 2,
+      clip_size_bytes: 4,
       clip_mime: 'video/webm',
+      clip_uri: 'idb://clips/clip-1',
     })
 
     expect(await screen.findByText('1 captured')).toBeInTheDocument()
