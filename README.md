@@ -48,6 +48,15 @@ Free tier has monthly allowance; paid tier raises limits and retention.
 - Max uploads per hour per plan.
 - Max clip length per plan.
 
+## MVP-1 On-Device Validation Checklist
+
+- Launch the PWA on a real phone, grant camera + mic permissions.
+- Confirm “Capture active” appears after starting a session.
+- Move in front of the camera and verify a motion-triggered clip is created.
+- Enable audio trigger, make a sharp sound, and verify an audio-triggered clip.
+- Check the local timeline: clips should play back and show duration/size.
+- Toggle “VITE_DISABLE_MEDIA=true” and verify capture is shown as disabled.
+
 ## Status
 
 Scaffolding started: repo layout, local infra compose, and decision log.

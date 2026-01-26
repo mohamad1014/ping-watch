@@ -123,6 +123,18 @@ button:not(:disabled):hover {
   font-size: 1.3rem;
 }
 
+.audio-controls {
+  padding: 1.5rem;
+  border-radius: 18px;
+  background: #f2f6ff;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+}
+
+.audio-controls h2 {
+  margin: 0 0 1rem;
+  font-size: 1.3rem;
+}
+
 .motion-grid {
   display: grid;
   gap: 1rem;
@@ -134,8 +146,19 @@ button:not(:disabled):hover {
   font-size: 0.9rem;
 }
 
+.motion-toggle {
+  grid-auto-flow: column;
+  justify-content: space-between;
+  align-items: center;
+}
+
 .motion-field input[type='range'] {
   width: 100%;
+}
+
+.motion-field meter {
+  width: 100%;
+  height: 0.9rem;
 }
 
 .motion-value {

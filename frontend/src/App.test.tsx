@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
@@ -76,6 +76,7 @@ describe('App', () => {
     runtimeFlags.__PING_WATCH_DISABLE_MEDIA__ = true
     runtimeFlags.__PING_WATCH_POST_MS__ = 0
     mockedListClips.mockResolvedValue([])
+    localStorage.clear()
   })
 
   afterEach(() => {
@@ -285,10 +286,167 @@ describe('App', () => {
       await screen.findByRole('slider', { name: /motion threshold/i })
     ).toBeInTheDocument()
     expect(
-      screen.getByRole('slider', { name: /cooldown/i })
+      screen.getByRole('slider', { name: /motion cooldown/i })
     ).toBeInTheDocument()
     expect(
       screen.getByRole('slider', { name: /roi inset/i })
+    ).toBeInTheDocument()
+  })
+
+  it('loads motion settings from localStorage', async () => {
+    localStorage.setItem('ping-watch:motion-threshold', '0.18')
+    localStorage.setItem('ping-watch:motion-cooldown', '24')
+    localStorage.setItem('ping-watch:motion-roi-inset', '12')
+
+    render(<App />)
+
+    const threshold = await screen.findByRole('slider', {
+      name: /motion threshold/i,
+    })
+    const cooldown = screen.getByRole('slider', { name: /motion cooldown/i })
+    const roi = screen.getByRole('slider', { name: /roi inset/i })
+
+    expect(threshold).toHaveValue('0.18')
+    expect(cooldown).toHaveValue('24')
+    expect(roi).toHaveValue('12')
+  })
+
+  it('persists motion settings to localStorage', async () => {
+    render(<App />)
+
+    const threshold = await screen.findByRole('slider', {
+      name: /motion threshold/i,
+    })
+    const cooldown = screen.getByRole('slider', { name: /motion cooldown/i })
+    const roi = screen.getByRole('slider', { name: /roi inset/i })
+
+    fireEvent.change(threshold, { target: { value: '0.22' } })
+    fireEvent.change(cooldown, { target: { value: '28' } })
+    fireEvent.change(roi, { target: { value: '16' } })
+
+    expect(localStorage.getItem('ping-watch:motion-threshold')).toBe('0.22')
+    expect(localStorage.getItem('ping-watch:motion-cooldown')).toBe('28')
+    expect(localStorage.getItem('ping-watch:motion-roi-inset')).toBe('16')
+  })
+
+  it('shows audio controls', async () => {
+    render(<App />)
+
+    expect(
+      await screen.findByRole('checkbox', { name: /audio trigger/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('slider', { name: /audio threshold/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('slider', { name: /audio cooldown/i })
+    ).toBeInTheDocument()
+  })
+
+  it('shows capture status when media is disabled', async () => {
+    render(<App />)
+
+    expect(
+      await screen.findByText(/capture disabled/i)
+    ).toBeInTheDocument()
+  })
+
+  it('shows a permission error when camera access is denied', async () => {
+    runtimeFlags.__PING_WATCH_DISABLE_MEDIA__ = false
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+
+    const getUserMedia = vi
+      .fn()
+      .mockRejectedValue(new DOMException('Denied', 'NotAllowedError'))
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: { getUserMedia },
+      configurable: true,
+    })
+
+    const originalMediaRecorder = globalThis.MediaRecorder
+    class MockMediaRecorder {
+      static isTypeSupported() {
+        return false
+      }
+      constructor() {}
+      addEventListener() {}
+      start() {}
+      stop() {}
+      get state() {
+        return 'inactive'
+      }
+    }
+    Object.defineProperty(globalThis, 'MediaRecorder', {
+      value: MockMediaRecorder,
+      configurable: true,
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    await user.click(
+      screen.getByRole('button', { name: /start monitoring/i })
+    )
+
+    expect(
+      await screen.findByText(/camera permission denied/i)
+    ).toBeInTheDocument()
+
+    Object.defineProperty(globalThis, 'MediaRecorder', {
+      value: originalMediaRecorder,
+      configurable: true,
+    })
+  })
+
+  it('loads audio settings from localStorage', async () => {
+    localStorage.setItem('ping-watch:audio-enabled', 'true')
+    localStorage.setItem('ping-watch:audio-threshold', '0.42')
+    localStorage.setItem('ping-watch:audio-cooldown', '22')
+
+    render(<App />)
+
+    const enabled = await screen.findByRole('checkbox', {
+      name: /audio trigger/i,
+    })
+    const threshold = screen.getByRole('slider', { name: /audio threshold/i })
+    const cooldown = screen.getByRole('slider', { name: /audio cooldown/i })
+
+    expect(enabled).toBeChecked()
+    expect(threshold).toHaveValue('0.42')
+    expect(cooldown).toHaveValue('22')
+  })
+
+  it('persists audio settings to localStorage', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    const enabled = await screen.findByRole('checkbox', {
+      name: /audio trigger/i,
+    })
+    await user.click(enabled)
+
+    const threshold = screen.getByRole('slider', { name: /audio threshold/i })
+    const cooldown = screen.getByRole('slider', { name: /audio cooldown/i })
+    fireEvent.change(threshold, { target: { value: '0.5' } })
+    fireEvent.change(cooldown, { target: { value: '18' } })
+
+    expect(localStorage.getItem('ping-watch:audio-enabled')).toBe('true')
+    expect(localStorage.getItem('ping-watch:audio-threshold')).toBe('0.5')
+    expect(localStorage.getItem('ping-watch:audio-cooldown')).toBe('18')
+  })
+
+  it('renders the audio level meter', async () => {
+    render(<App />)
+
+    expect(
+      await screen.findByRole('meter', { name: /audio level/i })
     ).toBeInTheDocument()
   })
 

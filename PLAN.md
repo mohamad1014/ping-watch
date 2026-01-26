@@ -46,17 +46,17 @@ Two tiers:
 
 ### What is not done yet
 
-- On-device capture UX (permissions, background-safe behavior), ring buffer, triggers, clip builder refinements.
 - Upload pipeline (SAS URLs, blob storage, retries, offline queue).
 - Auth, device registration, credits, and tier limits.
 - Queueing via Service Bus, GPU inference pipeline, and model integration.
 - Notifications (Telegram) and WebSocket monitoring.
 - Cost controls beyond basic guardrails.
+- Background-safe capture (native wrapper) and advanced trigger refinements.
 
 ### Roadmap position
 
 - **Phase 0 (Project skeleton):** complete.
-- **Phase 1 (Local capture + trigger):** not started.
+- **Phase 1 (Local capture + trigger):** complete (MVP‑1 done).
 - **Phase 2 (Upload + event sync):** partial (session/event APIs + UI polling); upload flow not started.
 - **Phase 3 (Inference pipeline):** partial stub (summary endpoints + worker posting); no queue/VLM.
 - **Phase 4 (Notifications + monitoring):** not started.

@@ -13,9 +13,11 @@ import { assembleClip } from './clipAssembler'
 import { getClip, listClips, saveClip, type StoredClip } from './clipStore'
 import { uploadPendingClips } from './clipUpload'
 import {
-  computeMotionScoreInRegion,
+  applyMotionGates,
+  computeMotionMetricsInRegion,
   startMotionTrigger,
 } from './motion'
+import { computeAudioRms, startAudioTrigger } from './audio'
 
 const statusLabels = {
   idle: 'Idle',
@@ -24,6 +26,7 @@ const statusLabels = {
 } as const
 
 type SessionStatus = keyof typeof statusLabels
+type CaptureStatus = 'idle' | 'active' | 'error'
 
 const getPollIntervalMs = () => {
   const override = (globalThis as { __PING_WATCH_POLL_INTERVAL__?: number })
@@ -52,6 +55,42 @@ const getPostMs = () => {
     return override
   }
   return 2000
+}
+
+const MOTION_DIFF_THRESHOLD = 30
+const MOTION_MIN_SCORE = 0.02
+const MOTION_BRIGHTNESS_GATE = 40
+
+const AUDIO_ENABLED_KEY = 'ping-watch:audio-enabled'
+const AUDIO_THRESHOLD_KEY = 'ping-watch:audio-threshold'
+const AUDIO_COOLDOWN_KEY = 'ping-watch:audio-cooldown'
+const MOTION_THRESHOLD_KEY = 'ping-watch:motion-threshold'
+const MOTION_COOLDOWN_KEY = 'ping-watch:motion-cooldown'
+const MOTION_ROI_INSET_KEY = 'ping-watch:motion-roi-inset'
+
+const readStoredBoolean = (key: string, fallback: boolean) => {
+  try {
+    const value = localStorage.getItem(key)
+    if (value === null) {
+      return fallback
+    }
+    return value === 'true'
+  } catch {
+    return fallback
+  }
+}
+
+const readStoredNumber = (key: string, fallback: number) => {
+  try {
+    const value = localStorage.getItem(key)
+    if (value === null) {
+      return fallback
+    }
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : fallback
+  } catch {
+    return fallback
+  }
 }
 
 const isMediaDisabled = () =>
@@ -88,12 +127,31 @@ function App() {
   const [clips, setClips] = useState<StoredClip[]>([])
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null)
   const [selectedClipUrl, setSelectedClipUrl] = useState<string | null>(null)
-  const [motionThreshold, setMotionThreshold] = useState(0.08)
-  const [motionCooldown, setMotionCooldown] = useState(15)
-  const [roiInsetPercent, setRoiInsetPercent] = useState(0)
+  const [motionThreshold, setMotionThreshold] = useState(() =>
+    readStoredNumber(MOTION_THRESHOLD_KEY, 0.06)
+  )
+  const [motionCooldown, setMotionCooldown] = useState(() =>
+    readStoredNumber(MOTION_COOLDOWN_KEY, 15)
+  )
+  const [roiInsetPercent, setRoiInsetPercent] = useState(() =>
+    readStoredNumber(MOTION_ROI_INSET_KEY, 0)
+  )
+  const [audioEnabled, setAudioEnabled] = useState(() =>
+    readStoredBoolean(AUDIO_ENABLED_KEY, false)
+  )
+  const [audioThreshold, setAudioThreshold] = useState(() =>
+    readStoredNumber(AUDIO_THRESHOLD_KEY, 0.25)
+  )
+  const [audioCooldown, setAudioCooldown] = useState(() =>
+    readStoredNumber(AUDIO_COOLDOWN_KEY, 10)
+  )
+  const [audioLevel, setAudioLevel] = useState(0)
+  const [captureStatus, setCaptureStatus] = useState<CaptureStatus>('idle')
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const motionStopRef = useRef<(() => void) | null>(null)
+  const audioStopRef = useRef<(() => void) | null>(null)
+  const audioContextRef = useRef<AudioContext | null>(null)
   const bufferRef = useRef(
     new ClipRingBuffer({ windowMs: getPreMs() + getPostMs() + 2000 })
   )
@@ -148,7 +206,7 @@ function App() {
     }
   }
 
-  const handleCreateEvent = async () => {
+  const handleCreateEvent = async (triggerType: 'motion' | 'audio' = 'motion') => {
     if (!sessionId) {
       return
     }
@@ -196,7 +254,7 @@ function App() {
       await createEvent({
         sessionId,
         deviceId: 'device-1',
-        triggerType: 'motion',
+        triggerType,
         durationSeconds,
         clipUri,
         clipMime,
@@ -250,11 +308,13 @@ function App() {
 
   const startCapture = async () => {
     if (isMediaDisabled()) {
+      setCaptureStatus('error')
       return
     }
 
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       setError('Media capture unavailable')
+      setCaptureStatus('error')
       return
     }
 
@@ -264,6 +324,7 @@ function App() {
         audio: true,
       })
       streamRef.current = stream
+      setCaptureStatus('active')
 
       const preferredTypes = [
         'video/webm;codecs=vp9,opus',
@@ -287,15 +348,22 @@ function App() {
 
       recorder.start(1000)
       startMotionMonitoring(stream)
+      startAudioMonitoring(stream)
     } catch (err) {
       console.error(err)
-      setError('Unable to access camera')
+      if (err instanceof DOMException && err.name === 'NotAllowedError') {
+        setError('Camera permission denied')
+      } else {
+        setError('Unable to access camera')
+      }
+      setCaptureStatus('error')
     }
   }
 
   const stopCapture = () => {
     motionStopRef.current?.()
     motionStopRef.current = null
+    stopAudioMonitoring()
 
     if (recorderRef.current && recorderRef.current.state !== 'inactive') {
       recorderRef.current.stop()
@@ -305,6 +373,7 @@ function App() {
     streamRef.current?.getTracks().forEach((track) => track.stop())
     streamRef.current = null
     bufferRef.current.clear()
+    setCaptureStatus('idle')
   }
 
   const startMotionMonitoring = (stream: MediaStream) => {
@@ -338,16 +407,24 @@ function App() {
       }
       const insetX = Math.floor((roiInsetPercent / 100) * width)
       const insetY = Math.floor((roiInsetPercent / 100) * height)
-      const score = computeMotionScoreInRegion(previous, data, 30, {
-        x: insetX,
-        y: insetY,
-        width: width - insetX * 2,
-        height: height - insetY * 2,
-        frameWidth: width,
-        frameHeight: height,
-      })
+      const metrics = computeMotionMetricsInRegion(
+        previous,
+        data,
+        MOTION_DIFF_THRESHOLD,
+        {
+          x: insetX,
+          y: insetY,
+          width: width - insetX * 2,
+          height: height - insetY * 2,
+          frameWidth: width,
+          frameHeight: height,
+        }
+      )
       previous = data
-      return score
+      return applyMotionGates(metrics, {
+        minScore: Math.max(MOTION_MIN_SCORE, motionThreshold),
+        brightnessThreshold: MOTION_BRIGHTNESS_GATE,
+      })
     }
 
     const trigger = startMotionTrigger({
@@ -357,10 +434,70 @@ function App() {
       consecutive: 2,
       cooldownMs: motionCooldown * 1000,
       onTrigger: () => {
-        void handleCreateEvent()
+        void handleCreateEvent('motion')
       },
     })
     motionStopRef.current = trigger.stop
+  }
+
+  const stopAudioMonitoring = () => {
+    audioStopRef.current?.()
+    audioStopRef.current = null
+    if (audioContextRef.current) {
+      void audioContextRef.current.close()
+      audioContextRef.current = null
+    }
+    setAudioLevel(0)
+  }
+
+  const startAudioMonitoring = (stream: MediaStream) => {
+    if (!audioEnabled) {
+      return
+    }
+
+    if (stream.getAudioTracks().length === 0) {
+      return
+    }
+
+    const AudioContextConstructor =
+      window.AudioContext || (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+
+    if (!AudioContextConstructor) {
+      return
+    }
+
+    stopAudioMonitoring()
+
+    const audioContext = new AudioContextConstructor()
+    audioContextRef.current = audioContext
+    const source = audioContext.createMediaStreamSource(stream)
+    const analyser = audioContext.createAnalyser()
+    analyser.fftSize = 2048
+    source.connect(analyser)
+
+    const buffer = new Float32Array(analyser.fftSize)
+
+    void audioContext.resume()
+
+    const trigger = startAudioTrigger({
+      getScore: () => {
+        analyser.getFloatTimeDomainData(buffer)
+        const score = computeAudioRms(buffer)
+        setAudioLevel(Math.min(1, score))
+        return score
+      },
+      intervalMs: 250,
+      threshold: audioThreshold,
+      consecutive: 2,
+      cooldownMs: audioCooldown * 1000,
+      onTrigger: () => {
+        void handleCreateEvent('audio')
+      },
+    })
+
+    audioStopRef.current = () => {
+      trigger.stop()
+    }
   }
 
   const handleCopyEventId = async (eventId: string) => {
@@ -435,6 +572,54 @@ function App() {
     startMotionMonitoring(streamRef.current)
   }, [motionThreshold, motionCooldown, roiInsetPercent, sessionStatus])
 
+  useEffect(() => {
+    if (sessionStatus !== 'active' || !streamRef.current) {
+      stopAudioMonitoring()
+      return
+    }
+
+    stopAudioMonitoring()
+    if (audioEnabled) {
+      startAudioMonitoring(streamRef.current)
+    }
+  }, [audioEnabled, audioThreshold, audioCooldown, sessionStatus])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(MOTION_THRESHOLD_KEY, String(motionThreshold))
+      localStorage.setItem(MOTION_COOLDOWN_KEY, String(motionCooldown))
+      localStorage.setItem(MOTION_ROI_INSET_KEY, String(roiInsetPercent))
+      localStorage.setItem(AUDIO_ENABLED_KEY, String(audioEnabled))
+      localStorage.setItem(AUDIO_THRESHOLD_KEY, String(audioThreshold))
+      localStorage.setItem(AUDIO_COOLDOWN_KEY, String(audioCooldown))
+    } catch {
+      // Ignore persistence failures (private mode or storage disabled).
+    }
+  }, [
+    motionThreshold,
+    motionCooldown,
+    roiInsetPercent,
+    audioEnabled,
+    audioThreshold,
+    audioCooldown,
+  ])
+
+  const captureLabel = (() => {
+    if (isMediaDisabled()) {
+      return 'Capture disabled'
+    }
+    if (captureStatus === 'active') {
+      return 'Capture active'
+    }
+    if (captureStatus === 'error') {
+      return 'Capture error'
+    }
+    if (sessionStatus === 'active') {
+      return 'Capture starting'
+    }
+    return 'Capture idle'
+  })()
+
   return (
     <div className="app">
       <header className="app-header">
@@ -447,6 +632,10 @@ function App() {
           <div className="status-row">
             <span className="status-label">Session</span>
             <span className="status-value">{statusLabels[sessionStatus]}</span>
+          </div>
+          <div className="status-row">
+            <span className="status-label">Capture</span>
+            <span className="status-value">{captureLabel}</span>
           </div>
           <div className="status-row">
             <span className="status-label">Last event</span>
@@ -476,7 +665,7 @@ function App() {
           <button
             className="secondary"
             type="button"
-            onClick={handleCreateEvent}
+            onClick={() => handleCreateEvent('motion')}
             disabled={sessionStatus !== 'active' || isBusy}
           >
             Create event
@@ -519,7 +708,7 @@ function App() {
                 max={60}
                 step={1}
                 value={motionCooldown}
-                aria-label="Cooldown"
+                aria-label="Motion cooldown"
                 onChange={(event) =>
                   setMotionCooldown(Number(event.target.value))
                 }
@@ -540,6 +729,68 @@ function App() {
                 }
               />
               <span className="motion-value">{roiInsetPercent}%</span>
+            </label>
+          </div>
+        </section>
+
+        <section className="audio-controls" aria-label="Audio controls">
+          <h2>Audio controls</h2>
+          <div className="motion-grid">
+            <label className="motion-field motion-toggle">
+              <span>Audio trigger</span>
+              <input
+                type="checkbox"
+                checked={audioEnabled}
+                aria-label="Audio trigger"
+                onChange={(event) => setAudioEnabled(event.target.checked)}
+              />
+            </label>
+            <label className="motion-field">
+              <span>Audio level</span>
+              <meter
+                aria-label="Audio level"
+                min={0}
+                max={1}
+                low={0.15}
+                high={0.35}
+                optimum={0.1}
+                value={audioLevel}
+              />
+              <span className="motion-value">
+                {audioLevel.toFixed(2)}
+              </span>
+            </label>
+            <label className="motion-field">
+              <span>Audio threshold</span>
+              <input
+                type="range"
+                min={0.05}
+                max={0.8}
+                step={0.01}
+                value={audioThreshold}
+                aria-label="Audio threshold"
+                onChange={(event) =>
+                  setAudioThreshold(Number(event.target.value))
+                }
+                disabled={!audioEnabled}
+              />
+              <span className="motion-value">{audioThreshold.toFixed(2)}</span>
+            </label>
+            <label className="motion-field">
+              <span>Audio cooldown (s)</span>
+              <input
+                type="range"
+                min={5}
+                max={60}
+                step={1}
+                value={audioCooldown}
+                aria-label="Audio cooldown"
+                onChange={(event) =>
+                  setAudioCooldown(Number(event.target.value))
+                }
+                disabled={!audioEnabled}
+              />
+              <span className="motion-value">{audioCooldown}s</span>
             </label>
           </div>
         </section>

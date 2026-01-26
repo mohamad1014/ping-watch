@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   MotionGate,
+  applyMotionGates,
   computeMotionScore,
   computeMotionScoreInRegion,
+  computeMotionMetricsInRegion,
   startMotionTrigger,
 } from './motion'
 
@@ -36,6 +38,45 @@ describe('computeMotionScoreInRegion', () => {
       frameWidth: 2,
       frameHeight: 2,
     })
+
+    expect(score).toBe(0)
+  })
+})
+
+describe('computeMotionMetricsInRegion', () => {
+  it('returns score and average brightness delta', () => {
+    const prev = new Uint8ClampedArray([0, 0, 0, 255, 0, 0, 0, 255])
+    const curr = new Uint8ClampedArray([100, 100, 100, 255, 100, 100, 100, 255])
+
+    const metrics = computeMotionMetricsInRegion(prev, curr, 10, {
+      x: 0,
+      y: 0,
+      width: 2,
+      height: 1,
+      frameWidth: 2,
+      frameHeight: 1,
+    })
+
+    expect(metrics.score).toBeCloseTo(1)
+    expect(metrics.brightnessDelta).toBeCloseTo(100)
+  })
+})
+
+describe('applyMotionGates', () => {
+  it('returns 0 when brightness shifts exceed gate', () => {
+    const score = applyMotionGates(
+      { score: 0.4, brightnessDelta: 80 },
+      { minScore: 0.05, brightnessThreshold: 40 }
+    )
+
+    expect(score).toBe(0)
+  })
+
+  it('returns 0 when score is below minScore', () => {
+    const score = applyMotionGates(
+      { score: 0.02, brightnessDelta: 5 },
+      { minScore: 0.05, brightnessThreshold: 40 }
+    )
 
     expect(score).toBe(0)
   })
