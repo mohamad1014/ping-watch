@@ -48,6 +48,15 @@ Free tier has monthly allowance; paid tier raises limits and retention.
 - Max uploads per hour per plan.
 - Max clip length per plan.
 
+## MVP-1 On-Device Validation Checklist
+
+- Launch the PWA on a real phone, grant camera + mic permissions.
+- Confirm “Capture active” appears after starting a session.
+- Move in front of the camera and verify a motion-triggered clip is created.
+- Enable audio trigger, make a sharp sound, and verify an audio-triggered clip.
+- Check the local timeline: clips should play back and show duration/size.
+- Toggle “VITE_DISABLE_MEDIA=true” and verify capture is shown as disabled.
+
 ## Status
 
 Scaffolding started: repo layout, local infra compose, and decision log.
@@ -113,3 +122,16 @@ Note: backend tests default to Postgres. Run `./scripts/dev-up` first, or set `D
 - `VITE_POLL_INTERVAL_MS` — polling interval for event refresh (default 5000).
 - `VITE_DISABLE_MEDIA` — set to `true` to skip `getUserMedia`/`MediaRecorder` capture (useful for tests/E2E).
 - `DATABASE_URL` — backend DB URL (default Postgres in local dev).
+- `AZURITE_BLOB_ENDPOINT` / `AZURITE_ACCOUNT_NAME` / `AZURITE_ACCOUNT_KEY` — Azurite config for issuing SAS upload URLs.
+- `AZURITE_CLIPS_CONTAINER` — container name for clips (default `clips`).
+- `AZURITE_AUTO_CREATE_CONTAINER` — auto-create the clips container on first upload (recommended in local dev).
+- `AZURITE_SAS_EXPIRY_SECONDS` — SAS expiry for upload URLs (default 900).
+
+## Upload Pipeline (Azurite)
+
+The “Upload stored clips” button uploads pending clips from IndexedDB to Azurite via SAS URLs issued by the backend.
+
+1) Start deps: `./scripts/dev-up` (starts Azurite on `:10000`).
+2) Run app: `./scripts/dev`.
+3) Start monitoring → generate a few local clips (motion trigger).
+4) Click “Upload stored clips” and watch events show `processing` until the worker posts summaries.

@@ -24,6 +24,13 @@ Two tiers:
 - Frontend polling of events and rendering of status + summary fields.
 - On-device clip metadata capture (duration + size) via MediaRecorder where available; opt-out flag for tests.
 - Event ID copy actions for manual worker testing.
+- Clip ring buffer + clip selection helpers (frontend utilities, not yet wired to capture).
+- Clip ring buffer wired to MediaRecorder chunking + pre/post clip assembly.
+- IndexedDB clip persistence (local clip storage).
+- Basic motion trigger (frame differencing) that fires clip creation.
+- Motion controls UI (threshold/cooldown/ROI inset sliders).
+- Clip timeline UI with preview playback from IndexedDB.
+- Upload stub that pushes stored clips to the API.
 - Backend API:
   - Sessions: start/stop/list.
   - Events: create/list.
@@ -39,18 +46,17 @@ Two tiers:
 
 ### What is not done yet
 
-- On-device capture (getUserMedia/MediaRecorder), ring buffer, triggers, clip builder.
-- Real clip capture pipeline beyond metadata (buffering, trigger-driven clip assembly).
 - Upload pipeline (SAS URLs, blob storage, retries, offline queue).
 - Auth, device registration, credits, and tier limits.
 - Queueing via Service Bus, GPU inference pipeline, and model integration.
 - Notifications (Telegram) and WebSocket monitoring.
 - Cost controls beyond basic guardrails.
+- Background-safe capture (native wrapper) and advanced trigger refinements.
 
 ### Roadmap position
 
 - **Phase 0 (Project skeleton):** complete.
-- **Phase 1 (Local capture + trigger):** not started.
+- **Phase 1 (Local capture + trigger):** complete (MVP‑1 done).
 - **Phase 2 (Upload + event sync):** partial (session/event APIs + UI polling); upload flow not started.
 - **Phase 3 (Inference pipeline):** partial stub (summary endpoints + worker posting); no queue/VLM.
 - **Phase 4 (Notifications + monitoring):** not started.

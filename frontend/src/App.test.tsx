@@ -1,14 +1,32 @@
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { captureClipMetadata } from './recorder'
+import { assembleClip } from './clipAssembler'
+import { getClip, listClips, saveClip } from './clipStore'
 
 vi.mock('./recorder', () => ({
   captureClipMetadata: vi.fn(),
 }))
 
 const mockedCaptureClipMetadata = vi.mocked(captureClipMetadata)
+
+vi.mock('./clipAssembler', () => ({
+  assembleClip: vi.fn(),
+}))
+
+vi.mock('./clipStore', () => ({
+  saveClip: vi.fn(),
+  listClips: vi.fn(),
+  getClip: vi.fn(),
+  markClipUploaded: vi.fn(),
+}))
+
+const mockedAssembleClip = vi.mocked(assembleClip)
+const mockedSaveClip = vi.mocked(saveClip)
+const mockedListClips = vi.mocked(listClips)
+const mockedGetClip = vi.mocked(getClip)
 
 const buildResponse = (payload: unknown) =>
   Promise.resolve({
@@ -48,10 +66,28 @@ const createFetchMock = (routes: {
 }
 
 describe('App', () => {
-  it('shows the Ping Watch title', () => {
+  const runtimeFlags = globalThis as {
+    __PING_WATCH_DISABLE_MEDIA__?: boolean
+    __PING_WATCH_PRE_MS__?: number
+    __PING_WATCH_POST_MS__?: number
+  }
+
+  beforeEach(() => {
+    runtimeFlags.__PING_WATCH_DISABLE_MEDIA__ = true
+    runtimeFlags.__PING_WATCH_POST_MS__ = 0
+    mockedListClips.mockResolvedValue([])
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    runtimeFlags.__PING_WATCH_DISABLE_MEDIA__ = undefined
+    runtimeFlags.__PING_WATCH_POST_MS__ = undefined
+  })
+
+  it('shows the Ping Watch title', async () => {
     render(<App />)
     expect(
-      screen.getByRole('heading', { name: /ping watch/i })
+      await screen.findByRole('heading', { name: /ping watch/i })
     ).toBeInTheDocument()
   })
 
@@ -111,6 +147,22 @@ describe('App', () => {
       sizeBytes: 2048,
       mimeType: 'video/webm',
     })
+    mockedAssembleClip.mockReturnValue({
+      blob: new Blob(['clip']),
+      sizeBytes: 4,
+      mimeType: 'video/webm',
+      durationSeconds: 2,
+      startMs: 0,
+      endMs: 2000,
+    })
+    mockedSaveClip.mockResolvedValue({
+      id: 'clip-1',
+      blob: new Blob(['clip']),
+      sizeBytes: 4,
+      mimeType: 'video/webm',
+      durationSeconds: 2,
+      createdAt: 0,
+    })
 
     vi.stubGlobal('fetch', fetchMock)
 
@@ -132,9 +184,10 @@ describe('App', () => {
     const createBody = JSON.parse((createInit?.body ?? '{}') as string)
 
     expect(createBody).toMatchObject({
-      duration_seconds: 3.4,
-      clip_size_bytes: 2048,
+      duration_seconds: 2,
+      clip_size_bytes: 4,
       clip_mime: 'video/webm',
+      clip_uri: 'idb://clips/clip-1',
     })
 
     expect(await screen.findByText('1 captured')).toBeInTheDocument()
@@ -180,6 +233,221 @@ describe('App', () => {
       value: originalClipboard,
       configurable: true,
     })
+  })
+
+  it('renders clip timeline and previews a clip', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    const clip = {
+      id: 'clip-1',
+      blob: new Blob(['clip']),
+      sizeBytes: 4,
+      mimeType: 'video/webm',
+      durationSeconds: 2,
+      createdAt: 0,
+      uploaded: false,
+    }
+    mockedListClips.mockResolvedValue([clip])
+    mockedGetClip.mockResolvedValue(clip)
+
+    const createObjectURL = vi.fn().mockReturnValue('blob:clip-1')
+    const revokeObjectURL = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL,
+      revokeObjectURL,
+    })
+
+    render(<App />)
+
+    const previewButton = await screen.findByRole('button', {
+      name: /preview clip-1/i,
+    })
+    await user.click(previewButton)
+
+    expect(screen.getByTestId('clip-preview')).toHaveAttribute(
+      'src',
+      'blob:clip-1'
+    )
+
+    vi.restoreAllMocks()
+  })
+
+  it('shows motion controls', async () => {
+    render(<App />)
+
+    expect(
+      await screen.findByRole('slider', { name: /motion threshold/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('slider', { name: /motion cooldown/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('slider', { name: /roi inset/i })
+    ).toBeInTheDocument()
+  })
+
+  it('loads motion settings from localStorage', async () => {
+    localStorage.setItem('ping-watch:motion-threshold', '0.18')
+    localStorage.setItem('ping-watch:motion-cooldown', '24')
+    localStorage.setItem('ping-watch:motion-roi-inset', '12')
+
+    render(<App />)
+
+    const threshold = await screen.findByRole('slider', {
+      name: /motion threshold/i,
+    })
+    const cooldown = screen.getByRole('slider', { name: /motion cooldown/i })
+    const roi = screen.getByRole('slider', { name: /roi inset/i })
+
+    expect(threshold).toHaveValue('0.18')
+    expect(cooldown).toHaveValue('24')
+    expect(roi).toHaveValue('12')
+  })
+
+  it('persists motion settings to localStorage', async () => {
+    render(<App />)
+
+    const threshold = await screen.findByRole('slider', {
+      name: /motion threshold/i,
+    })
+    const cooldown = screen.getByRole('slider', { name: /motion cooldown/i })
+    const roi = screen.getByRole('slider', { name: /roi inset/i })
+
+    fireEvent.change(threshold, { target: { value: '0.22' } })
+    fireEvent.change(cooldown, { target: { value: '28' } })
+    fireEvent.change(roi, { target: { value: '16' } })
+
+    expect(localStorage.getItem('ping-watch:motion-threshold')).toBe('0.22')
+    expect(localStorage.getItem('ping-watch:motion-cooldown')).toBe('28')
+    expect(localStorage.getItem('ping-watch:motion-roi-inset')).toBe('16')
+  })
+
+  it('shows audio controls', async () => {
+    render(<App />)
+
+    expect(
+      await screen.findByRole('checkbox', { name: /audio trigger/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('slider', { name: /audio threshold/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('slider', { name: /audio cooldown/i })
+    ).toBeInTheDocument()
+  })
+
+  it('shows capture status when media is disabled', async () => {
+    render(<App />)
+
+    expect(
+      await screen.findByText(/capture disabled/i)
+    ).toBeInTheDocument()
+  })
+
+  it('shows a permission error when camera access is denied', async () => {
+    runtimeFlags.__PING_WATCH_DISABLE_MEDIA__ = false
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+
+    const getUserMedia = vi
+      .fn()
+      .mockRejectedValue(new DOMException('Denied', 'NotAllowedError'))
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: { getUserMedia },
+      configurable: true,
+    })
+
+    const originalMediaRecorder = globalThis.MediaRecorder
+    class MockMediaRecorder {
+      static isTypeSupported() {
+        return false
+      }
+      constructor() {}
+      addEventListener() {}
+      start() {}
+      stop() {}
+      get state() {
+        return 'inactive'
+      }
+    }
+    Object.defineProperty(globalThis, 'MediaRecorder', {
+      value: MockMediaRecorder,
+      configurable: true,
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    await user.click(
+      screen.getByRole('button', { name: /start monitoring/i })
+    )
+
+    expect(
+      await screen.findByText(/camera permission denied/i)
+    ).toBeInTheDocument()
+
+    Object.defineProperty(globalThis, 'MediaRecorder', {
+      value: originalMediaRecorder,
+      configurable: true,
+    })
+  })
+
+  it('loads audio settings from localStorage', async () => {
+    localStorage.setItem('ping-watch:audio-enabled', 'true')
+    localStorage.setItem('ping-watch:audio-threshold', '0.42')
+    localStorage.setItem('ping-watch:audio-cooldown', '22')
+
+    render(<App />)
+
+    const enabled = await screen.findByRole('checkbox', {
+      name: /audio trigger/i,
+    })
+    const threshold = screen.getByRole('slider', { name: /audio threshold/i })
+    const cooldown = screen.getByRole('slider', { name: /audio cooldown/i })
+
+    expect(enabled).toBeChecked()
+    expect(threshold).toHaveValue('0.42')
+    expect(cooldown).toHaveValue('22')
+  })
+
+  it('persists audio settings to localStorage', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    const enabled = await screen.findByRole('checkbox', {
+      name: /audio trigger/i,
+    })
+    await user.click(enabled)
+
+    const threshold = screen.getByRole('slider', { name: /audio threshold/i })
+    const cooldown = screen.getByRole('slider', { name: /audio cooldown/i })
+    fireEvent.change(threshold, { target: { value: '0.5' } })
+    fireEvent.change(cooldown, { target: { value: '18' } })
+
+    expect(localStorage.getItem('ping-watch:audio-enabled')).toBe('true')
+    expect(localStorage.getItem('ping-watch:audio-threshold')).toBe('0.5')
+    expect(localStorage.getItem('ping-watch:audio-cooldown')).toBe('18')
+  })
+
+  it('renders the audio level meter', async () => {
+    render(<App />)
+
+    expect(
+      await screen.findByRole('meter', { name: /audio level/i })
+    ).toBeInTheDocument()
   })
 
   it('polls and renders events when active', async () => {

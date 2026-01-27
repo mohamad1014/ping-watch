@@ -40,6 +40,10 @@ export type EventResponse = {
   clip_uri?: string
   clip_mime?: string
   clip_size_bytes?: number
+  clip_container?: string | null
+  clip_blob_name?: string | null
+  clip_uploaded_at?: string | null
+  clip_etag?: string | null
   summary?: string | null
   label?: string | null
   confidence?: number | null
@@ -53,6 +57,23 @@ export type CreateEventPayload = {
   clipUri: string
   clipMime: string
   clipSizeBytes: number
+}
+
+export type InitiateUploadPayload = {
+  eventId?: string
+  sessionId: string
+  deviceId: string
+  triggerType: string
+  durationSeconds: number
+  clipMime: string
+  clipSizeBytes: number
+}
+
+export type InitiateUploadResponse = {
+  event: EventResponse
+  uploadUrl: string
+  blobUrl: string
+  expiresAt: string
 }
 
 export const startSession = (deviceId: string) =>
@@ -82,4 +103,39 @@ export const createEvent = (payload: CreateEventPayload) =>
       clip_mime: payload.clipMime,
       clip_size_bytes: payload.clipSizeBytes,
     },
+  })
+
+export const initiateUpload = async (
+  payload: InitiateUploadPayload
+): Promise<InitiateUploadResponse> => {
+  const response = await request<{
+    event: EventResponse
+    upload_url: string
+    blob_url: string
+    expires_at: string
+  }>('/events/upload/initiate', {
+    method: 'POST',
+    body: {
+      event_id: payload.eventId,
+      session_id: payload.sessionId,
+      device_id: payload.deviceId,
+      trigger_type: payload.triggerType,
+      duration_seconds: payload.durationSeconds,
+      clip_mime: payload.clipMime,
+      clip_size_bytes: payload.clipSizeBytes,
+    },
+  })
+
+  return {
+    event: response.event,
+    uploadUrl: response.upload_url,
+    blobUrl: response.blob_url,
+    expiresAt: response.expires_at,
+  }
+}
+
+export const finalizeUpload = (eventId: string, etag: string | null) =>
+  request<EventResponse>(`/events/${encodeURIComponent(eventId)}/upload/finalize`, {
+    method: 'POST',
+    body: { etag },
   })

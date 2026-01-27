@@ -111,6 +111,61 @@ button:not(:disabled):hover {
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
 }
 
+.motion-controls {
+  padding: 1.5rem;
+  border-radius: 18px;
+  background: #fdf7ef;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+}
+
+.motion-controls h2 {
+  margin: 0 0 1rem;
+  font-size: 1.3rem;
+}
+
+.audio-controls {
+  padding: 1.5rem;
+  border-radius: 18px;
+  background: #f2f6ff;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+}
+
+.audio-controls h2 {
+  margin: 0 0 1rem;
+  font-size: 1.3rem;
+}
+
+.motion-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.motion-field {
+  display: grid;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.motion-toggle {
+  grid-auto-flow: column;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.motion-field input[type='range'] {
+  width: 100%;
+}
+
+.motion-field meter {
+  width: 100%;
+  height: 0.9rem;
+}
+
+.motion-value {
+  font-size: 0.8rem;
+  color: #6a6a6a;
+}
+
 .events-header {
   display: flex;
   justify-content: space-between;
@@ -220,6 +275,64 @@ button:not(:disabled):hover {
   color: #0b6e3f;
 }
 
+.clip-timeline {
+  padding: 1.5rem;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+}
+
+.clip-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.clip-list {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.clip-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  background: #f3f5f7;
+  align-items: center;
+}
+
+.clip-id {
+  font-weight: 600;
+}
+
+.clip-meta {
+  margin-top: 0.3rem;
+  display: flex;
+  gap: 0.75rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6a6a6a;
+}
+
+.clip-preview {
+  margin-top: 1rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.clip-preview video {
+  width: 100%;
+  border-radius: 12px;
+  background: #111;
+}
+
 @media (max-width: 640px) {
   .status-row {
     flex-direction: column;
@@ -232,6 +345,11 @@ button:not(:disabled):hover {
   }
 
   .event-item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .clip-item {
     flex-direction: column;
     align-items: flex-start;
   }
