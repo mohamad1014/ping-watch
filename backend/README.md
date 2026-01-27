@@ -13,9 +13,9 @@ Test:
 - `.venv/bin/python -m pytest -q`
 
 Database:
-- Default `DATABASE_URL` is `sqlite:///./pingwatch.db`.
+- Default `DATABASE_URL` is `postgresql+psycopg://pingwatch:pingwatch@localhost:5432/pingwatch`.
 - Migrations live in `alembic/`.
-- Run migrations: `.venv/bin/alembic upgrade head` (from `backend/`).
+- Run migrations: `.venv/bin/alembic upgrade head` (from `backend/`, respects `DATABASE_URL` if set).
 
 Logging:
 - Structured JSON logs to stdout with ISO 8601 timestamps and request metadata.

@@ -43,6 +43,12 @@ class EventModel(Base):
     clip_uri: Mapped[str] = mapped_column(String)
     clip_mime: Mapped[str] = mapped_column(String)
     clip_size_bytes: Mapped[int] = mapped_column(Integer)
+    clip_container: Mapped[str | None] = mapped_column(String, nullable=True)
+    clip_blob_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    clip_uploaded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    clip_etag: Mapped[str | None] = mapped_column(String, nullable=True)
     summary: Mapped[str | None] = mapped_column(String, nullable=True)
     label: Mapped[str | None] = mapped_column(String, nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)

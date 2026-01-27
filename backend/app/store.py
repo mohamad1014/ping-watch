@@ -62,12 +62,21 @@ def create_event(
     clip_uri: str,
     clip_mime: str,
     clip_size_bytes: int,
+    event_id: Optional[str] = None,
+    clip_container: Optional[str] = None,
+    clip_blob_name: Optional[str] = None,
 ) -> Optional[EventModel]:
     session = db.get(SessionModel, session_id)
     if session is None:
         return None
+    if event_id is not None:
+        existing = db.get(EventModel, event_id)
+        if existing is not None:
+            if existing.session_id != session_id:
+                raise ValueError("event_id already exists for a different session")
+            return existing
     record = EventModel(
-        event_id=str(uuid4()),
+        event_id=event_id or str(uuid4()),
         session_id=session_id,
         device_id=device_id,
         status="processing",
@@ -77,6 +86,8 @@ def create_event(
         clip_uri=clip_uri,
         clip_mime=clip_mime,
         clip_size_bytes=clip_size_bytes,
+        clip_container=clip_container,
+        clip_blob_name=clip_blob_name,
     )
     db.add(record)
     db.commit()
@@ -102,6 +113,21 @@ def update_event_summary(
     record.label = label
     record.confidence = confidence
     record.status = "done"
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def mark_event_clip_uploaded(
+    db: Session, event_id: str, etag: Optional[str]
+) -> Optional[EventModel]:
+    record = db.get(EventModel, event_id)
+    if record is None:
+        return None
+    if record.clip_uploaded_at is None:
+        record.clip_uploaded_at = _now()
+    if etag is not None:
+        record.clip_etag = etag
     db.commit()
     db.refresh(record)
     return record
@@ -142,6 +168,10 @@ def event_to_dict(record: EventModel) -> dict:
         "clip_uri": record.clip_uri,
         "clip_mime": record.clip_mime,
         "clip_size_bytes": record.clip_size_bytes,
+        "clip_container": record.clip_container,
+        "clip_blob_name": record.clip_blob_name,
+        "clip_uploaded_at": _format_dt(record.clip_uploaded_at),
+        "clip_etag": record.clip_etag,
         "summary": record.summary,
         "label": record.label,
         "confidence": record.confidence,
