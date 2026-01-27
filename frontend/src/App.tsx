@@ -298,6 +298,8 @@ function App() {
         triggerType: 'motion',
       })
       await refreshClips()
+      const nextEvents = await listEvents(sessionId)
+      setEvents(nextEvents)
     } catch (err) {
       console.error(err)
       setError('Unable to upload clips')
@@ -537,6 +539,25 @@ function App() {
     return () => {
       cancelled = true
       clearInterval(interval)
+    }
+  }, [sessionId, sessionStatus])
+
+  useEffect(() => {
+    if (sessionStatus !== 'active' || !sessionId) {
+      return
+    }
+
+    const onOnline = () => {
+      void uploadPendingClips({
+        sessionId,
+        deviceId: 'device-1',
+        triggerType: 'motion',
+      }).then(refreshClips).catch(console.error)
+    }
+
+    window.addEventListener('online', onOnline)
+    return () => {
+      window.removeEventListener('online', onOnline)
     }
   }, [sessionId, sessionStatus])
 

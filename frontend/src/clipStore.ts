@@ -14,6 +14,10 @@ export type StoredClip = ClipInput & {
   id: string
   createdAt: number
   uploaded: boolean
+  uploadedAt?: number
+  uploadAttempts?: number
+  nextUploadAttemptAt?: number
+  lastUploadError?: string
 }
 
 let dbPromise: Promise<IDBDatabase> | null = null
@@ -69,6 +73,7 @@ export const saveClip = async (clip: ClipInput): Promise<StoredClip> => {
     id: buildId(),
     createdAt: clip.createdAt ?? Date.now(),
     uploaded: false,
+    uploadAttempts: 0,
     ...clip,
   }
 
@@ -88,6 +93,8 @@ export const getClip = async (id: string): Promise<StoredClip | null> => {
 
 type ClipListFilter = {
   uploaded?: boolean
+  readyToUpload?: boolean
+  now?: number
 }
 
 export const listClips = async (
@@ -98,8 +105,19 @@ export const listClips = async (
   const records = await requestToPromise(tx.objectStore(STORE_NAME).getAll())
   await waitForTransaction(tx)
   const result = records ?? []
+  const now = filter.now ?? Date.now()
   if (typeof filter.uploaded === 'boolean') {
-    return result.filter((clip) => clip.uploaded === filter.uploaded)
+    const filtered = result.filter((clip) => clip.uploaded === filter.uploaded)
+    if (filter.readyToUpload) {
+      return filtered.filter(
+        (clip) =>
+          (clip.nextUploadAttemptAt ?? 0) <= now
+      )
+    }
+    return filtered
+  }
+  if (filter.readyToUpload) {
+    return result.filter((clip) => (clip.nextUploadAttemptAt ?? 0) <= now)
   }
   return result
 }
@@ -117,7 +135,33 @@ export const markClipUploaded = async (id: string) => {
   const store = tx.objectStore(STORE_NAME)
   const record = await requestToPromise(store.get(id))
   if (record) {
-    store.put({ ...record, uploaded: true })
+    store.put({
+      ...record,
+      uploaded: true,
+      uploadedAt: Date.now(),
+      lastUploadError: undefined,
+      nextUploadAttemptAt: undefined,
+    })
+  }
+  await waitForTransaction(tx)
+}
+
+export const scheduleClipRetry = async (
+  id: string,
+  options: { error: string; nextUploadAttemptAt: number }
+) => {
+  const db = await openDb()
+  const tx = db.transaction(STORE_NAME, 'readwrite')
+  const store = tx.objectStore(STORE_NAME)
+  const record = await requestToPromise(store.get(id))
+  if (record) {
+    const attempts = Number(record.uploadAttempts ?? 0) + 1
+    store.put({
+      ...record,
+      uploadAttempts: attempts,
+      lastUploadError: options.error,
+      nextUploadAttemptAt: options.nextUploadAttemptAt,
+    })
   }
   await waitForTransaction(tx)
 }
