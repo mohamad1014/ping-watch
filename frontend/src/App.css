@@ -321,6 +321,10 @@ button:not(:disabled):hover {
   color: #6a6a6a;
 }
 
+.clip-error {
+  color: #b91c1c;
+}
+
 .clip-preview {
   margin-top: 1rem;
   display: grid;

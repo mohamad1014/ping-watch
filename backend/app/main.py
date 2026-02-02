@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import init_db
 from app.logging import setup_logging
+from app.routes.devices import router as devices_router
 from app.routes.events import router as events_router
 from app.routes.sessions import router as sessions_router
 
@@ -17,8 +18,10 @@ app.add_middleware(
     allow_origin_regex=r"^http://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["etag"],
 )
 app.include_router(sessions_router)
+app.include_router(devices_router)
 app.include_router(events_router)
 
 

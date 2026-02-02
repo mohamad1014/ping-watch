@@ -3,6 +3,9 @@ const STORE_NAME = 'clips'
 const DB_VERSION = 1
 
 type ClipInput = {
+  sessionId: string
+  deviceId: string
+  triggerType: 'motion' | 'audio'
   blob: Blob
   mimeType: string
   sizeBytes: number

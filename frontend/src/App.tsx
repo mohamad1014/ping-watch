@@ -1,17 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import {
-  createEvent,
   type EventResponse,
   listEvents,
   startSession,
   stopSession,
 } from './api'
-import { captureClipMetadata } from './recorder'
 import { ClipRingBuffer } from './clipBuffer'
 import { assembleClip } from './clipAssembler'
 import { getClip, listClips, saveClip, type StoredClip } from './clipStore'
 import { uploadPendingClips } from './clipUpload'
+import { ensureDeviceId } from './device'
 import {
   applyMotionGates,
   computeMotionMetricsInRegion,
@@ -120,6 +119,7 @@ function formatConfidence(value: number | null | undefined) {
 function App() {
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('idle')
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [deviceId, setDeviceId] = useState<string | null>(null)
   const [events, setEvents] = useState<EventResponse[]>([])
   const [isBusy, setIsBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -158,6 +158,12 @@ function App() {
   const clipUrlRef = useRef<string | null>(null)
 
   const lastEvent = useMemo(() => events[events.length - 1], [events])
+  const clipStats = useMemo(() => {
+    const pending = clips.filter((clip) => !clip.uploaded).length
+    const failed = clips.filter((clip) => !clip.uploaded && clip.lastUploadError)
+      .length
+    return { pending, failed }
+  }, [clips])
 
   const refreshClips = async () => {
     const nextClips = await listClips()
@@ -170,7 +176,10 @@ function App() {
     setError(null)
 
     try {
-      const session = await startSession('device-1')
+      const resolvedDeviceId = await ensureDeviceId()
+      setDeviceId(resolvedDeviceId)
+      const session = await startSession(resolvedDeviceId)
+      setDeviceId(session.device_id)
       setSessionId(session.session_id)
       setSessionStatus('active')
 
@@ -207,7 +216,8 @@ function App() {
   }
 
   const handleCreateEvent = async (triggerType: 'motion' | 'audio' = 'motion') => {
-    if (!sessionId) {
+    if (!sessionId || !deviceId) {
+      setError('Start a session before creating events')
       return
     }
 
@@ -233,33 +243,28 @@ function App() {
       let durationSeconds = assembled?.durationSeconds ?? 0
       let clipMime = assembled?.mimeType ?? 'video/webm'
       let clipSizeBytes = assembled?.sizeBytes ?? 0
-      let clipUri = `local://event-${Date.now()}`
 
-      if (assembled?.blob) {
-        const stored = await saveClip({
-          blob: assembled.blob,
-          mimeType: clipMime,
-          sizeBytes: clipSizeBytes,
-          durationSeconds,
-        })
-        clipUri = `idb://clips/${stored.id}`
-        await refreshClips()
-      } else {
-        const clipMetadata = await captureClipMetadata({ recordMs: 2000 })
-        durationSeconds = clipMetadata.durationSeconds
-        clipMime = clipMetadata.mimeType
-        clipSizeBytes = clipMetadata.sizeBytes
+      const clipBlob =
+        assembled?.blob ??
+        new Blob([`ping-watch:${triggerType}:${Date.now()}`], { type: clipMime })
+
+      if (!assembled?.blob) {
+        clipMime = clipBlob.type || 'video/webm'
+        clipSizeBytes = clipBlob.size
       }
 
-      await createEvent({
+      await saveClip({
         sessionId,
-        deviceId: 'device-1',
+        deviceId,
         triggerType,
+        blob: clipBlob,
+        mimeType: clipMime,
+        sizeBytes: clipSizeBytes,
         durationSeconds,
-        clipUri,
-        clipMime,
-        clipSizeBytes,
       })
+
+      await refreshClips()
+      await uploadPendingClips({ sessionId })
       const nextEvents = await listEvents(sessionId)
       setEvents(nextEvents)
     } catch (err) {
@@ -292,11 +297,7 @@ function App() {
     setIsBusy(true)
     setError(null)
     try {
-      await uploadPendingClips({
-        sessionId,
-        deviceId: 'device-1',
-        triggerType: 'motion',
-      })
+      await uploadPendingClips({ sessionId })
       await refreshClips()
       const nextEvents = await listEvents(sessionId)
       setEvents(nextEvents)
@@ -550,8 +551,6 @@ function App() {
     const onOnline = () => {
       void uploadPendingClips({
         sessionId,
-        deviceId: 'device-1',
-        triggerType: 'motion',
       }).then(refreshClips).catch(console.error)
     }
 
@@ -871,7 +870,10 @@ function App() {
         <section className="clip-timeline">
           <div className="clip-header">
             <h2>Stored clips</h2>
-            <span className="events-meta">{clips.length} stored</span>
+            <span className="events-meta">
+              {clips.length} stored · {clipStats.pending} pending
+              {clipStats.failed ? ` · ${clipStats.failed} failed` : ''}
+            </span>
           </div>
           {clips.length === 0 ? (
             <p className="events-empty">No stored clips yet.</p>
@@ -884,7 +886,13 @@ function App() {
                     <div className="clip-meta">
                       <span>{formatDuration(clip.durationSeconds)}</span>
                       <span>{formatBytes(clip.sizeBytes)}</span>
+                      <span>{clip.triggerType}</span>
                       <span>{clip.uploaded ? 'uploaded' : 'pending'}</span>
+                      {!clip.uploaded && clip.lastUploadError ? (
+                        <span className="clip-error">
+                          {clip.lastUploadError}
+                        </span>
+                      ) : null}
                     </div>
                   </div>
                   <button

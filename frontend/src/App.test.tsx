@@ -2,15 +2,8 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
-import { captureClipMetadata } from './recorder'
 import { assembleClip } from './clipAssembler'
 import { getClip, listClips, saveClip } from './clipStore'
-
-vi.mock('./recorder', () => ({
-  captureClipMetadata: vi.fn(),
-}))
-
-const mockedCaptureClipMetadata = vi.mocked(captureClipMetadata)
 
 vi.mock('./clipAssembler', () => ({
   assembleClip: vi.fn(),
@@ -21,6 +14,7 @@ vi.mock('./clipStore', () => ({
   listClips: vi.fn(),
   getClip: vi.fn(),
   markClipUploaded: vi.fn(),
+  scheduleClipRetry: vi.fn(),
 }))
 
 const mockedAssembleClip = vi.mocked(assembleClip)
@@ -34,22 +28,57 @@ const buildResponse = (payload: unknown) =>
     json: async () => payload,
   } as Response)
 
+const buildUploadResponse = (etag: string) =>
+  Promise.resolve({
+    ok: true,
+    headers: {
+      get: (key: string) => (key.toLowerCase() === 'etag' ? etag : null),
+    },
+    json: async () => ({}),
+  } as unknown as Response)
+
 const createFetchMock = (routes: {
+  registerDevice?: unknown
   start: unknown
   stop: unknown
-  createEvent: unknown
+  createEvent?: unknown
+  initiateUpload?: unknown
+  finalizeUpload?: unknown
+  uploadEtag?: string
   events: unknown[]
 }) => {
   const eventQueue = [...routes.events]
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = input.toString()
 
+    if (url.endsWith('/devices/register')) {
+      return buildResponse(
+        routes.registerDevice ?? {
+          device_id: 'device-1',
+          label: null,
+          created_at: 'now',
+        }
+      )
+    }
+
     if (url.endsWith('/sessions/start')) {
       return buildResponse(routes.start)
     }
 
+    if (url.endsWith('/events/upload/initiate') && init?.method === 'POST') {
+      return buildResponse(routes.initiateUpload ?? {})
+    }
+
+    if (url.includes('/upload/finalize') && init?.method === 'POST') {
+      return buildResponse(routes.finalizeUpload ?? {})
+    }
+
+    if (init?.method === 'PUT') {
+      return buildUploadResponse(routes.uploadEtag ?? '"etag-1"')
+    }
+
     if (url.endsWith('/events') && init?.method === 'POST') {
-      return buildResponse(routes.createEvent)
+      return buildResponse(routes.createEvent ?? {})
     }
 
     if (url.includes('/events')) {
@@ -134,19 +163,28 @@ describe('App', () => {
     const fetchMock = createFetchMock({
       start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
       stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
-      createEvent: {
-        event_id: 'evt_1',
+      initiateUpload: {
+        event: {
+          event_id: 'clip-1',
+          status: 'processing',
+          trigger_type: 'motion',
+        },
+        upload_url: 'http://upload/clip-1',
+        blob_url: 'http://blob/clip-1',
+        expires_at: new Date().toISOString(),
+      },
+      finalizeUpload: {
+        event_id: 'clip-1',
         status: 'processing',
         trigger_type: 'motion',
       },
-      events: [[{ event_id: 'evt_1', status: 'processing', trigger_type: 'motion' }]],
+      uploadEtag: '"etag-1"',
+      events: [
+        [],
+        [{ event_id: 'clip-1', status: 'processing', trigger_type: 'motion' }],
+      ],
     })
 
-    mockedCaptureClipMetadata.mockResolvedValue({
-      durationSeconds: 3.4,
-      sizeBytes: 2048,
-      mimeType: 'video/webm',
-    })
     mockedAssembleClip.mockReturnValue({
       blob: new Blob(['clip']),
       sizeBytes: 4,
@@ -157,11 +195,41 @@ describe('App', () => {
     })
     mockedSaveClip.mockResolvedValue({
       id: 'clip-1',
+      sessionId: 'sess_1',
+      deviceId: 'device-1',
+      triggerType: 'motion',
       blob: new Blob(['clip']),
       sizeBytes: 4,
       mimeType: 'video/webm',
       durationSeconds: 2,
       createdAt: 0,
+      uploaded: false,
+      uploadAttempts: 0,
+    })
+    mockedListClips.mockImplementation(async (filter?: unknown) => {
+      if (
+        typeof filter === 'object' &&
+        filter !== null &&
+        'uploaded' in filter &&
+        (filter as { uploaded?: boolean }).uploaded === false
+      ) {
+        return [
+          {
+            id: 'clip-1',
+            sessionId: 'sess_1',
+            deviceId: 'device-1',
+            triggerType: 'motion',
+            blob: new Blob(['clip']),
+            sizeBytes: 4,
+            mimeType: 'video/webm',
+            durationSeconds: 2,
+            createdAt: 0,
+            uploaded: false,
+            uploadAttempts: 0,
+          },
+        ]
+      }
+      return []
     })
 
     vi.stubGlobal('fetch', fetchMock)
@@ -174,25 +242,25 @@ describe('App', () => {
 
     await user.click(screen.getByRole('button', { name: /create event/i }))
 
-    const createCall = fetchMock.mock.calls.find(
-      ([input, init]) =>
-        input.toString().endsWith('/events') && init?.method === 'POST'
+    const initiateCall = fetchMock.mock.calls.find(([input, init]) =>
+      input.toString().endsWith('/events/upload/initiate') && init?.method === 'POST'
     )
-
-    expect(createCall).toBeDefined()
-    const [, createInit] = createCall ?? []
-    const createBody = JSON.parse((createInit?.body ?? '{}') as string)
-
-    expect(createBody).toMatchObject({
+    expect(initiateCall).toBeDefined()
+    const [, initiateInit] = initiateCall ?? []
+    const initiateBody = JSON.parse((initiateInit?.body ?? '{}') as string)
+    expect(initiateBody).toMatchObject({
+      event_id: 'clip-1',
+      session_id: 'sess_1',
+      device_id: 'device-1',
+      trigger_type: 'motion',
       duration_seconds: 2,
-      clip_size_bytes: 4,
       clip_mime: 'video/webm',
-      clip_uri: 'idb://clips/clip-1',
+      clip_size_bytes: 4,
     })
 
     expect(await screen.findByText('1 captured')).toBeInTheDocument()
     const list = screen.getByRole('list')
-    expect(within(list).getByText('evt_1')).toBeInTheDocument()
+    expect(within(list).getByText('clip-1')).toBeInTheDocument()
 
     vi.restoreAllMocks()
   })
