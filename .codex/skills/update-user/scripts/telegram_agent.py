@@ -154,8 +154,35 @@ def extract_session_id(path: Path) -> str | None:
     return None
 
 
+def extract_response_text(path: Path) -> str | None:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            response = None
+            for line in handle:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get("type") != "item.completed":
+                    continue
+                item = record.get("item", {})
+                if item.get("type") != "agent_message":
+                    continue
+                text = item.get("text")
+                if text:
+                    response = str(text)
+            return response
+    except FileNotFoundError:
+        return None
+
+
 def run_codex_command(
-    cmd: list[str], prompt: str, out_file: Path, log_file: Path, events_file: Path
+    cmd: list[str],
+    prompt: str,
+    out_file: Path,
+    log_file: Path,
+    events_file: Path,
+    cwd: Path,
 ) -> tuple[bool, str, str | None]:
     out_file.parent.mkdir(parents=True, exist_ok=True)
     log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -177,15 +204,20 @@ def run_codex_command(
             text=True,
             stdout=events,
             stderr=log,
+            cwd=str(cwd),
             check=False,
         )
         log.write(f"[exit] {proc.returncode}\n")
         log.write(f"[events] {events_file}\n")
 
+    response = None
     if out_file.exists():
-        response = out_file.read_text(encoding="utf-8").strip()
+        response = out_file.read_text(encoding="utf-8").strip() or None
+    if not response:
+        response = extract_response_text(events_file)
+    if response:
         session_id = extract_session_id(events_file)
-        ok = proc.returncode == 0 and bool(response)
+        ok = proc.returncode == 0
         return ok, response, session_id
 
     return (
@@ -215,21 +247,13 @@ def run_codex(
             "codex",
             "exec",
             "resume",
-            "-C",
-            str(repo_root),
             "--skip-git-repo-check",
-            "-s",
-            "danger-full-access",
-            "--color",
-            "never",
-            "--output-last-message",
-            str(out_file),
             "--json",
             session_id,
             "-",
         ]
         ok, response, _ = run_codex_command(
-            resume_cmd, prompt, out_file, log_file, events_file
+            resume_cmd, prompt, out_file, log_file, events_file, repo_root
         )
         if ok:
             return response
@@ -244,8 +268,6 @@ def run_codex(
     exec_cmd = [
         "codex",
         "exec",
-        "-C",
-        str(repo_root),
         "--skip-git-repo-check",
         "-s",
         "danger-full-access",
@@ -257,7 +279,7 @@ def run_codex(
         "-",
     ]
     ok, response, new_session_id = run_codex_command(
-        exec_cmd, prompt, out_file, log_file, events_file
+        exec_cmd, prompt, out_file, log_file, events_file, repo_root
     )
     if new_session_id:
         write_session_id(session_file, new_session_id)
