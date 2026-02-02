@@ -1,6 +1,6 @@
 import { spawn } from 'child_process'
 import { once } from 'events'
-import { access } from 'fs/promises'
+import { access, rm } from 'fs/promises'
 import net from 'net'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -57,6 +57,8 @@ export const startServers = async () => {
 
   const uvicornPath = path.join(backendDir, '.venv', 'bin', 'uvicorn')
   await access(uvicornPath)
+  const dbPath = path.join(backendDir, 'integration.db')
+  await rm(dbPath, { force: true })
 
   const backendProcess = spawn(
     uvicornPath,
@@ -94,6 +96,7 @@ export const startServers = async () => {
       once(backendProcess, 'exit').catch(() => undefined),
       once(frontendProcess, 'exit').catch(() => undefined),
     ])
+    await rm(dbPath, { force: true })
   }
 
   try {

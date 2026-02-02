@@ -38,7 +38,7 @@ test('creates an event and shows summary after worker update', async ({
 
   const sessionId = await pollFor(async () => {
     const response = await request.get(
-      'http://localhost:8000/sessions?device_id=device-1'
+      'http://localhost:8000/sessions'
     )
     const sessions = await response.json()
     return sessions[0]?.session_id as string | undefined
@@ -58,4 +58,36 @@ test('creates an event and shows summary after worker update', async ({
 
   await expect(page.getByText('Motion detected')).toBeVisible()
   await expect(page.getByText('done')).toBeVisible()
+})
+
+test('uploads a clip and marks the event as uploaded', async ({
+  page,
+  request,
+}) => {
+  await page.goto('/')
+
+  await page.getByRole('button', { name: 'Start monitoring' }).click()
+  await expect(page.getByText('Active')).toBeVisible()
+
+  const sessionId = await pollFor(async () => {
+    const response = await request.get('http://localhost:8000/sessions')
+    const sessions = await response.json()
+    const latest = sessions.at(-1)
+    return latest?.session_id as string | undefined
+  })
+
+  await page.getByRole('button', { name: 'Create event' }).click()
+  await page.getByRole('button', { name: 'Upload stored clips' }).click()
+
+  const uploadedEvent = await pollFor(async () => {
+    const response = await request.get(
+      `http://localhost:8000/events?session_id=${sessionId}`
+    )
+    const events = await response.json()
+    return events.find(
+      (event: { clip_uploaded_at?: string | null }) => event.clip_uploaded_at
+    )
+  }, 10_000)
+
+  expect(uploadedEvent?.clip_etag).toBeTruthy()
 })

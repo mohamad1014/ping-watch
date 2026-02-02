@@ -34,6 +34,9 @@ def test_live_server_session_flow():
     env = os.environ.copy()
     env["PYTHONPATH"] = os.path.dirname(__file__) + "/.."
     env["DATABASE_URL"] = "sqlite:///./test-live.db"
+    db_path = os.path.join(os.path.dirname(__file__), "..", "test-live.db")
+    if os.path.exists(db_path):
+        os.remove(db_path)
 
     process = subprocess.Popen(
         [
@@ -91,3 +94,5 @@ def test_live_server_session_flow():
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
+        if os.path.exists(db_path):
+            os.remove(db_path)
