@@ -53,6 +53,26 @@ def write_offset(path: Path, value: int) -> None:
     path.write_text(str(value), encoding="utf-8")
 
 
+def read_session_id(path: Path) -> str | None:
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+        return value or None
+    except FileNotFoundError:
+        return None
+
+
+def write_session_id(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(value, encoding="utf-8")
+
+
+def remove_session_id(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+
+
 def send_message(base: str, token: str, chat_id: str, text: str) -> None:
     url = build_api_url(base, token, "sendMessage")
     payload = {"chat_id": chat_id, "text": text}
@@ -110,11 +130,101 @@ def git_checkpoint(repo_root: Path, label: str) -> None:
         return
 
 
-def run_codex(prompt: str, repo_root: Path, out_file: Path, log_file: Path) -> str:
+def extract_session_id(path: Path) -> str | None:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if record.get("type") == "session_meta":
+                    payload = record.get("payload", {})
+                    session_id = payload.get("id")
+                    if session_id:
+                        return str(session_id)
+    except FileNotFoundError:
+        return None
+    return None
+
+
+def run_codex_command(
+    cmd: list[str], prompt: str, out_file: Path, log_file: Path, events_file: Path
+) -> tuple[bool, str, str | None]:
     out_file.parent.mkdir(parents=True, exist_ok=True)
     log_file.parent.mkdir(parents=True, exist_ok=True)
+    events_file.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = [
+    for path in (out_file, events_file):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+    with log_file.open("a", encoding="utf-8") as log, events_file.open(
+        "a", encoding="utf-8"
+    ) as events:
+        log.write(f"\n[{utc_now()}] {' '.join(cmd)}\n")
+        proc = subprocess.run(
+            cmd,
+            input=prompt,
+            text=True,
+            stdout=events,
+            stderr=log,
+            check=False,
+        )
+        log.write(f"[exit] {proc.returncode}\n")
+        log.write(f"[events] {events_file}\n")
+
+    if out_file.exists():
+        response = out_file.read_text(encoding="utf-8").strip()
+        session_id = extract_session_id(events_file)
+        ok = proc.returncode == 0 and bool(response)
+        return ok, response, session_id
+
+    return (
+        False,
+        f"Codex finished with exit code {proc.returncode}, but no output was captured.",
+        extract_session_id(events_file),
+    )
+
+
+def run_codex(
+    prompt: str,
+    repo_root: Path,
+    out_file: Path,
+    log_file: Path,
+    session_file: Path,
+) -> str:
+    session_id = read_session_id(session_file)
+    events_file = Path(f"{log_file}.events.jsonl")
+
+    if session_id:
+        resume_cmd = [
+            "codex",
+            "exec",
+            "resume",
+            "-C",
+            str(repo_root),
+            "--skip-git-repo-check",
+            "-s",
+            "danger-full-access",
+            "--color",
+            "never",
+            "--output-last-message",
+            str(out_file),
+            "--json",
+            session_id,
+            "-",
+        ]
+        ok, response, _ = run_codex_command(
+            resume_cmd, prompt, out_file, log_file, events_file
+        )
+        if ok:
+            return response
+        remove_session_id(session_file)
+
+    exec_cmd = [
         "codex",
         "exec",
         "-C",
@@ -126,25 +236,20 @@ def run_codex(prompt: str, repo_root: Path, out_file: Path, log_file: Path) -> s
         "never",
         "--output-last-message",
         str(out_file),
+        "--json",
         "-",
     ]
+    ok, response, new_session_id = run_codex_command(
+        exec_cmd, prompt, out_file, log_file, events_file
+    )
+    if new_session_id:
+        write_session_id(session_file, new_session_id)
+    else:
+        remove_session_id(session_file)
 
-    with log_file.open("a", encoding="utf-8") as log:
-        log.write(f"\n[{utc_now()}] codex exec\n")
-        proc = subprocess.run(
-            cmd,
-            input=prompt,
-            text=True,
-            stdout=log,
-            stderr=log,
-            check=False,
-        )
-        log.write(f"[exit] {proc.returncode}\n")
-
-    if out_file.exists():
-        return out_file.read_text(encoding="utf-8").strip()
-
-    return f"Codex finished with exit code {proc.returncode}, but no output was captured."
+    if ok:
+        return response
+    return response
 
 
 def main() -> int:
@@ -152,6 +257,7 @@ def main() -> int:
     parser.add_argument("--env", help="Path to .env file (default: assets/.env).")
     parser.add_argument("--history", help="Path to chat history JSONL file.")
     parser.add_argument("--offset", help="Path to offset file.")
+    parser.add_argument("--session-file", help="Path to Codex session id file.")
     parser.add_argument("--timeout", type=int, default=30, help="Long-poll timeout seconds.")
     parser.add_argument("--sleep", type=int, default=2, help="Sleep between polls on error.")
     parser.add_argument("--ack", default="Request received. Working on it.")
@@ -175,6 +281,11 @@ def main() -> int:
 
     history = Path(args.history) if args.history else script_dir.parent / "assets" / "chat_history.jsonl"
     offset_file = Path(args.offset) if args.offset else script_dir.parent / "assets" / "telegram.offset"
+    session_file = (
+        Path(args.session_file)
+        if args.session_file
+        else script_dir.parent / "assets" / "telegram.session"
+    )
     codex_out = Path(args.codex_out) if args.codex_out else Path("/tmp/telegram-update-user.codex.out")
     codex_log = Path(args.codex_log) if args.codex_log else Path("/tmp/telegram-update-user.codex.log")
 
@@ -223,7 +334,7 @@ def main() -> int:
                 label = f"checkpoint: telegram {update_id} {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 git_checkpoint(repo_root, label)
 
-                response = run_codex(text, repo_root, codex_out, codex_log)
+                response = run_codex(text, repo_root, codex_out, codex_log, session_file)
 
                 append_history(
                     history,
