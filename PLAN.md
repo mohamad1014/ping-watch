@@ -57,7 +57,7 @@ Two tiers:
 
 - **Phase 0 (Project skeleton):** complete.
 - **Phase 1 (Local capture + trigger):** complete (MVP‑1 done).
-- **Phase 2 (Upload + event sync):** partial (session/event APIs + UI polling); upload flow not started.
+- **Phase 2 (Upload + event sync):** mostly complete (upload initiate/finalize + retries/offline queue + UI polling); auth still missing.
 - **Phase 3 (Inference pipeline):** partial stub (summary endpoints + worker posting); no queue/VLM.
 - **Phase 4 (Notifications + monitoring):** not started.
 - **Phase 5 (Refinement + cost control):** not started.
