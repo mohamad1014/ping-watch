@@ -11,3 +11,4 @@ Run:
 
 Notes:
 - Playwright may require system dependencies. If you see missing deps, run `sudo npx playwright install-deps`.
+- Playwright starts the backend with a temp SQLite database; no manual DB setup required.

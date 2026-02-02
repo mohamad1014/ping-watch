@@ -115,6 +115,7 @@ Test:
 - `./scripts/test-integration` (runs backend live-server test + Playwright integration test)
 
 Note: backend tests default to Postgres. Run `./scripts/dev-up` first, or set `DATABASE_URL=sqlite:///./test.db` to use SQLite locally.
+Note: E2E/Playwright runs use a temp SQLite database for the backend; if you override `DATABASE_URL`, ensure it points to a writable, disposable path.
 
 ## Environment
 
@@ -130,6 +131,8 @@ Note: backend tests default to Postgres. Run `./scripts/dev-up` first, or set `D
 ## Upload Pipeline (Azurite)
 
 The “Upload stored clips” button uploads pending clips from IndexedDB to Azurite via SAS URLs issued by the backend.
+
+If `AZURITE_BLOB_ENDPOINT` / `AZURITE_ACCOUNT_NAME` / `AZURITE_ACCOUNT_KEY` are not set, the backend falls back to a local upload URL and writes clips under `backend/.local_uploads` (override with `LOCAL_UPLOAD_DIR`).
 
 1) Start deps: `./scripts/dev-up` (starts Azurite on `:10000`).
 2) Run app: `./scripts/dev`.
