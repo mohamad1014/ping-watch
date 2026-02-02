@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -200,6 +201,11 @@ def run_codex(
     events_file = Path(f"{log_file}.events.jsonl")
 
     if session_id:
+        print(
+            f"[{utc_now()}] codex resume session={session_id}",
+            file=sys.stderr,
+            flush=True,
+        )
         resume_cmd = [
             "codex",
             "exec",
@@ -222,8 +228,14 @@ def run_codex(
         )
         if ok:
             return response
+        print(
+            f"[{utc_now()}] codex resume failed; starting new session",
+            file=sys.stderr,
+            flush=True,
+        )
         remove_session_id(session_file)
 
+    print(f"[{utc_now()}] codex exec new session", file=sys.stderr, flush=True)
     exec_cmd = [
         "codex",
         "exec",
@@ -244,6 +256,11 @@ def run_codex(
     )
     if new_session_id:
         write_session_id(session_file, new_session_id)
+        print(
+            f"[{utc_now()}] codex session saved id={new_session_id}",
+            file=sys.stderr,
+            flush=True,
+        )
     else:
         remove_session_id(session_file)
 
@@ -317,6 +334,11 @@ def main() -> int:
                 if str(msg_chat_id) != str(chat_id):
                     write_offset(offset_file, max(offset, update_id))
                     continue
+                print(
+                    f"[{utc_now()}] message update_id={update_id} len={len(text)}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
                 append_history(
                     history,
@@ -329,6 +351,7 @@ def main() -> int:
                     },
                 )
 
+                print(f"[{utc_now()}] telegram ack", file=sys.stderr, flush=True)
                 send_message(base, token, chat_id, args.ack)
 
                 label = f"checkpoint: telegram {update_id} {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -348,11 +371,26 @@ def main() -> int:
                 )
 
                 for part in split_message(response, args.max_send):
+                    print(
+                        f"[{utc_now()}] telegram send len={len(part)}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                     send_message(base, token, chat_id, part)
 
                 write_offset(offset_file, max(offset, update_id))
+                print(
+                    f"[{utc_now()}] offset updated={max(offset, update_id)}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
         except Exception:
+            print(
+                f"[{utc_now()}] loop error; sleeping {args.sleep}s",
+                file=sys.stderr,
+                flush=True,
+            )
             time.sleep(args.sleep)
 
     return 0
