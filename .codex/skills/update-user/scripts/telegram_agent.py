@@ -139,7 +139,12 @@ def extract_session_id(path: Path) -> str | None:
                     record = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if record.get("type") == "session_meta":
+                record_type = record.get("type")
+                if record_type == "thread.started":
+                    thread_id = record.get("thread_id")
+                    if thread_id:
+                        return str(thread_id)
+                if record_type == "session_meta":
                     payload = record.get("payload", {})
                     session_id = payload.get("id")
                     if session_id:
