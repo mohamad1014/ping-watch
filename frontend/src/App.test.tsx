@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { assembleClip } from './clipAssembler'
+import * as clipUpload from './clipUpload'
 import { getClip, listClips, saveClip } from './clipStore'
 
 vi.mock('./clipAssembler', () => ({
@@ -516,6 +517,36 @@ describe('App', () => {
     expect(
       await screen.findByRole('meter', { name: /audio level/i })
     ).toBeInTheDocument()
+  })
+
+  it('retries pending uploads on an interval while active', async () => {
+    ;(globalThis as { __PING_WATCH_UPLOAD_INTERVAL__?: number }).__PING_WATCH_UPLOAD_INTERVAL__ = 20
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+
+    const uploadSpy = vi
+      .spyOn(clipUpload, 'uploadPendingClips')
+      .mockResolvedValue(0)
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    await user.click(
+      screen.getByRole('button', { name: /start monitoring/i })
+    )
+
+    await screen.findByText('Active')
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(uploadSpy.mock.calls.length).toBeGreaterThanOrEqual(2)
+
+    uploadSpy.mockRestore()
+    ;(globalThis as { __PING_WATCH_UPLOAD_INTERVAL__?: number }).__PING_WATCH_UPLOAD_INTERVAL__ = undefined
   })
 
   it('polls and renders events when active', async () => {

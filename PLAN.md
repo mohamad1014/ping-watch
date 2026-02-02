@@ -15,7 +15,7 @@ Two tiers:
 
 ---
 
-## Current status (2026-01-24)
+## Current status (2026-02-02)
 
 ### What is done
 
@@ -30,7 +30,8 @@ Two tiers:
 - Basic motion trigger (frame differencing) that fires clip creation.
 - Motion controls UI (threshold/cooldown/ROI inset sliders).
 - Clip timeline UI with preview playback from IndexedDB.
-- Upload stub that pushes stored clips to the API.
+- Upload pipeline that initiates/finalizes clips with retries + offline queue.
+- Background upload retry loop while a session is active.
 - Backend API:
   - Sessions: start/stop/list.
   - Events: create/list.
@@ -46,8 +47,7 @@ Two tiers:
 
 ### What is not done yet
 
-- Upload pipeline (SAS URLs, blob storage, retries, offline queue).
-- Auth, device registration, credits, and tier limits.
+- Auth, credits, and tier limits.
 - Queueing via Service Bus, GPU inference pipeline, and model integration.
 - Notifications (Telegram) and WebSocket monitoring.
 - Cost controls beyond basic guardrails.
@@ -57,7 +57,7 @@ Two tiers:
 
 - **Phase 0 (Project skeleton):** complete.
 - **Phase 1 (Local capture + trigger):** complete (MVP‑1 done).
-- **Phase 2 (Upload + event sync):** mostly complete (upload initiate/finalize + retries/offline queue + UI polling); auth still missing.
+- **Phase 2 (Upload + event sync):** complete for upload/event sync (upload initiate/finalize + retries/offline queue + UI polling + upload retry loop); auth deferred.
 - **Phase 3 (Inference pipeline):** partial stub (summary endpoints + worker posting); no queue/VLM.
 - **Phase 4 (Notifications + monitoring):** not started.
 - **Phase 5 (Refinement + cost control):** not started.

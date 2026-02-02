@@ -38,6 +38,17 @@ const getPollIntervalMs = () => {
   return envValue ? Number(envValue) : 5000
 }
 
+const getUploadIntervalMs = () => {
+  const override = (globalThis as { __PING_WATCH_UPLOAD_INTERVAL__?: number })
+    .__PING_WATCH_UPLOAD_INTERVAL__
+  if (typeof override === 'number') {
+    return override
+  }
+
+  const envValue = import.meta.env.VITE_UPLOAD_INTERVAL_MS
+  return envValue ? Number(envValue) : 10_000
+}
+
 const getPreMs = () => {
   const override = (globalThis as { __PING_WATCH_PRE_MS__?: number })
     .__PING_WATCH_PRE_MS__
@@ -156,6 +167,7 @@ function App() {
     new ClipRingBuffer({ windowMs: getPreMs() + getPostMs() + 2000 })
   )
   const clipUrlRef = useRef<string | null>(null)
+  const uploadInFlightRef = useRef(false)
 
   const lastEvent = useMemo(() => events[events.length - 1], [events])
   const clipStats = useMemo(() => {
@@ -540,6 +552,38 @@ function App() {
     return () => {
       cancelled = true
       clearInterval(interval)
+    }
+  }, [sessionId, sessionStatus])
+
+  useEffect(() => {
+    if (sessionStatus !== 'active' || !sessionId) {
+      return
+    }
+
+    let cancelled = false
+
+    const tick = async () => {
+      if (cancelled || uploadInFlightRef.current) {
+        return
+      }
+
+      uploadInFlightRef.current = true
+      try {
+        await uploadPendingClips({ sessionId })
+        await refreshClips()
+      } catch (err) {
+        console.error(err)
+      } finally {
+        uploadInFlightRef.current = false
+      }
+    }
+
+    void tick()
+    const interval = window.setInterval(tick, getUploadIntervalMs())
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
     }
   }, [sessionId, sessionStatus])
 

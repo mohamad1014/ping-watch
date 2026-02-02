@@ -59,7 +59,7 @@ Free tier has monthly allowance; paid tier raises limits and retention.
 
 ## Status
 
-Scaffolding started: repo layout, local infra compose, and decision log.
+Phase 2 complete: upload + event sync with retries/offline queue and background retry loop. Auth/credits are still pending.
 
 ## Repo Layout (current)
 
@@ -121,6 +121,7 @@ Note: E2E/Playwright runs use a temp SQLite database for the backend; if you ove
 
 - `VITE_API_URL` — backend base URL for the frontend (default `http://localhost:8000`).
 - `VITE_POLL_INTERVAL_MS` — polling interval for event refresh (default 5000).
+- `VITE_UPLOAD_INTERVAL_MS` — polling interval for retrying pending uploads (default 10000).
 - `VITE_DISABLE_MEDIA` — set to `true` to skip `getUserMedia`/`MediaRecorder` capture (useful for tests/E2E).
 - `DATABASE_URL` — backend DB URL (default Postgres in local dev).
 - `AZURITE_BLOB_ENDPOINT` / `AZURITE_ACCOUNT_NAME` / `AZURITE_ACCOUNT_KEY` — Azurite config for issuing SAS upload URLs.
@@ -131,6 +132,7 @@ Note: E2E/Playwright runs use a temp SQLite database for the backend; if you ove
 ## Upload Pipeline (Azurite)
 
 The “Upload stored clips” button uploads pending clips from IndexedDB to Azurite via SAS URLs issued by the backend.
+While a session is active, the frontend also retries pending uploads on an interval.
 
 If `AZURITE_BLOB_ENDPOINT` / `AZURITE_ACCOUNT_NAME` / `AZURITE_ACCOUNT_KEY` are not set, the backend falls back to a local upload URL and writes clips under `backend/.local_uploads` (override with `LOCAL_UPLOAD_DIR`).
 
