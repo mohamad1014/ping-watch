@@ -59,6 +59,7 @@ tmp/
 .tmp/
 *.sqlite
 *.db
+.local_uploads/
 
 # Telegram Bot
 .codex/skills/update-user/assets/*
