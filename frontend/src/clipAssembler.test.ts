@@ -27,8 +27,28 @@ describe('assembleClip', () => {
     expect(clip).not.toBeNull()
     expect(clip?.startMs).toBe(1000)
     expect(clip?.endMs).toBe(4000)
-    expect(clip?.durationSeconds).toBeCloseTo(3)
+    expect(clip?.durationSeconds).toBeCloseTo(4)
     expect(clip?.sizeBytes).toBe(4)
     expect(clip?.mimeType).toBe('video/webm')
+  })
+
+  it('uses the available chunk cadence for duration', () => {
+    const chunks = [
+      makeChunk(0, 'a'),
+      makeChunk(1000, 'b'),
+      makeChunk(2000, 'c'),
+      makeChunk(3000, 'd'),
+    ]
+
+    const clip = assembleClip({
+      chunks,
+      triggerMs: 3500,
+      preMs: 2000,
+      postMs: 2000,
+      fallbackMime: 'video/webm',
+    })
+
+    expect(clip).not.toBeNull()
+    expect(clip?.durationSeconds).toBeCloseTo(2)
   })
 })

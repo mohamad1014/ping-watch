@@ -252,6 +252,11 @@ function App() {
         fallbackMime: recorderRef.current?.mimeType || 'video/webm',
       })
 
+      if (!assembled) {
+        setError('Unable to assemble clip')
+        return
+      }
+
       let durationSeconds = assembled?.durationSeconds ?? 0
       let clipMime = assembled?.mimeType ?? 'video/webm'
       let clipSizeBytes = assembled?.sizeBytes ?? 0

@@ -5,6 +5,7 @@ import App from './App'
 import { assembleClip } from './clipAssembler'
 import * as clipUpload from './clipUpload'
 import { getClip, listClips, saveClip } from './clipStore'
+import { startMotionTrigger } from './motion'
 
 vi.mock('./clipAssembler', () => ({
   assembleClip: vi.fn(),
@@ -18,10 +19,19 @@ vi.mock('./clipStore', () => ({
   scheduleClipRetry: vi.fn(),
 }))
 
+vi.mock('./motion', async () => {
+  const actual = await vi.importActual<typeof import('./motion')>('./motion')
+  return {
+    ...actual,
+    startMotionTrigger: vi.fn(),
+  }
+})
+
 const mockedAssembleClip = vi.mocked(assembleClip)
 const mockedSaveClip = vi.mocked(saveClip)
 const mockedListClips = vi.mocked(listClips)
 const mockedGetClip = vi.mocked(getClip)
+const mockedStartMotionTrigger = vi.mocked(startMotionTrigger)
 
 const buildResponse = (payload: unknown) =>
   Promise.resolve({
@@ -105,6 +115,10 @@ describe('App', () => {
   beforeEach(() => {
     runtimeFlags.__PING_WATCH_DISABLE_MEDIA__ = true
     runtimeFlags.__PING_WATCH_POST_MS__ = 0
+    mockedStartMotionTrigger.mockImplementation(() => ({
+      stop: vi.fn(),
+    }))
+    mockedSaveClip.mockClear()
     mockedListClips.mockResolvedValue([])
     localStorage.clear()
   })
@@ -344,6 +358,84 @@ describe('App', () => {
       'src',
       'blob:clip-1'
     )
+
+    vi.restoreAllMocks()
+  })
+
+  it('skips saving when no clip data is assembled', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    const fakeTrack = { stop: vi.fn() }
+    const fakeStream = {
+      getTracks: () => [fakeTrack],
+      getAudioTracks: () => [],
+    } as unknown as MediaStream
+    const mediaDevices = {
+      getUserMedia: vi.fn().mockResolvedValue(fakeStream),
+    }
+    const mockContext = {
+      drawImage: vi.fn(),
+      getImageData: vi.fn(() => ({
+        data: new Uint8ClampedArray(160 * 90 * 4),
+      })),
+    }
+
+    runtimeFlags.__PING_WATCH_DISABLE_MEDIA__ = false
+    mockedAssembleClip.mockReturnValue(null)
+    mockedStartMotionTrigger.mockImplementation(({ onTrigger }) => {
+      onTrigger()
+      return { stop: vi.fn() }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      mediaDevices,
+    })
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
+      mockContext as unknown as CanvasRenderingContext2D
+    )
+
+    class MockMediaRecorder {
+      static isTypeSupported() {
+        return true
+      }
+
+      state = 'inactive'
+      mimeType = 'video/webm'
+      private listeners: Record<string, ((event: { data: Blob }) => void)[]> = {}
+
+      addEventListener(type: string, listener: (event: { data: Blob }) => void) {
+        this.listeners[type] ??= []
+        this.listeners[type].push(listener)
+      }
+
+      start() {
+        this.state = 'recording'
+      }
+
+      stop() {
+        this.state = 'inactive'
+      }
+    }
+
+    vi.stubGlobal('MediaRecorder', MockMediaRecorder as unknown as typeof MediaRecorder)
+
+    render(<App />)
+
+    await user.click(
+      screen.getByRole('button', { name: /start monitoring/i })
+    )
+
+    expect(
+      await screen.findByText('Unable to assemble clip')
+    ).toBeInTheDocument()
+    expect(mockedSaveClip).not.toHaveBeenCalled()
 
     vi.restoreAllMocks()
   })
