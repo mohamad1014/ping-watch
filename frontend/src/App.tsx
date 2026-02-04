@@ -160,6 +160,8 @@ function App() {
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus>('idle')
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const sessionIdRef = useRef<string | null>(null)
+  const deviceIdRef = useRef<string | null>(null)
   const motionStopRef = useRef<(() => void) | null>(null)
   const audioStopRef = useRef<(() => void) | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -193,6 +195,8 @@ function App() {
       const session = await startSession(resolvedDeviceId)
       setDeviceId(session.device_id)
       setSessionId(session.session_id)
+      sessionIdRef.current = session.session_id
+      deviceIdRef.current = session.device_id
       setSessionStatus('active')
 
       const nextEvents = await listEvents(session.session_id)
@@ -218,6 +222,7 @@ function App() {
     try {
       await stopSession(sessionId)
       setSessionStatus('stopped')
+      sessionIdRef.current = null
       stopCapture()
     } catch (err) {
       console.error(err)
@@ -228,7 +233,9 @@ function App() {
   }
 
   const handleCreateEvent = async (triggerType: 'motion' | 'audio' = 'motion') => {
-    if (!sessionId || !deviceId) {
+    const resolvedSessionId = sessionIdRef.current ?? sessionId
+    const resolvedDeviceId = deviceIdRef.current ?? deviceId
+    if (!resolvedSessionId || !resolvedDeviceId) {
       setError('Start a session before creating events')
       return
     }
@@ -244,12 +251,14 @@ function App() {
       }
 
       const bufferChunks = bufferRef.current.getChunks()
+      const initSegment = bufferRef.current.getInitSegment()
       const assembled = assembleClip({
         chunks: bufferChunks,
         triggerMs,
         preMs: getPreMs(),
         postMs,
         fallbackMime: recorderRef.current?.mimeType || 'video/webm',
+        initSegment,
       })
 
       if (!assembled) {
@@ -271,8 +280,8 @@ function App() {
       }
 
       await saveClip({
-        sessionId,
-        deviceId,
+        sessionId: resolvedSessionId,
+        deviceId: resolvedDeviceId,
         triggerType,
         blob: clipBlob,
         mimeType: clipMime,
@@ -281,8 +290,8 @@ function App() {
       })
 
       await refreshClips()
-      await uploadPendingClips({ sessionId })
-      const nextEvents = await listEvents(sessionId)
+      await uploadPendingClips({ sessionId: resolvedSessionId })
+      const nextEvents = await listEvents(resolvedSessionId)
       setEvents(nextEvents)
     } catch (err) {
       console.error(err)
@@ -360,9 +369,11 @@ function App() {
       )
       recorderRef.current = recorder
 
+      let isFirstChunk = true
       recorder.addEventListener('dataavailable', (event) => {
         if (event.data.size > 0) {
-          bufferRef.current.addChunk(event.data, Date.now())
+          bufferRef.current.addChunk(event.data, Date.now(), isFirstChunk)
+          isFirstChunk = false
         }
       })
 

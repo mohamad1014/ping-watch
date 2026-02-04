@@ -440,6 +440,93 @@ describe('App', () => {
     vi.restoreAllMocks()
   })
 
+  it('creates a clip when motion triggers immediately after starting', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    const fakeTrack = { stop: vi.fn() }
+    const fakeStream = {
+      getTracks: () => [fakeTrack],
+      getAudioTracks: () => [],
+    } as unknown as MediaStream
+    const mediaDevices = {
+      getUserMedia: vi.fn().mockResolvedValue(fakeStream),
+    }
+    const mockContext = {
+      drawImage: vi.fn(),
+      getImageData: vi.fn(() => ({
+        data: new Uint8ClampedArray(160 * 90 * 4),
+      })),
+    }
+
+    runtimeFlags.__PING_WATCH_DISABLE_MEDIA__ = false
+    mockedAssembleClip.mockReturnValue({
+      blob: new Blob(['clip'], { type: 'video/webm' }),
+      mimeType: 'video/webm',
+      sizeBytes: 4,
+      durationSeconds: 1,
+    })
+    mockedStartMotionTrigger.mockImplementation(({ onTrigger }) => {
+      onTrigger()
+      return { stop: vi.fn() }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      mediaDevices,
+    })
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
+      mockContext as unknown as CanvasRenderingContext2D
+    )
+
+    class MockMediaRecorder {
+      static isTypeSupported() {
+        return true
+      }
+
+      state = 'inactive'
+      mimeType = 'video/webm'
+      private listeners: Record<string, ((event: { data: Blob }) => void)[]> = {}
+
+      addEventListener(type: string, listener: (event: { data: Blob }) => void) {
+        this.listeners[type] ??= []
+        this.listeners[type].push(listener)
+      }
+
+      start() {
+        this.state = 'recording'
+      }
+
+      stop() {
+        this.state = 'inactive'
+      }
+    }
+
+    vi.stubGlobal('MediaRecorder', MockMediaRecorder as unknown as typeof MediaRecorder)
+
+    render(<App />)
+
+    await user.click(
+      screen.getByRole('button', { name: /start monitoring/i })
+    )
+
+    expect(await screen.findByText('Active')).toBeInTheDocument()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(mockedSaveClip).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'sess_1',
+      })
+    )
+
+    vi.restoreAllMocks()
+  })
+
   it('shows motion controls', async () => {
     render(<App />)
 
