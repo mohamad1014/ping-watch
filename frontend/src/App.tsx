@@ -49,24 +49,6 @@ const getUploadIntervalMs = () => {
   return envValue ? Number(envValue) : 10_000
 }
 
-const getPreMs = () => {
-  const override = (globalThis as { __PING_WATCH_PRE_MS__?: number })
-    .__PING_WATCH_PRE_MS__
-  if (typeof override === 'number') {
-    return override
-  }
-  return 2000
-}
-
-const getPostMs = () => {
-  const override = (globalThis as { __PING_WATCH_POST_MS__?: number })
-    .__PING_WATCH_POST_MS__
-  if (typeof override === 'number') {
-    return override
-  }
-  return 2000
-}
-
 const MOTION_DIFF_THRESHOLD = 30
 const MOTION_MIN_SCORE = 0.02
 const MOTION_BRIGHTNESS_GATE = 40
@@ -77,6 +59,8 @@ const AUDIO_COOLDOWN_KEY = 'ping-watch:audio-cooldown'
 const MOTION_THRESHOLD_KEY = 'ping-watch:motion-threshold'
 const MOTION_COOLDOWN_KEY = 'ping-watch:motion-cooldown'
 const MOTION_ROI_INSET_KEY = 'ping-watch:motion-roi-inset'
+const CLIP_PRE_SECONDS_KEY = 'ping-watch:clip-pre-seconds'
+const CLIP_POST_SECONDS_KEY = 'ping-watch:clip-post-seconds'
 
 const readStoredBoolean = (key: string, fallback: boolean) => {
   try {
@@ -157,6 +141,22 @@ function App() {
     readStoredNumber(AUDIO_COOLDOWN_KEY, 10)
   )
   const [audioLevel, setAudioLevel] = useState(0)
+  const [clipPreSeconds, setClipPreSeconds] = useState(() => {
+    const override = (globalThis as { __PING_WATCH_PRE_MS__?: number })
+      .__PING_WATCH_PRE_MS__
+    if (typeof override === 'number') {
+      return override / 1000
+    }
+    return readStoredNumber(CLIP_PRE_SECONDS_KEY, 2)
+  })
+  const [clipPostSeconds, setClipPostSeconds] = useState(() => {
+    const override = (globalThis as { __PING_WATCH_POST_MS__?: number })
+      .__PING_WATCH_POST_MS__
+    if (typeof override === 'number') {
+      return override / 1000
+    }
+    return readStoredNumber(CLIP_POST_SECONDS_KEY, 2)
+  })
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus>('idle')
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -165,12 +165,22 @@ function App() {
   const motionStopRef = useRef<(() => void) | null>(null)
   const audioStopRef = useRef<(() => void) | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
-  const bufferRef = useRef(
-    new ClipRingBuffer({ windowMs: getPreMs() + getPostMs() + 2000 })
+  const clipBuffer = useMemo(
+    () =>
+      new ClipRingBuffer({
+        windowMs: clipPreSeconds * 1000 + clipPostSeconds * 1000 + 2000,
+      }),
+    [clipPreSeconds, clipPostSeconds]
   )
+  const bufferRef = useRef(clipBuffer)
   const clipUrlRef = useRef<string | null>(null)
   const uploadInFlightRef = useRef(false)
   const chunkTimerRef = useRef<number | null>(null)
+
+  // Update buffer ref when clip lengths change
+  useEffect(() => {
+    bufferRef.current = clipBuffer
+  }, [clipBuffer])
 
   const lastEvent = useMemo(() => events[events.length - 1], [events])
   const clipStats = useMemo(() => {
@@ -246,7 +256,7 @@ function App() {
 
     try {
       const triggerMs = Date.now()
-      const postMs = getPostMs()
+      const postMs = clipPostSeconds * 1000
       if (postMs > 0) {
         await new Promise((resolve) => window.setTimeout(resolve, postMs))
       }
@@ -255,7 +265,7 @@ function App() {
       const assembled = assembleClip({
         chunks: bufferChunks,
         triggerMs,
-        preMs: getPreMs(),
+        preMs: clipPreSeconds * 1000,
         postMs,
         fallbackMime: recorderRef.current?.mimeType || 'video/webm',
       })
@@ -705,6 +715,8 @@ function App() {
       localStorage.setItem(AUDIO_ENABLED_KEY, String(audioEnabled))
       localStorage.setItem(AUDIO_THRESHOLD_KEY, String(audioThreshold))
       localStorage.setItem(AUDIO_COOLDOWN_KEY, String(audioCooldown))
+      localStorage.setItem(CLIP_PRE_SECONDS_KEY, String(clipPreSeconds))
+      localStorage.setItem(CLIP_POST_SECONDS_KEY, String(clipPostSeconds))
     } catch {
       // Ignore persistence failures (private mode or storage disabled).
     }
@@ -715,6 +727,8 @@ function App() {
     audioEnabled,
     audioThreshold,
     audioCooldown,
+    clipPreSeconds,
+    clipPostSeconds,
   ])
 
   const captureLabel = (() => {
@@ -904,6 +918,48 @@ function App() {
                 disabled={!audioEnabled}
               />
               <span className="motion-value">{audioCooldown}s</span>
+            </label>
+          </div>
+        </section>
+
+        <section className="clip-controls" aria-label="Clip length controls">
+          <h2>Clip length</h2>
+          <div className="motion-grid">
+            <label className="motion-field">
+              <span>Before trigger (s)</span>
+              <input
+                type="range"
+                min={1}
+                max={10}
+                step={1}
+                value={clipPreSeconds}
+                aria-label="Clip pre-roll seconds"
+                onChange={(event) =>
+                  setClipPreSeconds(Number(event.target.value))
+                }
+              />
+              <span className="motion-value">{clipPreSeconds}s</span>
+            </label>
+            <label className="motion-field">
+              <span>After trigger (s)</span>
+              <input
+                type="range"
+                min={1}
+                max={10}
+                step={1}
+                value={clipPostSeconds}
+                aria-label="Clip post-roll seconds"
+                onChange={(event) =>
+                  setClipPostSeconds(Number(event.target.value))
+                }
+              />
+              <span className="motion-value">{clipPostSeconds}s</span>
+            </label>
+            <label className="motion-field">
+              <span>Total clip length</span>
+              <span className="motion-value">
+                {clipPreSeconds + clipPostSeconds}s
+              </span>
             </label>
           </div>
         </section>
