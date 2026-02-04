@@ -6,6 +6,7 @@ type AssembleClipOptions = {
   preMs: number
   postMs: number
   fallbackMime: string
+  firstChunkBlob?: Blob | null
 }
 
 export type AssembledClip = {
@@ -23,6 +24,7 @@ export const assembleClip = ({
   preMs,
   postMs,
   fallbackMime,
+  firstChunkBlob,
 }: AssembleClipOptions): AssembledClip | null => {
   if (chunks.length === 0) {
     return null
@@ -36,7 +38,11 @@ export const assembleClip = ({
     return null
   }
 
-  const { blob, sizeBytes, mimeType } = buildClipBlob(selected, fallbackMime)
+  const { blob, sizeBytes, mimeType } = buildClipBlob(
+    selected,
+    fallbackMime,
+    firstChunkBlob || null
+  )
   const estimateChunkMs = (source: ClipChunk[]) => {
     if (source.length < 2) {
       return null

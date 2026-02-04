@@ -309,6 +309,54 @@ button:not(:disabled):hover {
 
 .clip-id {
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.clip-badge {
+  font-size: 0.65rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+.clip-badge.benchmark {
+  background: #10b981;
+  color: #fff;
+}
+
+.clip-triggers {
+  color: #3b82f6;
+  font-weight: 500;
+}
+
+.clip-controls {
+  padding: 1.5rem;
+  border-radius: 18px;
+  background: #fdf7ef;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+}
+
+.clip-controls h2 {
+  margin: 0 0 1rem;
+  font-size: 1.3rem;
+}
+
+.clip-controls h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 1.25rem 0 0.75rem;
+  color: #64748b;
+}
+
+.motion-toggle input[type="checkbox"] {
+  width: 1.25rem;
+  height: 1.25rem;
+  cursor: pointer;
 }
 
 .clip-meta {

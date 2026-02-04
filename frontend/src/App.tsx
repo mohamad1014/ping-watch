@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import {
   type EventResponse,
@@ -6,17 +6,25 @@ import {
   startSession,
   stopSession,
 } from './api'
-import { ClipRingBuffer } from './clipBuffer'
-import { assembleClip } from './clipAssembler'
 import { getClip, listClips, saveClip, type StoredClip } from './clipStore'
 import { uploadPendingClips } from './clipUpload'
 import { ensureDeviceId } from './device'
+import { SequentialRecorder, type ClipCompleteData } from './sequentialRecorder'
 import {
-  applyMotionGates,
-  computeMotionMetricsInRegion,
-  startMotionTrigger,
-} from './motion'
-import { computeAudioRms, startAudioTrigger } from './audio'
+  setBenchmark,
+  compareWithBenchmark,
+  clearBenchmark,
+  createBenchmarkData,
+  type TriggerReason,
+} from './benchmarkManager'
+import {
+  logClipAnalysis,
+  startLogSession,
+  endLogSession,
+  getCurrentSessionCounts,
+} from './clipLogger'
+import { computeMotionScore } from './motion'
+import { computeAudioRms } from './audio'
 
 const statusLabels = {
   idle: 'Idle',
@@ -49,30 +57,14 @@ const getUploadIntervalMs = () => {
   return envValue ? Number(envValue) : 10_000
 }
 
-const MOTION_DIFF_THRESHOLD = 30
-const MOTION_MIN_SCORE = 0.02
-const MOTION_BRIGHTNESS_GATE = 40
-
-const AUDIO_ENABLED_KEY = 'ping-watch:audio-enabled'
-const AUDIO_THRESHOLD_KEY = 'ping-watch:audio-threshold'
-const AUDIO_COOLDOWN_KEY = 'ping-watch:audio-cooldown'
-const MOTION_THRESHOLD_KEY = 'ping-watch:motion-threshold'
-const MOTION_COOLDOWN_KEY = 'ping-watch:motion-cooldown'
-const MOTION_ROI_INSET_KEY = 'ping-watch:motion-roi-inset'
-const CLIP_PRE_SECONDS_KEY = 'ping-watch:clip-pre-seconds'
-const CLIP_POST_SECONDS_KEY = 'ping-watch:clip-post-seconds'
-
-const readStoredBoolean = (key: string, fallback: boolean) => {
-  try {
-    const value = localStorage.getItem(key)
-    if (value === null) {
-      return fallback
-    }
-    return value === 'true'
-  } catch {
-    return fallback
-  }
-}
+// LocalStorage keys for sequential recording settings
+const CLIP_DURATION_KEY = 'ping-watch:clip-duration'
+const MOTION_DELTA_KEY = 'ping-watch:motion-delta'
+const MOTION_ABSOLUTE_KEY = 'ping-watch:motion-absolute'
+const AUDIO_DELTA_ENABLED_KEY = 'ping-watch:audio-delta-enabled'
+const AUDIO_DELTA_KEY = 'ping-watch:audio-delta'
+const AUDIO_ABSOLUTE_ENABLED_KEY = 'ping-watch:audio-absolute-enabled'
+const AUDIO_ABSOLUTE_KEY = 'ping-watch:audio-absolute'
 
 const readStoredNumber = (key: string, fallback: number) => {
   try {
@@ -82,6 +74,18 @@ const readStoredNumber = (key: string, fallback: number) => {
     }
     const parsed = Number(value)
     return Number.isFinite(parsed) ? parsed : fallback
+  } catch {
+    return fallback
+  }
+}
+
+const readStoredBoolean = (key: string, fallback: boolean) => {
+  try {
+    const value = localStorage.getItem(key)
+    if (value === null) {
+      return fallback
+    }
+    return value === 'true'
   } catch {
     return fallback
   }
@@ -111,10 +115,39 @@ function formatConfidence(value: number | null | undefined) {
   return `${Math.round(value * 100)}%`
 }
 
+const generateClipId = () => {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID()
+  }
+  return `clip_${Date.now()}_${Math.random().toString(16).slice(2)}`
+}
+
+const formatTriggers = (triggers: TriggerReason[]) => {
+  return triggers.map((t) => {
+    switch (t) {
+      case 'motionDelta':
+        return 'motion\u0394'
+      case 'motionAbsolute':
+        return 'motion'
+      case 'audioDelta':
+        return 'audio\u0394'
+      case 'audioAbsolute':
+        return 'loud'
+      default:
+        return t
+    }
+  }).join(', ')
+}
+
+// Frame dimensions for motion detection
+const FRAME_WIDTH = 160
+const FRAME_HEIGHT = 90
+const MOTION_DIFF_THRESHOLD = 30
+
 function App() {
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('idle')
   const [sessionId, setSessionId] = useState<string | null>(null)
-  const [deviceId, setDeviceId] = useState<string | null>(null)
+  const [, setDeviceId] = useState<string | null>(null)
   const [events, setEvents] = useState<EventResponse[]>([])
   const [isBusy, setIsBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -122,65 +155,69 @@ function App() {
   const [clips, setClips] = useState<StoredClip[]>([])
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null)
   const [selectedClipUrl, setSelectedClipUrl] = useState<string | null>(null)
-  const [motionThreshold, setMotionThreshold] = useState(() =>
-    readStoredNumber(MOTION_THRESHOLD_KEY, 0.06)
-  )
-  const [motionCooldown, setMotionCooldown] = useState(() =>
-    readStoredNumber(MOTION_COOLDOWN_KEY, 15)
-  )
-  const [roiInsetPercent, setRoiInsetPercent] = useState(() =>
-    readStoredNumber(MOTION_ROI_INSET_KEY, 0)
-  )
-  const [audioEnabled, setAudioEnabled] = useState(() =>
-    readStoredBoolean(AUDIO_ENABLED_KEY, false)
-  )
-  const [audioThreshold, setAudioThreshold] = useState(() =>
-    readStoredNumber(AUDIO_THRESHOLD_KEY, 0.25)
-  )
-  const [audioCooldown, setAudioCooldown] = useState(() =>
-    readStoredNumber(AUDIO_COOLDOWN_KEY, 10)
-  )
-  const [audioLevel, setAudioLevel] = useState(0)
-  const [clipPreSeconds, setClipPreSeconds] = useState(() => {
-    const override = (globalThis as { __PING_WATCH_PRE_MS__?: number })
-      .__PING_WATCH_PRE_MS__
+
+  // Sequential recording settings
+  const [clipDuration, setClipDuration] = useState(() => {
+    const override = (globalThis as { __PING_WATCH_CLIP_DURATION_MS__?: number })
+      .__PING_WATCH_CLIP_DURATION_MS__
     if (typeof override === 'number') {
       return override / 1000
     }
-    return readStoredNumber(CLIP_PRE_SECONDS_KEY, 2)
+    return readStoredNumber(CLIP_DURATION_KEY, 10)
   })
-  const [clipPostSeconds, setClipPostSeconds] = useState(() => {
-    const override = (globalThis as { __PING_WATCH_POST_MS__?: number })
-      .__PING_WATCH_POST_MS__
-    if (typeof override === 'number') {
-      return override / 1000
-    }
-    return readStoredNumber(CLIP_POST_SECONDS_KEY, 2)
-  })
+
+  // Motion thresholds
+  const [motionDeltaThreshold, setMotionDeltaThreshold] = useState(() =>
+    readStoredNumber(MOTION_DELTA_KEY, 0.05)
+  )
+  const [motionAbsoluteThreshold, setMotionAbsoluteThreshold] = useState(() =>
+    readStoredNumber(MOTION_ABSOLUTE_KEY, 0.03)
+  )
+
+  // Audio thresholds (optional)
+  const [audioDeltaEnabled, setAudioDeltaEnabled] = useState(() =>
+    readStoredBoolean(AUDIO_DELTA_ENABLED_KEY, false)
+  )
+  const [audioDeltaThreshold, setAudioDeltaThreshold] = useState(() =>
+    readStoredNumber(AUDIO_DELTA_KEY, 0.1)
+  )
+  const [audioAbsoluteEnabled, setAudioAbsoluteEnabled] = useState(() =>
+    readStoredBoolean(AUDIO_ABSOLUTE_ENABLED_KEY, false)
+  )
+  const [audioAbsoluteThreshold, setAudioAbsoluteThreshold] = useState(() =>
+    readStoredNumber(AUDIO_ABSOLUTE_KEY, 0.15)
+  )
+
+  // Sequential recording state
+  const [currentClipIndex, setCurrentClipIndex] = useState(0)
+  const [benchmarkClipId, setBenchmarkClipId] = useState<string | null>(null)
+  const [sessionCounts, setSessionCounts] = useState({ stored: 0, discarded: 0 })
+
+  // Real-time metrics display
+  const [currentMotionScore, setCurrentMotionScore] = useState(0)
+  const [currentAudioScore, setCurrentAudioScore] = useState(0)
+
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus>('idle')
-  const recorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const sessionIdRef = useRef<string | null>(null)
   const deviceIdRef = useRef<string | null>(null)
-  const motionStopRef = useRef<(() => void) | null>(null)
-  const audioStopRef = useRef<(() => void) | null>(null)
-  const audioContextRef = useRef<AudioContext | null>(null)
-  const clipBuffer = useMemo(
-    () =>
-      new ClipRingBuffer({
-        windowMs: clipPreSeconds * 1000 + clipPostSeconds * 1000 + 2000,
-      }),
-    [clipPreSeconds, clipPostSeconds]
-  )
-  const bufferRef = useRef(clipBuffer)
+  const sequentialRecorderRef = useRef<SequentialRecorder | null>(null)
   const clipUrlRef = useRef<string | null>(null)
   const uploadInFlightRef = useRef(false)
-  const chunkTimerRef = useRef<number | null>(null)
+  const isProcessingClipRef = useRef(false)
 
-  // Update buffer ref when clip lengths change
-  useEffect(() => {
-    bufferRef.current = clipBuffer
-  }, [clipBuffer])
+  // Real-time motion detection refs
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const canvasCtxRef = useRef<CanvasRenderingContext2D | null>(null)
+  const prevFrameRef = useRef<Uint8ClampedArray | null>(null)
+  const motionScoreRef = useRef(0)
+
+  // Real-time audio detection refs
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const audioDataRef = useRef<Float32Array | null>(null)
+  const audioScoreRef = useRef(0)
 
   const lastEvent = useMemo(() => events[events.length - 1], [events])
   const clipStats = useMemo(() => {
@@ -196,6 +233,205 @@ function App() {
     setClips(nextClips)
   }
 
+  // Get current motion score (called by SequentialRecorder)
+  const getMotionScore = useCallback(() => {
+    const video = videoRef.current
+    const ctx = canvasCtxRef.current
+
+    if (!video || !ctx || video.readyState < 2) {
+      return motionScoreRef.current
+    }
+
+    try {
+      ctx.drawImage(video, 0, 0, FRAME_WIDTH, FRAME_HEIGHT)
+      const imageData = ctx.getImageData(0, 0, FRAME_WIDTH, FRAME_HEIGHT)
+      const currFrame = imageData.data
+
+      if (prevFrameRef.current) {
+        const score = computeMotionScore(prevFrameRef.current, currFrame, MOTION_DIFF_THRESHOLD)
+        motionScoreRef.current = score
+        setCurrentMotionScore(score)
+      }
+
+      prevFrameRef.current = new Uint8ClampedArray(currFrame)
+    } catch (err) {
+      console.warn('[App] Motion detection error:', err)
+    }
+
+    return motionScoreRef.current
+  }, [])
+
+  // Get current audio score (called by SequentialRecorder)
+  const getAudioScore = useCallback(() => {
+    const analyser = analyserRef.current
+    const audioData = audioDataRef.current
+
+    if (!analyser || !audioData) {
+      return audioScoreRef.current
+    }
+
+    try {
+      analyser.getFloatTimeDomainData(audioData)
+      const rms = computeAudioRms(audioData)
+      audioScoreRef.current = rms
+      setCurrentAudioScore(rms)
+    } catch (err) {
+      console.warn('[App] Audio detection error:', err)
+    }
+
+    return audioScoreRef.current
+  }, [])
+
+  const handleClipComplete = useCallback(async (data: ClipCompleteData) => {
+    const { blob, clipIndex, startTime, metrics } = data
+    const resolvedSessionId = sessionIdRef.current
+    const resolvedDeviceId = deviceIdRef.current
+
+    if (!resolvedSessionId || !resolvedDeviceId) {
+      console.warn('[App] Clip completed but no active session')
+      return
+    }
+
+    // Prevent concurrent clip processing
+    if (isProcessingClipRef.current) {
+      console.warn('[App] Already processing a clip, skipping')
+      return
+    }
+    isProcessingClipRef.current = true
+
+    try {
+      console.log(`[App] Processing clip #${clipIndex}`, {
+        sizeBytes: blob.size,
+        startTime,
+        metrics,
+      })
+
+      const clipId = generateClipId()
+      const durationSeconds = (Date.now() - startTime) / 1000
+
+      // Update current clip index
+      setCurrentClipIndex(clipIndex)
+
+      if (clipIndex === 0) {
+        // First clip = benchmark
+        const benchmarkData = createBenchmarkData(clipId, metrics)
+        setBenchmark(benchmarkData)
+        setBenchmarkClipId(clipId)
+
+        // Save and upload benchmark clip
+        await saveClip({
+          sessionId: resolvedSessionId,
+          deviceId: resolvedDeviceId,
+          triggerType: 'benchmark',
+          blob,
+          mimeType: blob.type || 'video/webm',
+          sizeBytes: blob.size,
+          durationSeconds,
+          isBenchmark: true,
+          clipIndex,
+          peakMotionScore: metrics.peakMotionScore,
+          avgMotionScore: metrics.avgMotionScore,
+          motionEventCount: metrics.motionEventCount,
+          peakAudioScore: metrics.peakAudioScore,
+          avgAudioScore: metrics.avgAudioScore,
+        })
+
+        logClipAnalysis({
+          clipIndex,
+          clipId,
+          isBenchmark: true,
+          motionScore: metrics.peakMotionScore,
+          audioScore: metrics.peakAudioScore,
+          decision: 'stored',
+          timestamp: Date.now(),
+          durationMs: durationSeconds * 1000,
+          sizeBytes: blob.size,
+        })
+
+        await refreshClips()
+        await uploadPendingClips({ sessionId: resolvedSessionId })
+
+        // Update session counts
+        setSessionCounts(getCurrentSessionCounts())
+
+        const nextEvents = await listEvents(resolvedSessionId)
+        setEvents(nextEvents)
+        return
+      }
+
+      // Compare with benchmark using multi-criteria
+      const comparison = compareWithBenchmark(metrics, {
+        motionDeltaThreshold,
+        motionAbsoluteThreshold,
+        audioDeltaEnabled,
+        audioDeltaThreshold,
+        audioAbsoluteEnabled,
+        audioAbsoluteThreshold,
+      })
+
+      logClipAnalysis({
+        clipIndex,
+        clipId,
+        isBenchmark: false,
+        motionScore: metrics.peakMotionScore,
+        audioScore: metrics.peakAudioScore,
+        motionDelta: comparison.motionDelta,
+        audioDelta: comparison.audioDelta,
+        decision: comparison.shouldStore ? 'stored' : 'discarded',
+        timestamp: Date.now(),
+        durationMs: durationSeconds * 1000,
+        sizeBytes: blob.size,
+      })
+
+      if (comparison.shouldStore) {
+        // Determine trigger type based on what triggered
+        const triggerType = comparison.triggeredBy.includes('motionDelta') ||
+          comparison.triggeredBy.includes('motionAbsolute')
+          ? 'motion'
+          : 'audio'
+
+        await saveClip({
+          sessionId: resolvedSessionId,
+          deviceId: resolvedDeviceId,
+          triggerType,
+          blob,
+          mimeType: blob.type || 'video/webm',
+          sizeBytes: blob.size,
+          durationSeconds,
+          isBenchmark: false,
+          clipIndex,
+          peakMotionScore: metrics.peakMotionScore,
+          avgMotionScore: metrics.avgMotionScore,
+          motionEventCount: metrics.motionEventCount,
+          peakAudioScore: metrics.peakAudioScore,
+          avgAudioScore: metrics.avgAudioScore,
+          motionDelta: comparison.motionDelta,
+          audioDelta: comparison.audioDelta,
+          triggeredBy: comparison.triggeredBy,
+        })
+
+        await refreshClips()
+        await uploadPendingClips({ sessionId: resolvedSessionId })
+
+        // Update benchmark to this clip
+        const benchmarkData = createBenchmarkData(clipId, metrics)
+        setBenchmark(benchmarkData)
+        setBenchmarkClipId(clipId)
+
+        const nextEvents = await listEvents(resolvedSessionId)
+        setEvents(nextEvents)
+      }
+      // else: clip discarded (already logged)
+
+      // Update session counts
+      setSessionCounts(getCurrentSessionCounts())
+    } catch (err) {
+      console.error('[App] Error processing clip:', err)
+    } finally {
+      isProcessingClipRef.current = false
+    }
+  }, [motionDeltaThreshold, motionAbsoluteThreshold, audioDeltaEnabled, audioDeltaThreshold, audioAbsoluteEnabled, audioAbsoluteThreshold])
+
   const handleStart = async () => {
     setIsBusy(true)
     setError(null)
@@ -209,6 +445,15 @@ function App() {
       sessionIdRef.current = session.session_id
       deviceIdRef.current = session.device_id
       setSessionStatus('active')
+
+      // Initialize logging session
+      startLogSession(session.session_id)
+
+      // Reset sequential recording state
+      setCurrentClipIndex(0)
+      setBenchmarkClipId(null)
+      clearBenchmark()
+      setSessionCounts({ stored: 0, discarded: 0 })
 
       const nextEvents = await listEvents(session.session_id)
       setEvents(nextEvents)
@@ -234,77 +479,11 @@ function App() {
       await stopSession(sessionId)
       setSessionStatus('stopped')
       sessionIdRef.current = null
+      endLogSession()
       stopCapture()
     } catch (err) {
       console.error(err)
       setError('Unable to stop session')
-    } finally {
-      setIsBusy(false)
-    }
-  }
-
-  const handleCreateEvent = async (triggerType: 'motion' | 'audio' = 'motion') => {
-    const resolvedSessionId = sessionIdRef.current ?? sessionId
-    const resolvedDeviceId = deviceIdRef.current ?? deviceId
-    if (!resolvedSessionId || !resolvedDeviceId) {
-      setError('Start a session before creating events')
-      return
-    }
-
-    setIsBusy(true)
-    setError(null)
-
-    try {
-      const triggerMs = Date.now()
-      const postMs = clipPostSeconds * 1000
-      if (postMs > 0) {
-        await new Promise((resolve) => window.setTimeout(resolve, postMs))
-      }
-
-      const bufferChunks = bufferRef.current.getChunks()
-      const assembled = assembleClip({
-        chunks: bufferChunks,
-        triggerMs,
-        preMs: clipPreSeconds * 1000,
-        postMs,
-        fallbackMime: recorderRef.current?.mimeType || 'video/webm',
-      })
-
-      if (!assembled) {
-        setError('Unable to assemble clip')
-        return
-      }
-
-      let durationSeconds = assembled?.durationSeconds ?? 0
-      let clipMime = assembled?.mimeType ?? 'video/webm'
-      let clipSizeBytes = assembled?.sizeBytes ?? 0
-
-      const clipBlob =
-        assembled?.blob ??
-        new Blob([`ping-watch:${triggerType}:${Date.now()}`], { type: clipMime })
-
-      if (!assembled?.blob) {
-        clipMime = clipBlob.type || 'video/webm'
-        clipSizeBytes = clipBlob.size
-      }
-
-      await saveClip({
-        sessionId: resolvedSessionId,
-        deviceId: resolvedDeviceId,
-        triggerType,
-        blob: clipBlob,
-        mimeType: clipMime,
-        sizeBytes: clipSizeBytes,
-        durationSeconds,
-      })
-
-      await refreshClips()
-      await uploadPendingClips({ sessionId: resolvedSessionId })
-      const nextEvents = await listEvents(resolvedSessionId)
-      setEvents(nextEvents)
-    } catch (err) {
-      console.error(err)
-      setError('Unable to create event')
     } finally {
       setIsBusy(false)
     }
@@ -344,6 +523,81 @@ function App() {
     }
   }
 
+  const setupMotionDetection = (stream: MediaStream) => {
+    // Create hidden video element for frame capture
+    const video = document.createElement('video')
+    video.srcObject = stream
+    video.muted = true
+    video.playsInline = true
+    video.autoplay = true
+    videoRef.current = video
+
+    // Create canvas for frame extraction
+    const canvas = document.createElement('canvas')
+    canvas.width = FRAME_WIDTH
+    canvas.height = FRAME_HEIGHT
+    canvasRef.current = canvas
+
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    canvasCtxRef.current = ctx
+
+    // Start video playback
+    video.play().catch((err) => {
+      console.warn('[App] Video play failed:', err)
+    })
+
+    console.log('[App] Motion detection setup complete')
+  }
+
+  const setupAudioDetection = (stream: MediaStream) => {
+    try {
+      const AudioContextClass = window.AudioContext ||
+        (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      if (!AudioContextClass) {
+        console.warn('[App] AudioContext not available')
+        return
+      }
+
+      const audioContext = new AudioContextClass()
+      audioContextRef.current = audioContext
+
+      const source = audioContext.createMediaStreamSource(stream)
+      const analyser = audioContext.createAnalyser()
+      analyser.fftSize = 2048
+      source.connect(analyser)
+
+      analyserRef.current = analyser
+      audioDataRef.current = new Float32Array(analyser.fftSize)
+
+      console.log('[App] Audio detection setup complete')
+    } catch (err) {
+      console.warn('[App] Audio detection setup failed:', err)
+    }
+  }
+
+  const cleanupMotionDetection = () => {
+    if (videoRef.current) {
+      videoRef.current.srcObject = null
+      videoRef.current = null
+    }
+    canvasRef.current = null
+    canvasCtxRef.current = null
+    prevFrameRef.current = null
+    motionScoreRef.current = 0
+    setCurrentMotionScore(0)
+  }
+
+  const cleanupAudioDetection = () => {
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {})
+      audioContextRef.current = null
+    }
+    analyserRef.current = null
+    audioDataRef.current = null
+    audioScoreRef.current = 0
+    setCurrentAudioScore(0)
+  }
+
   const startCapture = async () => {
     if (isMediaDisabled()) {
       setCaptureStatus('error')
@@ -364,60 +618,30 @@ function App() {
       streamRef.current = stream
       setCaptureStatus('active')
 
-      const preferredTypes = [
-        'video/webm;codecs=vp9,opus',
-        'video/webm;codecs=vp8,opus',
-        'video/webm',
-      ]
-      const mimeType = preferredTypes.find((type) =>
-        MediaRecorder.isTypeSupported(type)
-      )
-      const startRecorder = () => {
-        if (!streamRef.current) return
+      // Setup real-time motion and audio detection
+      setupMotionDetection(stream)
+      setupAudioDetection(stream)
 
-        const recorder = new MediaRecorder(
-          streamRef.current,
-          mimeType ? { mimeType } : undefined
-        )
-        recorderRef.current = recorder
+      // Create sequential recorder with score getters
+      const recorder = new SequentialRecorder({
+        stream,
+        clipDurationMs: clipDuration * 1000,
+        getMotionScore,
+        getAudioScore,
+        motionEventThreshold: motionAbsoluteThreshold,
+        onClipComplete: handleClipComplete,
+        onError: (err) => {
+          console.error('[App] Sequential recorder error:', err)
+          setError('Recording error: ' + err.message)
+        },
+      })
 
-        const chunkStartTime = Date.now()
-        recorder.addEventListener('stop', () => {
-          // Recorder stopped, will be handled by stop event
-        })
+      sequentialRecorderRef.current = recorder
+      recorder.start()
 
-        recorder.addEventListener('dataavailable', (event) => {
-          if (event.data.size > 0) {
-            bufferRef.current.addChunk(event.data, chunkStartTime)
-          }
-        })
-
-        recorder.start()
-      }
-
-      const restartRecorder = () => {
-        if (
-          recorderRef.current &&
-          recorderRef.current.state === 'recording'
-        ) {
-          recorderRef.current.stop()
-        }
-        // Start new recorder after a brief delay to ensure stop completes
-        setTimeout(() => {
-          if (streamRef.current) {
-            startRecorder()
-          }
-        }, 50)
-      }
-
-      // Start the first recorder
-      startRecorder()
-
-      // Set up timer to restart recorder every second
-      chunkTimerRef.current = window.setInterval(restartRecorder, 1000)
-
-      startMotionMonitoring(stream)
-      startAudioMonitoring(stream)
+      console.log('[App] Sequential recording started', {
+        clipDurationMs: clipDuration * 1000,
+      })
     } catch (err) {
       console.error(err)
       if (err instanceof DOMException && err.name === 'NotAllowedError') {
@@ -430,148 +654,20 @@ function App() {
   }
 
   const stopCapture = () => {
-    motionStopRef.current?.()
-    motionStopRef.current = null
-    stopAudioMonitoring()
-
-    if (chunkTimerRef.current !== null) {
-      clearInterval(chunkTimerRef.current)
-      chunkTimerRef.current = null
+    // Stop sequential recorder
+    if (sequentialRecorderRef.current) {
+      void sequentialRecorderRef.current.stop()
+      sequentialRecorderRef.current = null
     }
 
-    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
-      recorderRef.current.stop()
-    }
-    recorderRef.current = null
+    // Cleanup motion/audio detection
+    cleanupMotionDetection()
+    cleanupAudioDetection()
 
+    // Stop media stream
     streamRef.current?.getTracks().forEach((track) => track.stop())
     streamRef.current = null
-    bufferRef.current.clear()
     setCaptureStatus('idle')
-  }
-
-  const startMotionMonitoring = (stream: MediaStream) => {
-    const video = document.createElement('video')
-    video.srcObject = stream
-    video.muted = true
-    video.playsInline = true
-    void video.play().catch(() => undefined)
-
-    const canvas = document.createElement('canvas')
-    const width = 160
-    const height = 90
-    canvas.width = width
-    canvas.height = height
-    const ctx = canvas.getContext('2d', { willReadFrequently: true })
-    let previous: Uint8ClampedArray | null = null
-
-    if (!ctx) {
-      return
-    }
-
-    const getScore = () => {
-      if (video.readyState < 2) {
-        return 0
-      }
-      ctx.drawImage(video, 0, 0, width, height)
-      const data = ctx.getImageData(0, 0, width, height).data
-      if (!previous) {
-        previous = data
-        return 0
-      }
-      const insetX = Math.floor((roiInsetPercent / 100) * width)
-      const insetY = Math.floor((roiInsetPercent / 100) * height)
-      const metrics = computeMotionMetricsInRegion(
-        previous,
-        data,
-        MOTION_DIFF_THRESHOLD,
-        {
-          x: insetX,
-          y: insetY,
-          width: width - insetX * 2,
-          height: height - insetY * 2,
-          frameWidth: width,
-          frameHeight: height,
-        }
-      )
-      previous = data
-      return applyMotionGates(metrics, {
-        minScore: Math.max(MOTION_MIN_SCORE, motionThreshold),
-        brightnessThreshold: MOTION_BRIGHTNESS_GATE,
-      })
-    }
-
-    const trigger = startMotionTrigger({
-      getScore,
-      intervalMs: 500,
-      threshold: motionThreshold,
-      consecutive: 2,
-      cooldownMs: motionCooldown * 1000,
-      onTrigger: () => {
-        void handleCreateEvent('motion')
-      },
-    })
-    motionStopRef.current = trigger.stop
-  }
-
-  const stopAudioMonitoring = () => {
-    audioStopRef.current?.()
-    audioStopRef.current = null
-    if (audioContextRef.current) {
-      void audioContextRef.current.close()
-      audioContextRef.current = null
-    }
-    setAudioLevel(0)
-  }
-
-  const startAudioMonitoring = (stream: MediaStream) => {
-    if (!audioEnabled) {
-      return
-    }
-
-    if (stream.getAudioTracks().length === 0) {
-      return
-    }
-
-    const AudioContextConstructor =
-      window.AudioContext || (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-
-    if (!AudioContextConstructor) {
-      return
-    }
-
-    stopAudioMonitoring()
-
-    const audioContext = new AudioContextConstructor()
-    audioContextRef.current = audioContext
-    const source = audioContext.createMediaStreamSource(stream)
-    const analyser = audioContext.createAnalyser()
-    analyser.fftSize = 2048
-    source.connect(analyser)
-
-    const buffer = new Float32Array(analyser.fftSize)
-
-    void audioContext.resume()
-
-    const trigger = startAudioTrigger({
-      getScore: () => {
-        analyser.getFloatTimeDomainData(buffer)
-        const score = computeAudioRms(buffer)
-        setAudioLevel(Math.min(1, score))
-        return score
-      },
-      intervalMs: 250,
-      threshold: audioThreshold,
-      consecutive: 2,
-      cooldownMs: audioCooldown * 1000,
-      onTrigger: () => {
-        void handleCreateEvent('audio')
-      },
-    })
-
-    audioStopRef.current = () => {
-      trigger.stop()
-    }
   }
 
   const handleCopyEventId = async (eventId: string) => {
@@ -588,6 +684,7 @@ function App() {
     }
   }
 
+  // Poll for events
   useEffect(() => {
     if (sessionStatus !== 'active' || !sessionId) {
       return
@@ -614,6 +711,7 @@ function App() {
     }
   }, [sessionId, sessionStatus])
 
+  // Upload clips periodically
   useEffect(() => {
     if (sessionStatus !== 'active' || !sessionId) {
       return
@@ -646,6 +744,7 @@ function App() {
     }
   }, [sessionId, sessionStatus])
 
+  // Handle online event
   useEffect(() => {
     if (sessionStatus !== 'active' || !sessionId) {
       return
@@ -663,6 +762,7 @@ function App() {
     }
   }, [sessionId, sessionStatus])
 
+  // Clear copied event ID after timeout
   useEffect(() => {
     if (!copiedEventId) {
       return
@@ -677,6 +777,7 @@ function App() {
     }
   }, [copiedEventId])
 
+  // Initial clip load and cleanup
   useEffect(() => {
     void refreshClips()
     return () => {
@@ -686,50 +787,34 @@ function App() {
     }
   }, [])
 
+  // Update sequential recorder when clip duration changes
   useEffect(() => {
-    if (sessionStatus !== 'active' || !streamRef.current) {
-      return
+    if (sequentialRecorderRef.current) {
+      sequentialRecorderRef.current.setClipDuration(clipDuration * 1000)
     }
+  }, [clipDuration])
 
-    motionStopRef.current?.()
-    startMotionMonitoring(streamRef.current)
-  }, [motionThreshold, motionCooldown, roiInsetPercent, sessionStatus])
-
+  // Update motion event threshold in recorder
   useEffect(() => {
-    if (sessionStatus !== 'active' || !streamRef.current) {
-      stopAudioMonitoring()
-      return
+    if (sequentialRecorderRef.current) {
+      sequentialRecorderRef.current.setMotionEventThreshold(motionAbsoluteThreshold)
     }
+  }, [motionAbsoluteThreshold])
 
-    stopAudioMonitoring()
-    if (audioEnabled) {
-      startAudioMonitoring(streamRef.current)
-    }
-  }, [audioEnabled, audioThreshold, audioCooldown, sessionStatus])
-
+  // Persist settings to localStorage
   useEffect(() => {
     try {
-      localStorage.setItem(MOTION_THRESHOLD_KEY, String(motionThreshold))
-      localStorage.setItem(MOTION_COOLDOWN_KEY, String(motionCooldown))
-      localStorage.setItem(MOTION_ROI_INSET_KEY, String(roiInsetPercent))
-      localStorage.setItem(AUDIO_ENABLED_KEY, String(audioEnabled))
-      localStorage.setItem(AUDIO_THRESHOLD_KEY, String(audioThreshold))
-      localStorage.setItem(AUDIO_COOLDOWN_KEY, String(audioCooldown))
-      localStorage.setItem(CLIP_PRE_SECONDS_KEY, String(clipPreSeconds))
-      localStorage.setItem(CLIP_POST_SECONDS_KEY, String(clipPostSeconds))
+      localStorage.setItem(CLIP_DURATION_KEY, String(clipDuration))
+      localStorage.setItem(MOTION_DELTA_KEY, String(motionDeltaThreshold))
+      localStorage.setItem(MOTION_ABSOLUTE_KEY, String(motionAbsoluteThreshold))
+      localStorage.setItem(AUDIO_DELTA_ENABLED_KEY, String(audioDeltaEnabled))
+      localStorage.setItem(AUDIO_DELTA_KEY, String(audioDeltaThreshold))
+      localStorage.setItem(AUDIO_ABSOLUTE_ENABLED_KEY, String(audioAbsoluteEnabled))
+      localStorage.setItem(AUDIO_ABSOLUTE_KEY, String(audioAbsoluteThreshold))
     } catch {
       // Ignore persistence failures (private mode or storage disabled).
     }
-  }, [
-    motionThreshold,
-    motionCooldown,
-    roiInsetPercent,
-    audioEnabled,
-    audioThreshold,
-    audioCooldown,
-    clipPreSeconds,
-    clipPostSeconds,
-  ])
+  }, [clipDuration, motionDeltaThreshold, motionAbsoluteThreshold, audioDeltaEnabled, audioDeltaThreshold, audioAbsoluteEnabled, audioAbsoluteThreshold])
 
   const captureLabel = (() => {
     if (isMediaDisabled()) {
@@ -765,6 +850,28 @@ function App() {
             <span className="status-value">{captureLabel}</span>
           </div>
           <div className="status-row">
+            <span className="status-label">Current clip</span>
+            <span className="status-value">#{currentClipIndex}</span>
+          </div>
+          <div className="status-row">
+            <span className="status-label">Benchmark</span>
+            <span className="status-value">
+              {benchmarkClipId ? `Clip #0` : 'Not set'}
+            </span>
+          </div>
+          <div className="status-row">
+            <span className="status-label">Session stats</span>
+            <span className="status-value">
+              Stored: {sessionCounts.stored} / Discarded: {sessionCounts.discarded}
+            </span>
+          </div>
+          <div className="status-row">
+            <span className="status-label">Motion / Audio</span>
+            <span className="status-value">
+              {currentMotionScore.toFixed(3)} / {currentAudioScore.toFixed(3)}
+            </span>
+          </div>
+          <div className="status-row">
             <span className="status-label">Last event</span>
             <span className="status-value">
               {lastEvent ? lastEvent.event_id : 'No events yet'}
@@ -792,14 +899,6 @@ function App() {
           <button
             className="secondary"
             type="button"
-            onClick={() => handleCreateEvent('motion')}
-            disabled={sessionStatus !== 'active' || isBusy}
-          >
-            Create event
-          </button>
-          <button
-            className="secondary"
-            type="button"
             onClick={handleUploadClips}
             disabled={!sessionId || isBusy}
           >
@@ -809,158 +908,118 @@ function App() {
 
         {error ? <p className="error-banner">{error}</p> : null}
 
-        <section className="motion-controls" aria-label="Motion controls">
-          <h2>Motion controls</h2>
+        <section className="clip-controls" aria-label="Sequential recording controls">
+          <h2>Recording Settings</h2>
           <div className="motion-grid">
             <label className="motion-field">
-              <span>Motion threshold</span>
+              <span>Clip duration (s)</span>
               <input
                 type="range"
-                min={0.02}
+                min={5}
+                max={20}
+                step={1}
+                value={clipDuration}
+                aria-label="Clip duration seconds"
+                onChange={(event) =>
+                  setClipDuration(Number(event.target.value))
+                }
+              />
+              <span className="motion-value">{clipDuration}s</span>
+            </label>
+          </div>
+
+          <h3>Motion Detection</h3>
+          <div className="motion-grid">
+            <label className="motion-field">
+              <span>Motion delta threshold</span>
+              <input
+                type="range"
+                min={0.01}
                 max={0.3}
                 step={0.01}
-                value={motionThreshold}
-                aria-label="Motion threshold"
+                value={motionDeltaThreshold}
+                aria-label="Motion delta threshold"
                 onChange={(event) =>
-                  setMotionThreshold(Number(event.target.value))
+                  setMotionDeltaThreshold(Number(event.target.value))
                 }
               />
-              <span className="motion-value">{motionThreshold.toFixed(2)}</span>
+              <span className="motion-value">{motionDeltaThreshold.toFixed(2)}</span>
             </label>
             <label className="motion-field">
-              <span>Cooldown (s)</span>
+              <span>Motion absolute threshold</span>
               <input
                 type="range"
-                min={5}
-                max={60}
-                step={1}
-                value={motionCooldown}
-                aria-label="Motion cooldown"
+                min={0.01}
+                max={0.3}
+                step={0.01}
+                value={motionAbsoluteThreshold}
+                aria-label="Motion absolute threshold"
                 onChange={(event) =>
-                  setMotionCooldown(Number(event.target.value))
+                  setMotionAbsoluteThreshold(Number(event.target.value))
                 }
               />
-              <span className="motion-value">{motionCooldown}s</span>
-            </label>
-            <label className="motion-field">
-              <span>ROI inset (%)</span>
-              <input
-                type="range"
-                min={0}
-                max={40}
-                step={2}
-                value={roiInsetPercent}
-                aria-label="ROI inset"
-                onChange={(event) =>
-                  setRoiInsetPercent(Number(event.target.value))
-                }
-              />
-              <span className="motion-value">{roiInsetPercent}%</span>
+              <span className="motion-value">{motionAbsoluteThreshold.toFixed(2)}</span>
             </label>
           </div>
-        </section>
 
-        <section className="audio-controls" aria-label="Audio controls">
-          <h2>Audio controls</h2>
+          <h3>Audio Detection (Optional)</h3>
           <div className="motion-grid">
             <label className="motion-field motion-toggle">
-              <span>Audio trigger</span>
+              <span>Audio delta comparison</span>
               <input
                 type="checkbox"
-                checked={audioEnabled}
-                aria-label="Audio trigger"
-                onChange={(event) => setAudioEnabled(event.target.checked)}
-              />
-            </label>
-            <label className="motion-field">
-              <span>Audio level</span>
-              <meter
-                aria-label="Audio level"
-                min={0}
-                max={1}
-                low={0.15}
-                high={0.35}
-                optimum={0.1}
-                value={audioLevel}
-              />
-              <span className="motion-value">
-                {audioLevel.toFixed(2)}
-              </span>
-            </label>
-            <label className="motion-field">
-              <span>Audio threshold</span>
-              <input
-                type="range"
-                min={0.05}
-                max={0.8}
-                step={0.01}
-                value={audioThreshold}
-                aria-label="Audio threshold"
+                checked={audioDeltaEnabled}
+                aria-label="Enable audio delta"
                 onChange={(event) =>
-                  setAudioThreshold(Number(event.target.value))
-                }
-                disabled={!audioEnabled}
-              />
-              <span className="motion-value">{audioThreshold.toFixed(2)}</span>
-            </label>
-            <label className="motion-field">
-              <span>Audio cooldown (s)</span>
-              <input
-                type="range"
-                min={5}
-                max={60}
-                step={1}
-                value={audioCooldown}
-                aria-label="Audio cooldown"
-                onChange={(event) =>
-                  setAudioCooldown(Number(event.target.value))
-                }
-                disabled={!audioEnabled}
-              />
-              <span className="motion-value">{audioCooldown}s</span>
-            </label>
-          </div>
-        </section>
-
-        <section className="clip-controls" aria-label="Clip length controls">
-          <h2>Clip length</h2>
-          <div className="motion-grid">
-            <label className="motion-field">
-              <span>Before trigger (s)</span>
-              <input
-                type="range"
-                min={1}
-                max={10}
-                step={1}
-                value={clipPreSeconds}
-                aria-label="Clip pre-roll seconds"
-                onChange={(event) =>
-                  setClipPreSeconds(Number(event.target.value))
+                  setAudioDeltaEnabled(event.target.checked)
                 }
               />
-              <span className="motion-value">{clipPreSeconds}s</span>
             </label>
-            <label className="motion-field">
-              <span>After trigger (s)</span>
+            {audioDeltaEnabled && (
+              <label className="motion-field">
+                <span>Audio delta threshold</span>
+                <input
+                  type="range"
+                  min={0.01}
+                  max={0.5}
+                  step={0.01}
+                  value={audioDeltaThreshold}
+                  aria-label="Audio delta threshold"
+                  onChange={(event) =>
+                    setAudioDeltaThreshold(Number(event.target.value))
+                  }
+                />
+                <span className="motion-value">{audioDeltaThreshold.toFixed(2)}</span>
+              </label>
+            )}
+            <label className="motion-field motion-toggle">
+              <span>Loud sound detection</span>
               <input
-                type="range"
-                min={1}
-                max={10}
-                step={1}
-                value={clipPostSeconds}
-                aria-label="Clip post-roll seconds"
+                type="checkbox"
+                checked={audioAbsoluteEnabled}
+                aria-label="Enable loud sound detection"
                 onChange={(event) =>
-                  setClipPostSeconds(Number(event.target.value))
+                  setAudioAbsoluteEnabled(event.target.checked)
                 }
               />
-              <span className="motion-value">{clipPostSeconds}s</span>
             </label>
-            <label className="motion-field">
-              <span>Total clip length</span>
-              <span className="motion-value">
-                {clipPreSeconds + clipPostSeconds}s
-              </span>
-            </label>
+            {audioAbsoluteEnabled && (
+              <label className="motion-field">
+                <span>Loud threshold</span>
+                <input
+                  type="range"
+                  min={0.05}
+                  max={0.5}
+                  step={0.01}
+                  value={audioAbsoluteThreshold}
+                  aria-label="Audio absolute threshold"
+                  onChange={(event) =>
+                    setAudioAbsoluteThreshold(Number(event.target.value))
+                  }
+                />
+                <span className="motion-value">{audioAbsoluteThreshold.toFixed(2)}</span>
+              </label>
+            )}
           </div>
         </section>
 
@@ -1031,12 +1090,28 @@ function App() {
               {clips.map((clip) => (
                 <li key={clip.id} className="clip-item">
                   <div>
-                    <div className="clip-id">{clip.id}</div>
+                    <div className="clip-id">
+                      {clip.id}
+                      {clip.isBenchmark ? (
+                        <span className="clip-badge benchmark">Benchmark</span>
+                      ) : null}
+                    </div>
                     <div className="clip-meta">
                       <span>{formatDuration(clip.durationSeconds)}</span>
                       <span>{formatBytes(clip.sizeBytes)}</span>
                       <span>{clip.triggerType}</span>
                       <span>{clip.uploaded ? 'uploaded' : 'pending'}</span>
+                      {clip.peakMotionScore !== undefined ? (
+                        <span>peak motion: {clip.peakMotionScore.toFixed(3)}</span>
+                      ) : null}
+                      {clip.peakAudioScore !== undefined ? (
+                        <span>peak audio: {clip.peakAudioScore.toFixed(3)}</span>
+                      ) : null}
+                      {clip.triggeredBy && clip.triggeredBy.length > 0 ? (
+                        <span className="clip-triggers">
+                          triggered: {formatTriggers(clip.triggeredBy)}
+                        </span>
+                      ) : null}
                       {!clip.uploaded && clip.lastUploadError ? (
                         <span className="clip-error">
                           {clip.lastUploadError}

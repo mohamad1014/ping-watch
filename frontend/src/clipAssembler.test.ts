@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { assembleClip } from './clipAssembler'
 
+// NOTE: clipAssembler is deprecated in favor of SequentialRecorder.
+// These tests are kept for reference but test the legacy behavior.
+// Due to VP9 inter-frame compression requirements, clips now always start
+// from the first chunk, making pre/post window selection less relevant.
+
 const makeChunk = (timestampMs: number, label: string) => ({
   timestampMs,
   blob: new Blob([label]),
 })
 
 describe('assembleClip', () => {
-  it('selects pre/post chunks and returns metadata', () => {
+  it('includes all chunks from start up to endMs (VP9 requirement)', () => {
     const chunks = [
       makeChunk(0, 'a'),
       makeChunk(1000, 'b'),
@@ -25,10 +30,13 @@ describe('assembleClip', () => {
     })
 
     expect(clip).not.toBeNull()
+    // startMs/endMs are based on the requested window
     expect(clip?.startMs).toBe(1000)
     expect(clip?.endMs).toBe(4000)
-    expect(clip?.durationSeconds).toBeCloseTo(4)
-    expect(clip?.sizeBytes).toBe(4)
+    // But due to VP9, all 5 chunks from start are included (a,b,c,d,e)
+    expect(clip?.sizeBytes).toBe(5)
+    // Duration spans from first chunk (0) to last selected + estimated chunk duration
+    expect(clip?.durationSeconds).toBeCloseTo(5)
     expect(clip?.mimeType).toBe('video/webm')
   })
 
@@ -49,6 +57,8 @@ describe('assembleClip', () => {
     })
 
     expect(clip).not.toBeNull()
-    expect(clip?.durationSeconds).toBeCloseTo(2)
+    // All 4 chunks included due to VP9 requirement
+    // Duration: 0 to 3000 + 1000ms estimated = 4s
+    expect(clip?.durationSeconds).toBeCloseTo(4)
   })
 })
