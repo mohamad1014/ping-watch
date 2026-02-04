@@ -328,6 +328,9 @@ describe('App', () => {
     })
     const clip = {
       id: 'clip-1',
+      sessionId: 'sess_1',
+      deviceId: 'device-1',
+      triggerType: 'motion' as const,
       blob: new Blob(['clip']),
       sizeBytes: 4,
       mimeType: 'video/webm',
@@ -469,6 +472,8 @@ describe('App', () => {
       mimeType: 'video/webm',
       sizeBytes: 4,
       durationSeconds: 1,
+      startMs: 0,
+      endMs: 1000,
     })
     mockedStartMotionTrigger.mockImplementation(({ onTrigger }) => {
       onTrigger()

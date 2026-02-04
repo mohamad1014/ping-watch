@@ -63,6 +63,6 @@ tmp/
 
 # Telegram Bot
 .codex/skills/update-user/assets/*
-
+.claude/skills/update-user/assets/*
 # Skills 
 # .codex/skills/*

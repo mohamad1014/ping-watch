@@ -63,7 +63,7 @@ const defaultIsOnline = () =>
   typeof navigator !== 'undefined' ? navigator.onLine : true
 
 export const uploadPendingClips = async ({
-  sessionId,
+  sessionId: _sessionId,
   deps,
 }: UploadOptions): Promise<number> => {
   const {

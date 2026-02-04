@@ -170,6 +170,7 @@ function App() {
   )
   const clipUrlRef = useRef<string | null>(null)
   const uploadInFlightRef = useRef(false)
+  const chunkTimerRef = useRef<number | null>(null)
 
   const lastEvent = useMemo(() => events[events.length - 1], [events])
   const clipStats = useMemo(() => {
@@ -251,14 +252,12 @@ function App() {
       }
 
       const bufferChunks = bufferRef.current.getChunks()
-      const initSegment = bufferRef.current.getInitSegment()
       const assembled = assembleClip({
         chunks: bufferChunks,
         triggerMs,
         preMs: getPreMs(),
         postMs,
         fallbackMime: recorderRef.current?.mimeType || 'video/webm',
-        initSegment,
       })
 
       if (!assembled) {
@@ -363,21 +362,50 @@ function App() {
       const mimeType = preferredTypes.find((type) =>
         MediaRecorder.isTypeSupported(type)
       )
-      const recorder = new MediaRecorder(
-        stream,
-        mimeType ? { mimeType } : undefined
-      )
-      recorderRef.current = recorder
+      const startRecorder = () => {
+        if (!streamRef.current) return
 
-      let isFirstChunk = true
-      recorder.addEventListener('dataavailable', (event) => {
-        if (event.data.size > 0) {
-          bufferRef.current.addChunk(event.data, Date.now(), isFirstChunk)
-          isFirstChunk = false
+        const recorder = new MediaRecorder(
+          streamRef.current,
+          mimeType ? { mimeType } : undefined
+        )
+        recorderRef.current = recorder
+
+        const chunkStartTime = Date.now()
+        recorder.addEventListener('stop', () => {
+          // Recorder stopped, will be handled by stop event
+        })
+
+        recorder.addEventListener('dataavailable', (event) => {
+          if (event.data.size > 0) {
+            bufferRef.current.addChunk(event.data, chunkStartTime)
+          }
+        })
+
+        recorder.start()
+      }
+
+      const restartRecorder = () => {
+        if (
+          recorderRef.current &&
+          recorderRef.current.state === 'recording'
+        ) {
+          recorderRef.current.stop()
         }
-      })
+        // Start new recorder after a brief delay to ensure stop completes
+        setTimeout(() => {
+          if (streamRef.current) {
+            startRecorder()
+          }
+        }, 50)
+      }
 
-      recorder.start(1000)
+      // Start the first recorder
+      startRecorder()
+
+      // Set up timer to restart recorder every second
+      chunkTimerRef.current = window.setInterval(restartRecorder, 1000)
+
       startMotionMonitoring(stream)
       startAudioMonitoring(stream)
     } catch (err) {
@@ -395,6 +423,11 @@ function App() {
     motionStopRef.current?.()
     motionStopRef.current = null
     stopAudioMonitoring()
+
+    if (chunkTimerRef.current !== null) {
+      clearInterval(chunkTimerRef.current)
+      chunkTimerRef.current = null
+    }
 
     if (recorderRef.current && recorderRef.current.state !== 'inactive') {
       recorderRef.current.stop()

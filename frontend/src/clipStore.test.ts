@@ -15,7 +15,7 @@ const makeClip = (label: string) => ({
   blob: new Blob([label]),
   mimeType: 'video/webm',
   sizeBytes: label.length,
-  durationSeconds: 2.5,
+  durationSeconds: 10,
 })
 
 describe('clipStore', () => {
