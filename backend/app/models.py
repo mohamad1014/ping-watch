@@ -24,6 +24,14 @@ class SessionModel(Base):
     )
 
 
+class DeviceModel(Base):
+    __tablename__ = "devices"
+
+    device_id: Mapped[str] = mapped_column(String, primary_key=True)
+    label: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class EventModel(Base):
     __tablename__ = "events"
     __table_args__ = (

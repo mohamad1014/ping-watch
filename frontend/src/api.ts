@@ -29,6 +29,12 @@ export type SessionResponse = {
   stopped_at?: string | null
 }
 
+export type DeviceResponse = {
+  device_id: string
+  label?: string | null
+  created_at?: string
+}
+
 export type EventResponse = {
   event_id: string
   session_id?: string
@@ -90,6 +96,18 @@ export const stopSession = (sessionId: string) =>
 
 export const listEvents = (sessionId: string) =>
   request<EventResponse[]>(`/events?session_id=${encodeURIComponent(sessionId)}`)
+
+export const registerDevice = (payload: {
+  deviceId?: string
+  label?: string
+}) =>
+  request<DeviceResponse>('/devices/register', {
+    method: 'POST',
+    body: {
+      device_id: payload.deviceId,
+      label: payload.label,
+    },
+  })
 
 export const createEvent = (payload: CreateEventPayload) =>
   request<EventResponse>('/events', {

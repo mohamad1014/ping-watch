@@ -9,6 +9,7 @@ Phone-as-sensor PWA that records continuously, detects motion or audio spikes, a
 - Builds clips with a pre-roll buffer + post-trigger capture.
 - Uploads event clips to cloud storage for inference and timeline results.
 - Sends notifications (Telegram + second device monitoring).
+- Supports installable PWA metadata (manifest + service worker) for production builds.
 
 ## MVP Scope (Phased)
 
@@ -59,14 +60,14 @@ Free tier has monthly allowance; paid tier raises limits and retention.
 
 ## Status
 
-Scaffolding started: repo layout, local infra compose, and decision log.
+Phase 2 complete: upload + event sync with retries/offline queue and background retry loop. Auth/credits are still pending.
 
 ## Repo Layout (current)
 
-- `frontend/` — PWA (React + TypeScript, Vite planned)
+- `frontend/` — PWA (React + TypeScript, Vite)
 - `backend/` — FastAPI API service (Python)
 - `worker/` — inference/queue worker (Python)
-- `e2e/` — end-to-end tests (Playwright planned)
+- `e2e/` — end-to-end tests (Playwright)
 - `infra/` — docker-compose for local dependencies
 - `scripts/` — dev/test/logs entrypoints
 - `docs/` — architecture and decisions
@@ -74,7 +75,7 @@ Scaffolding started: repo layout, local infra compose, and decision log.
 ## Decisions (2026-01-24)
 
 - Frontend: React + TypeScript (Vite).
-- Backend: FastAPI (Python 3.11+).
+- Backend: FastAPI (Python 3.12+).
 - Local queue: Redis; production queue adapter will target Azure Service Bus.
 - Local infra: Postgres, Redis, Azurite (Blob emulator) via Docker Compose.
 - Testing: test-first; Vitest (frontend), pytest (backend), Playwright (E2E).
@@ -115,11 +116,13 @@ Test:
 - `./scripts/test-integration` (runs backend live-server test + Playwright integration test)
 
 Note: backend tests default to Postgres. Run `./scripts/dev-up` first, or set `DATABASE_URL=sqlite:///./test.db` to use SQLite locally.
+Note: E2E/Playwright runs use a temp SQLite database for the backend; if you override `DATABASE_URL`, ensure it points to a writable, disposable path.
 
 ## Environment
 
 - `VITE_API_URL` — backend base URL for the frontend (default `http://localhost:8000`).
 - `VITE_POLL_INTERVAL_MS` — polling interval for event refresh (default 5000).
+- `VITE_UPLOAD_INTERVAL_MS` — polling interval for retrying pending uploads (default 10000).
 - `VITE_DISABLE_MEDIA` — set to `true` to skip `getUserMedia`/`MediaRecorder` capture (useful for tests/E2E).
 - `DATABASE_URL` — backend DB URL (default Postgres in local dev).
 - `AZURITE_BLOB_ENDPOINT` / `AZURITE_ACCOUNT_NAME` / `AZURITE_ACCOUNT_KEY` — Azurite config for issuing SAS upload URLs.
@@ -127,9 +130,14 @@ Note: backend tests default to Postgres. Run `./scripts/dev-up` first, or set `D
 - `AZURITE_AUTO_CREATE_CONTAINER` — auto-create the clips container on first upload (recommended in local dev).
 - `AZURITE_SAS_EXPIRY_SECONDS` — SAS expiry for upload URLs (default 900).
 
+Frontend tests can also override poll/upload intervals via runtime globals; see `frontend/README.md`.
+
 ## Upload Pipeline (Azurite)
 
 The “Upload stored clips” button uploads pending clips from IndexedDB to Azurite via SAS URLs issued by the backend.
+While a session is active, the frontend also retries pending uploads on an interval.
+
+If `AZURITE_BLOB_ENDPOINT` / `AZURITE_ACCOUNT_NAME` / `AZURITE_ACCOUNT_KEY` are not set, the backend falls back to a local upload URL and writes clips under `backend/.local_uploads` (override with `LOCAL_UPLOAD_DIR`).
 
 1) Start deps: `./scripts/dev-up` (starts Azurite on `:10000`).
 2) Run app: `./scripts/dev`.

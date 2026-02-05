@@ -23,9 +23,7 @@ type UploadDeps = {
 }
 
 type UploadOptions = {
-  sessionId: string
-  deviceId: string
-  triggerType: string
+  sessionId?: string
   deps?: UploadDeps
 }
 
@@ -65,9 +63,7 @@ const defaultIsOnline = () =>
   typeof navigator !== 'undefined' ? navigator.onLine : true
 
 export const uploadPendingClips = async ({
-  sessionId,
-  deviceId,
-  triggerType,
+  sessionId: _sessionId,
   deps,
 }: UploadOptions): Promise<number> => {
   const {
@@ -104,9 +100,6 @@ export const uploadPendingClips = async ({
   let uploadedCount = 0
   for (const clip of pending) {
     const uploaded = await uploadClip(clip, {
-      sessionId,
-      deviceId,
-      triggerType,
       initiateUpload: initiateUploadFn,
       finalizeUpload: finalizeUploadFn,
       uploadBlob: uploadBlobFn,
@@ -138,12 +131,16 @@ type UploadClipDeps = Pick<
 
 const uploadClip = async (
   clip: StoredClip,
-  deps: UploadClipDeps & {
-    sessionId: string
-    deviceId: string
-    triggerType: string
-  }
+  deps: UploadClipDeps
 ): Promise<boolean> => {
+  if (!clip.sessionId || !clip.deviceId || !clip.triggerType) {
+    await deps.scheduleClipRetry(clip.id, {
+      error: 'missing_metadata',
+      nextUploadAttemptAt: deps.getNow() + 30_000,
+    })
+    return false
+  }
+
   if (!deps.isOnline()) {
     await deps.scheduleClipRetry(clip.id, {
       error: 'offline',
@@ -157,9 +154,9 @@ const uploadClip = async (
     try {
       const initiated = await deps.initiateUpload({
         eventId: clip.id,
-        sessionId: deps.sessionId,
-        deviceId: deps.deviceId,
-        triggerType: deps.triggerType,
+        sessionId: clip.sessionId,
+        deviceId: clip.deviceId,
+        triggerType: clip.triggerType,
         durationSeconds: clip.durationSeconds,
         clipMime: clip.mimeType,
         clipSizeBytes: clip.sizeBytes,

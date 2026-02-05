@@ -3,11 +3,28 @@ const STORE_NAME = 'clips'
 const DB_VERSION = 1
 
 type ClipInput = {
+  sessionId: string
+  deviceId: string
+  triggerType: 'motion' | 'audio' | 'benchmark'
   blob: Blob
   mimeType: string
   sizeBytes: number
   durationSeconds: number
   createdAt?: number
+  // Sequential recording fields
+  isBenchmark?: boolean
+  clipIndex?: number
+  // Real-time tracked metrics
+  peakMotionScore?: number
+  avgMotionScore?: number
+  motionEventCount?: number
+  peakAudioScore?: number
+  avgAudioScore?: number
+  // Comparison deltas (vs benchmark)
+  motionDelta?: number
+  audioDelta?: number
+  // Trigger reasons (which criteria caused storage)
+  triggeredBy?: ('motionDelta' | 'motionAbsolute' | 'audioDelta' | 'audioAbsolute')[]
 }
 
 export type StoredClip = ClipInput & {

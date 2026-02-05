@@ -9,10 +9,13 @@ import {
 } from './clipStore'
 
 const makeClip = (label: string) => ({
+  sessionId: 'sess-1',
+  deviceId: 'device-1',
+  triggerType: 'motion' as const,
   blob: new Blob([label]),
   mimeType: 'video/webm',
   sizeBytes: label.length,
-  durationSeconds: 2.5,
+  durationSeconds: 10,
 })
 
 describe('clipStore', () => {

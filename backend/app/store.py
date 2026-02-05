@@ -5,7 +5,7 @@ from uuid import uuid4
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.models import EventModel, SessionModel
+from app.models import DeviceModel, EventModel, SessionModel
 
 
 def _now() -> datetime:
@@ -15,6 +15,7 @@ def _now() -> datetime:
 def reset_store(db: Session) -> None:
     db.execute(delete(EventModel))
     db.execute(delete(SessionModel))
+    db.execute(delete(DeviceModel))
     db.commit()
 
 
@@ -29,6 +30,34 @@ def create_session(db: Session, device_id: str) -> SessionModel:
     db.commit()
     db.refresh(record)
     return record
+
+
+def register_device(
+    db: Session,
+    device_id: Optional[str] = None,
+    label: Optional[str] = None,
+) -> DeviceModel:
+    if device_id:
+        existing = db.get(DeviceModel, device_id)
+        if existing is not None:
+            return existing
+    record = DeviceModel(
+        device_id=device_id or str(uuid4()),
+        label=label,
+        created_at=_now(),
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def device_to_dict(record: DeviceModel) -> dict:
+    return {
+        "device_id": record.device_id,
+        "label": record.label,
+        "created_at": _format_dt(record.created_at),
+    }
 
 
 def stop_session(db: Session, session_id: str) -> Optional[SessionModel]:

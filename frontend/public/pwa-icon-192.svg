@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192" role="img" aria-label="Ping Watch">
+  <rect width="192" height="192" rx="32" fill="#0f172a" />
+  <circle cx="96" cy="96" r="56" fill="#38bdf8" opacity="0.15" />
+  <circle cx="96" cy="96" r="34" fill="#38bdf8" opacity="0.35" />
+  <circle cx="96" cy="96" r="12" fill="#38bdf8" />
+  <path d="M56 136h80" stroke="#94a3b8" stroke-width="10" stroke-linecap="round" />
+  <path d="M72 60h48" stroke="#e2e8f0" stroke-width="10" stroke-linecap="round" />
+</svg>

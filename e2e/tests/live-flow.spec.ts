@@ -15,13 +15,10 @@ test('live flow without webServer config', async ({ page, request }) => {
     await expect
       .poll(async () => {
         const sessionsResponse = await request.get(
-          `${backendUrl}/sessions?device_id=device-1`
+          `${backendUrl}/sessions`
         )
         const sessions = await sessionsResponse.json()
-        return sessions.some(
-          (session: { device_id: string; status: string }) =>
-            session.device_id === 'device-1' && session.status === 'active'
-        )
+        return sessions.some((session: { status: string }) => session.status === 'active')
       })
       .toBeTruthy()
   } finally {

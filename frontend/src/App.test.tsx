@@ -2,28 +2,17 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
-import { captureClipMetadata } from './recorder'
-import { assembleClip } from './clipAssembler'
+import * as clipUpload from './clipUpload'
 import { getClip, listClips, saveClip } from './clipStore'
-
-vi.mock('./recorder', () => ({
-  captureClipMetadata: vi.fn(),
-}))
-
-const mockedCaptureClipMetadata = vi.mocked(captureClipMetadata)
-
-vi.mock('./clipAssembler', () => ({
-  assembleClip: vi.fn(),
-}))
 
 vi.mock('./clipStore', () => ({
   saveClip: vi.fn(),
   listClips: vi.fn(),
   getClip: vi.fn(),
   markClipUploaded: vi.fn(),
+  scheduleClipRetry: vi.fn(),
 }))
 
-const mockedAssembleClip = vi.mocked(assembleClip)
 const mockedSaveClip = vi.mocked(saveClip)
 const mockedListClips = vi.mocked(listClips)
 const mockedGetClip = vi.mocked(getClip)
@@ -34,22 +23,57 @@ const buildResponse = (payload: unknown) =>
     json: async () => payload,
   } as Response)
 
+const buildUploadResponse = (etag: string) =>
+  Promise.resolve({
+    ok: true,
+    headers: {
+      get: (key: string) => (key.toLowerCase() === 'etag' ? etag : null),
+    },
+    json: async () => ({}),
+  } as unknown as Response)
+
 const createFetchMock = (routes: {
+  registerDevice?: unknown
   start: unknown
   stop: unknown
-  createEvent: unknown
+  createEvent?: unknown
+  initiateUpload?: unknown
+  finalizeUpload?: unknown
+  uploadEtag?: string
   events: unknown[]
 }) => {
   const eventQueue = [...routes.events]
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = input.toString()
 
+    if (url.endsWith('/devices/register')) {
+      return buildResponse(
+        routes.registerDevice ?? {
+          device_id: 'device-1',
+          label: null,
+          created_at: 'now',
+        }
+      )
+    }
+
     if (url.endsWith('/sessions/start')) {
       return buildResponse(routes.start)
     }
 
+    if (url.endsWith('/events/upload/initiate') && init?.method === 'POST') {
+      return buildResponse(routes.initiateUpload ?? {})
+    }
+
+    if (url.includes('/upload/finalize') && init?.method === 'POST') {
+      return buildResponse(routes.finalizeUpload ?? {})
+    }
+
+    if (init?.method === 'PUT') {
+      return buildUploadResponse(routes.uploadEtag ?? '"etag-1"')
+    }
+
     if (url.endsWith('/events') && init?.method === 'POST') {
-      return buildResponse(routes.createEvent)
+      return buildResponse(routes.createEvent ?? {})
     }
 
     if (url.includes('/events')) {
@@ -68,20 +92,20 @@ const createFetchMock = (routes: {
 describe('App', () => {
   const runtimeFlags = globalThis as {
     __PING_WATCH_DISABLE_MEDIA__?: boolean
-    __PING_WATCH_PRE_MS__?: number
-    __PING_WATCH_POST_MS__?: number
+    __PING_WATCH_CLIP_DURATION_MS__?: number
   }
 
   beforeEach(() => {
     runtimeFlags.__PING_WATCH_DISABLE_MEDIA__ = true
-    runtimeFlags.__PING_WATCH_POST_MS__ = 0
+    runtimeFlags.__PING_WATCH_CLIP_DURATION_MS__ = 10000
+    mockedSaveClip.mockClear()
     mockedListClips.mockResolvedValue([])
     localStorage.clear()
   })
 
   afterEach(() => {
     runtimeFlags.__PING_WATCH_DISABLE_MEDIA__ = undefined
-    runtimeFlags.__PING_WATCH_POST_MS__ = undefined
+    runtimeFlags.__PING_WATCH_CLIP_DURATION_MS__ = undefined
   })
 
   it('shows the Ping Watch title', async () => {
@@ -125,74 +149,6 @@ describe('App', () => {
       })
     )
     expect(await screen.findByText('Stopped')).toBeInTheDocument()
-
-    vi.restoreAllMocks()
-  })
-
-  it('creates an event from the UI', async () => {
-    const user = userEvent.setup()
-    const fetchMock = createFetchMock({
-      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
-      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
-      createEvent: {
-        event_id: 'evt_1',
-        status: 'processing',
-        trigger_type: 'motion',
-      },
-      events: [[{ event_id: 'evt_1', status: 'processing', trigger_type: 'motion' }]],
-    })
-
-    mockedCaptureClipMetadata.mockResolvedValue({
-      durationSeconds: 3.4,
-      sizeBytes: 2048,
-      mimeType: 'video/webm',
-    })
-    mockedAssembleClip.mockReturnValue({
-      blob: new Blob(['clip']),
-      sizeBytes: 4,
-      mimeType: 'video/webm',
-      durationSeconds: 2,
-      startMs: 0,
-      endMs: 2000,
-    })
-    mockedSaveClip.mockResolvedValue({
-      id: 'clip-1',
-      blob: new Blob(['clip']),
-      sizeBytes: 4,
-      mimeType: 'video/webm',
-      durationSeconds: 2,
-      createdAt: 0,
-    })
-
-    vi.stubGlobal('fetch', fetchMock)
-
-    render(<App />)
-
-    await user.click(
-      screen.getByRole('button', { name: /start monitoring/i })
-    )
-
-    await user.click(screen.getByRole('button', { name: /create event/i }))
-
-    const createCall = fetchMock.mock.calls.find(
-      ([input, init]) =>
-        input.toString().endsWith('/events') && init?.method === 'POST'
-    )
-
-    expect(createCall).toBeDefined()
-    const [, createInit] = createCall ?? []
-    const createBody = JSON.parse((createInit?.body ?? '{}') as string)
-
-    expect(createBody).toMatchObject({
-      duration_seconds: 2,
-      clip_size_bytes: 4,
-      clip_mime: 'video/webm',
-      clip_uri: 'idb://clips/clip-1',
-    })
-
-    expect(await screen.findByText('1 captured')).toBeInTheDocument()
-    const list = screen.getByRole('list')
-    expect(within(list).getByText('evt_1')).toBeInTheDocument()
 
     vi.restoreAllMocks()
   })
@@ -245,6 +201,9 @@ describe('App', () => {
     })
     const clip = {
       id: 'clip-1',
+      sessionId: 'sess_1',
+      deviceId: 'device-1',
+      triggerType: 'motion' as const,
       blob: new Blob(['clip']),
       sizeBytes: 4,
       mimeType: 'video/webm',
@@ -279,68 +238,92 @@ describe('App', () => {
     vi.restoreAllMocks()
   })
 
-  it('shows motion controls', async () => {
+  it('shows recording settings controls', async () => {
     render(<App />)
 
     expect(
-      await screen.findByRole('slider', { name: /motion threshold/i })
+      await screen.findByRole('slider', { name: /clip duration/i })
     ).toBeInTheDocument()
     expect(
-      screen.getByRole('slider', { name: /motion cooldown/i })
+      screen.getByRole('slider', { name: /motion delta threshold/i })
     ).toBeInTheDocument()
     expect(
-      screen.getByRole('slider', { name: /roi inset/i })
+      screen.getByRole('slider', { name: /motion absolute threshold/i })
     ).toBeInTheDocument()
   })
 
-  it('loads motion settings from localStorage', async () => {
-    localStorage.setItem('ping-watch:motion-threshold', '0.18')
-    localStorage.setItem('ping-watch:motion-cooldown', '24')
-    localStorage.setItem('ping-watch:motion-roi-inset', '12')
+  it('shows optional audio detection toggles', async () => {
+    render(<App />)
+
+    expect(
+      await screen.findByRole('checkbox', { name: /enable audio delta/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('checkbox', { name: /enable loud sound detection/i })
+    ).toBeInTheDocument()
+  })
+
+  it('shows audio delta slider when enabled', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    const toggle = await screen.findByRole('checkbox', { name: /enable audio delta/i })
+    await user.click(toggle)
+
+    expect(
+      screen.getByRole('slider', { name: /audio delta threshold/i })
+    ).toBeInTheDocument()
+  })
+
+  it('shows loud threshold slider when enabled', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    const toggle = await screen.findByRole('checkbox', { name: /enable loud sound detection/i })
+    await user.click(toggle)
+
+    expect(
+      screen.getByRole('slider', { name: /audio absolute threshold/i })
+    ).toBeInTheDocument()
+  })
+
+  it('loads settings from localStorage', async () => {
+    // Clear runtime override so localStorage is used
+    runtimeFlags.__PING_WATCH_CLIP_DURATION_MS__ = undefined
+
+    localStorage.setItem('ping-watch:clip-duration', '15')
+    localStorage.setItem('ping-watch:motion-delta', '0.08')
+    localStorage.setItem('ping-watch:motion-absolute', '0.05')
 
     render(<App />)
 
-    const threshold = await screen.findByRole('slider', {
-      name: /motion threshold/i,
+    const clipDuration = await screen.findByRole('slider', {
+      name: /clip duration/i,
     })
-    const cooldown = screen.getByRole('slider', { name: /motion cooldown/i })
-    const roi = screen.getByRole('slider', { name: /roi inset/i })
+    const motionDelta = screen.getByRole('slider', { name: /motion delta threshold/i })
+    const motionAbsolute = screen.getByRole('slider', { name: /motion absolute threshold/i })
 
-    expect(threshold).toHaveValue('0.18')
-    expect(cooldown).toHaveValue('24')
-    expect(roi).toHaveValue('12')
+    expect(clipDuration).toHaveValue('15')
+    expect(motionDelta).toHaveValue('0.08')
+    expect(motionAbsolute).toHaveValue('0.05')
   })
 
-  it('persists motion settings to localStorage', async () => {
+  it('persists settings to localStorage', async () => {
     render(<App />)
 
-    const threshold = await screen.findByRole('slider', {
-      name: /motion threshold/i,
+    const clipDuration = await screen.findByRole('slider', {
+      name: /clip duration/i,
     })
-    const cooldown = screen.getByRole('slider', { name: /motion cooldown/i })
-    const roi = screen.getByRole('slider', { name: /roi inset/i })
+    const motionDelta = screen.getByRole('slider', { name: /motion delta threshold/i })
+    const motionAbsolute = screen.getByRole('slider', { name: /motion absolute threshold/i })
 
-    fireEvent.change(threshold, { target: { value: '0.22' } })
-    fireEvent.change(cooldown, { target: { value: '28' } })
-    fireEvent.change(roi, { target: { value: '16' } })
+    fireEvent.change(clipDuration, { target: { value: '12' } })
+    fireEvent.change(motionDelta, { target: { value: '0.1' } })
+    fireEvent.change(motionAbsolute, { target: { value: '0.06' } })
 
-    expect(localStorage.getItem('ping-watch:motion-threshold')).toBe('0.22')
-    expect(localStorage.getItem('ping-watch:motion-cooldown')).toBe('28')
-    expect(localStorage.getItem('ping-watch:motion-roi-inset')).toBe('16')
-  })
-
-  it('shows audio controls', async () => {
-    render(<App />)
-
-    expect(
-      await screen.findByRole('checkbox', { name: /audio trigger/i })
-    ).toBeInTheDocument()
-    expect(
-      screen.getByRole('slider', { name: /audio threshold/i })
-    ).toBeInTheDocument()
-    expect(
-      screen.getByRole('slider', { name: /audio cooldown/i })
-    ).toBeInTheDocument()
+    expect(localStorage.getItem('ping-watch:clip-duration')).toBe('12')
+    expect(localStorage.getItem('ping-watch:motion-delta')).toBe('0.1')
+    expect(localStorage.getItem('ping-watch:motion-absolute')).toBe('0.06')
   })
 
   it('shows capture status when media is disabled', async () => {
@@ -405,49 +388,73 @@ describe('App', () => {
     })
   })
 
-  it('loads audio settings from localStorage', async () => {
-    localStorage.setItem('ping-watch:audio-enabled', 'true')
-    localStorage.setItem('ping-watch:audio-threshold', '0.42')
-    localStorage.setItem('ping-watch:audio-cooldown', '22')
-
-    render(<App />)
-
-    const enabled = await screen.findByRole('checkbox', {
-      name: /audio trigger/i,
-    })
-    const threshold = screen.getByRole('slider', { name: /audio threshold/i })
-    const cooldown = screen.getByRole('slider', { name: /audio cooldown/i })
-
-    expect(enabled).toBeChecked()
-    expect(threshold).toHaveValue('0.42')
-    expect(cooldown).toHaveValue('22')
-  })
-
-  it('persists audio settings to localStorage', async () => {
+  it('retries pending uploads on an interval while active', async () => {
+    ;(globalThis as { __PING_WATCH_UPLOAD_INTERVAL__?: number }).__PING_WATCH_UPLOAD_INTERVAL__ = 20
     const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+
+    const uploadSpy = vi
+      .spyOn(clipUpload, 'uploadPendingClips')
+      .mockResolvedValue(0)
+
+    vi.stubGlobal('fetch', fetchMock)
+
     render(<App />)
 
-    const enabled = await screen.findByRole('checkbox', {
-      name: /audio trigger/i,
-    })
-    await user.click(enabled)
+    await user.click(
+      screen.getByRole('button', { name: /start monitoring/i })
+    )
 
-    const threshold = screen.getByRole('slider', { name: /audio threshold/i })
-    const cooldown = screen.getByRole('slider', { name: /audio cooldown/i })
-    fireEvent.change(threshold, { target: { value: '0.5' } })
-    fireEvent.change(cooldown, { target: { value: '18' } })
+    await screen.findByText('Active')
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(uploadSpy.mock.calls.length).toBeGreaterThanOrEqual(2)
 
-    expect(localStorage.getItem('ping-watch:audio-enabled')).toBe('true')
-    expect(localStorage.getItem('ping-watch:audio-threshold')).toBe('0.5')
-    expect(localStorage.getItem('ping-watch:audio-cooldown')).toBe('18')
+    uploadSpy.mockRestore()
+    ;(globalThis as { __PING_WATCH_UPLOAD_INTERVAL__?: number }).__PING_WATCH_UPLOAD_INTERVAL__ = undefined
   })
 
-  it('renders the audio level meter', async () => {
+  it('prefers VITE interval settings over runtime overrides', async () => {
+    process.env.VITE_POLL_INTERVAL_MS = '15'
+    process.env.VITE_UPLOAD_INTERVAL_MS = '25'
+    ;(globalThis as { __PING_WATCH_POLL_INTERVAL__?: number }).__PING_WATCH_POLL_INTERVAL__ = 40
+    ;(globalThis as { __PING_WATCH_UPLOAD_INTERVAL__?: number }).__PING_WATCH_UPLOAD_INTERVAL__ = 50
+
+    const user = userEvent.setup()
+    const setIntervalSpy = vi
+      .spyOn(window, 'setInterval')
+      .mockImplementation((handler, timeout) => {
+        return window.setTimeout(handler as TimerHandler, Number(timeout))
+      })
+
+    const fetchMock = createFetchMock({
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
     render(<App />)
 
-    expect(
-      await screen.findByRole('meter', { name: /audio level/i })
-    ).toBeInTheDocument()
+    await user.click(
+      screen.getByRole('button', { name: /start monitoring/i })
+    )
+
+    await screen.findByText('Active')
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 15)
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 25)
+
+    setIntervalSpy.mockRestore()
+    delete process.env.VITE_POLL_INTERVAL_MS
+    delete process.env.VITE_UPLOAD_INTERVAL_MS
+    ;(globalThis as { __PING_WATCH_POLL_INTERVAL__?: number }).__PING_WATCH_POLL_INTERVAL__ = undefined
+    ;(globalThis as { __PING_WATCH_UPLOAD_INTERVAL__?: number }).__PING_WATCH_UPLOAD_INTERVAL__ = undefined
   })
 
   it('polls and renders events when active', async () => {
@@ -510,5 +517,30 @@ describe('App', () => {
 
     vi.restoreAllMocks()
     ;(globalThis as { __PING_WATCH_POLL_INTERVAL__?: number }).__PING_WATCH_POLL_INTERVAL__ = undefined
+  })
+
+  it('shows current clip index and benchmark status', async () => {
+    render(<App />)
+
+    expect(await screen.findByText(/current clip/i)).toBeInTheDocument()
+    expect(screen.getByText('#0')).toBeInTheDocument()
+    expect(screen.getByText(/benchmark/i)).toBeInTheDocument()
+    expect(screen.getByText(/not set/i)).toBeInTheDocument()
+  })
+
+  it('shows session stats', async () => {
+    render(<App />)
+
+    expect(await screen.findByText(/session stats/i)).toBeInTheDocument()
+    expect(screen.getByText(/stored: 0/i)).toBeInTheDocument()
+    expect(screen.getByText(/discarded: 0/i)).toBeInTheDocument()
+  })
+
+  it('shows real-time motion/audio scores', async () => {
+    render(<App />)
+
+    expect(await screen.findByText(/motion \/ audio/i)).toBeInTheDocument()
+    // Initial values are 0
+    expect(screen.getByText('0.000 / 0.000')).toBeInTheDocument()
   })
 })

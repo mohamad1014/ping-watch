@@ -1,4 +1,9 @@
 import { defineConfig } from '@playwright/test'
+import { tmpdir } from 'os'
+import path from 'path'
+
+const e2eDbPath = path.join(tmpdir(), `ping-watch-e2e-${process.pid}.db`)
+const e2eDbUrl = `sqlite:///${e2eDbPath.replace(/\\/g, '/')}`
 
 export default defineConfig({
   testDir: './tests',
@@ -9,7 +14,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: 'npm run dev -- --host 0.0.0.0 --port 5173',
+      command: 'npm run dev -- --host 127.0.0.1 --port 5173',
       cwd: '../frontend',
       port: 5173,
       reuseExistingServer: true,
@@ -19,12 +24,13 @@ export default defineConfig({
       },
     },
     {
-      command: '../backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000',
+      command:
+        '../backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000',
       cwd: '../backend',
       port: 8000,
       reuseExistingServer: true,
       env: {
-        DATABASE_URL: 'sqlite:///./e2e.db',
+        DATABASE_URL: e2eDbUrl,
       },
     },
   ],

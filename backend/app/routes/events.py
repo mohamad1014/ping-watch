@@ -1,8 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from uuid import uuid4
 import anyio
+import hashlib
+import os
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 from app.azurite_sas import (
     build_blob_name,
@@ -54,6 +58,14 @@ class FinalizeUploadRequest(BaseModel):
     etag: str | None = None
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _get_local_upload_dir() -> Path:
+    return Path(os.environ.get("LOCAL_UPLOAD_DIR", "./.local_uploads"))
+
+
 @router.post("")
 async def create_event_endpoint(
     payload: CreateEventRequest, db: Session = Depends(get_db)
@@ -75,26 +87,39 @@ async def create_event_endpoint(
 
 @router.post("/upload/initiate")
 async def initiate_upload_endpoint(
-    payload: InitiateUploadRequest, db: Session = Depends(get_db)
+    payload: InitiateUploadRequest,
+    request: Request,
+    db: Session = Depends(get_db),
 ):
-    try:
-        config = load_config()
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
     event_id = payload.event_id or str(uuid4())
     blob_name = build_blob_name(payload.session_id, event_id, payload.clip_mime)
-    blob_url = build_blob_url(config, blob_name)
-    sas_query, expiry = generate_blob_upload_sas(config=config, blob_name=blob_name)
-    upload_url = f"{blob_url}?{sas_query}"
+    expiry = _utc_now() + timedelta(seconds=900)
 
-    if config.auto_create_container:
-        try:
-            await anyio.to_thread.run_sync(ensure_container_exists, config)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500, detail=f"failed to ensure container exists: {exc}"
-            ) from exc
+    config = None
+    try:
+        config = load_config()
+    except RuntimeError:
+        config = None
+
+    if config is None:
+        upload_url = str(request.base_url).rstrip("/") + f"/events/{event_id}/upload"
+        blob_url = upload_url
+        clip_container = "local"
+        clip_blob_name = blob_name
+    else:
+        blob_url = build_blob_url(config, blob_name)
+        sas_query, expiry = generate_blob_upload_sas(config=config, blob_name=blob_name)
+        upload_url = f"{blob_url}?{sas_query}"
+        clip_container = config.container
+        clip_blob_name = blob_name
+
+        if config.auto_create_container:
+            try:
+                await anyio.to_thread.run_sync(ensure_container_exists, config)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=500, detail=f"failed to ensure container exists: {exc}"
+                ) from exc
 
     try:
         record = create_event(
@@ -103,12 +128,12 @@ async def initiate_upload_endpoint(
             payload.device_id,
             payload.trigger_type,
             payload.duration_seconds,
-            blob_url,
+            blob_url if config is not None else f"local://{blob_name}",
             payload.clip_mime,
             payload.clip_size_bytes,
             event_id=event_id,
-            clip_container=config.container,
-            clip_blob_name=blob_name,
+            clip_container=clip_container,
+            clip_blob_name=clip_blob_name,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -122,6 +147,33 @@ async def initiate_upload_endpoint(
         "blob_url": blob_url,
         "expires_at": expiry.isoformat(),
     }
+
+
+@router.put("/{event_id}/upload")
+async def upload_clip_endpoint(
+    event_id: str, request: Request, db: Session = Depends(get_db)
+):
+    record = get_event(db, event_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="event not found")
+
+    blob_name = record.clip_blob_name or build_blob_name(
+        record.session_id, record.event_id, record.clip_mime
+    )
+
+    upload_root = _get_local_upload_dir().resolve()
+    target_path = (upload_root / blob_name).resolve()
+    try:
+        target_path.relative_to(upload_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid upload path") from exc
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    body = await request.body()
+    target_path.write_bytes(body)
+
+    etag = f"\"{hashlib.md5(body).hexdigest()}\""
+    return Response(status_code=201, headers={"etag": etag})
 
 
 @router.post("/{event_id}/upload/finalize")

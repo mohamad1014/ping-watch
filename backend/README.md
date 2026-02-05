@@ -16,6 +16,7 @@ Database:
 - Default `DATABASE_URL` is `postgresql+psycopg://pingwatch:pingwatch@localhost:5432/pingwatch`.
 - Migrations live in `alembic/`.
 - Run migrations: `.venv/bin/alembic upgrade head` (from `backend/`, respects `DATABASE_URL` if set).
+- If you point `DATABASE_URL` at SQLite for tests, use a disposable file path to avoid stale schema issues.
 
 Logging:
 - Structured JSON logs to stdout with ISO 8601 timestamps and request metadata.
