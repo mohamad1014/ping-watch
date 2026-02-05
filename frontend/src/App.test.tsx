@@ -418,6 +418,45 @@ describe('App', () => {
     ;(globalThis as { __PING_WATCH_UPLOAD_INTERVAL__?: number }).__PING_WATCH_UPLOAD_INTERVAL__ = undefined
   })
 
+  it('prefers VITE interval settings over runtime overrides', async () => {
+    process.env.VITE_POLL_INTERVAL_MS = '15'
+    process.env.VITE_UPLOAD_INTERVAL_MS = '25'
+    ;(globalThis as { __PING_WATCH_POLL_INTERVAL__?: number }).__PING_WATCH_POLL_INTERVAL__ = 40
+    ;(globalThis as { __PING_WATCH_UPLOAD_INTERVAL__?: number }).__PING_WATCH_UPLOAD_INTERVAL__ = 50
+
+    const user = userEvent.setup()
+    const setIntervalSpy = vi
+      .spyOn(window, 'setInterval')
+      .mockImplementation((handler, timeout) => {
+        return window.setTimeout(handler as TimerHandler, Number(timeout))
+      })
+
+    const fetchMock = createFetchMock({
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    await user.click(
+      screen.getByRole('button', { name: /start monitoring/i })
+    )
+
+    await screen.findByText('Active')
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 15)
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 25)
+
+    setIntervalSpy.mockRestore()
+    delete process.env.VITE_POLL_INTERVAL_MS
+    delete process.env.VITE_UPLOAD_INTERVAL_MS
+    ;(globalThis as { __PING_WATCH_POLL_INTERVAL__?: number }).__PING_WATCH_POLL_INTERVAL__ = undefined
+    ;(globalThis as { __PING_WATCH_UPLOAD_INTERVAL__?: number }).__PING_WATCH_UPLOAD_INTERVAL__ = undefined
+  })
+
   it('polls and renders events when active', async () => {
     const user = userEvent.setup()
     ;(globalThis as { __PING_WATCH_POLL_INTERVAL__?: number }).__PING_WATCH_POLL_INTERVAL__ = 20

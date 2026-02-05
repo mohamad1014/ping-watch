@@ -38,13 +38,29 @@ const statusLabels = {
 type SessionStatus = keyof typeof statusLabels
 type CaptureStatus = 'idle' | 'active' | 'error'
 
+const getEnvNumber = (key: string) => {
+  const env = (import.meta as ImportMeta & {
+    env?: Record<string, string | undefined>
+  }).env
+  const raw = env?.[key] ?? (typeof process !== 'undefined'
+    ? process.env?.[key]
+    : undefined)
+  if (!raw) return undefined
+  const value = Number(raw)
+  return Number.isFinite(value) ? value : undefined
+}
+
 const getPollIntervalMs = () => {
+  const envValue = getEnvNumber('VITE_POLL_INTERVAL_MS')
+  if (typeof envValue === 'number') return envValue
   const override = (globalThis as { __PING_WATCH_POLL_INTERVAL__?: number })
     .__PING_WATCH_POLL_INTERVAL__
   return typeof override === 'number' ? override : 5000
 }
 
 const getUploadIntervalMs = () => {
+  const envValue = getEnvNumber('VITE_UPLOAD_INTERVAL_MS')
+  if (typeof envValue === 'number') return envValue
   const override = (globalThis as { __PING_WATCH_UPLOAD_INTERVAL__?: number })
     .__PING_WATCH_UPLOAD_INTERVAL__
   return typeof override === 'number' ? override : 10_000

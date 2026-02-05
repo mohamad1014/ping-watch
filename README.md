@@ -9,6 +9,7 @@ Phone-as-sensor PWA that records continuously, detects motion or audio spikes, a
 - Builds clips with a pre-roll buffer + post-trigger capture.
 - Uploads event clips to cloud storage for inference and timeline results.
 - Sends notifications (Telegram + second device monitoring).
+- Supports installable PWA metadata (manifest + service worker) for production builds.
 
 ## MVP Scope (Phased)
 
@@ -63,10 +64,10 @@ Phase 2 complete: upload + event sync with retries/offline queue and background 
 
 ## Repo Layout (current)
 
-- `frontend/` — PWA (React + TypeScript, Vite planned)
+- `frontend/` — PWA (React + TypeScript, Vite)
 - `backend/` — FastAPI API service (Python)
 - `worker/` — inference/queue worker (Python)
-- `e2e/` — end-to-end tests (Playwright planned)
+- `e2e/` — end-to-end tests (Playwright)
 - `infra/` — docker-compose for local dependencies
 - `scripts/` — dev/test/logs entrypoints
 - `docs/` — architecture and decisions
@@ -74,7 +75,7 @@ Phase 2 complete: upload + event sync with retries/offline queue and background 
 ## Decisions (2026-01-24)
 
 - Frontend: React + TypeScript (Vite).
-- Backend: FastAPI (Python 3.11+).
+- Backend: FastAPI (Python 3.12+).
 - Local queue: Redis; production queue adapter will target Azure Service Bus.
 - Local infra: Postgres, Redis, Azurite (Blob emulator) via Docker Compose.
 - Testing: test-first; Vitest (frontend), pytest (backend), Playwright (E2E).
@@ -128,6 +129,8 @@ Note: E2E/Playwright runs use a temp SQLite database for the backend; if you ove
 - `AZURITE_CLIPS_CONTAINER` — container name for clips (default `clips`).
 - `AZURITE_AUTO_CREATE_CONTAINER` — auto-create the clips container on first upload (recommended in local dev).
 - `AZURITE_SAS_EXPIRY_SECONDS` — SAS expiry for upload URLs (default 900).
+
+Frontend tests can also override poll/upload intervals via runtime globals; see `frontend/README.md`.
 
 ## Upload Pipeline (Azurite)
 

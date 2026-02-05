@@ -116,9 +116,22 @@ Tests use Vitest with jsdom and fake-indexeddb for browser API mocking.
 
 ## Environment Variables
 
-Runtime flags for testing (set on `globalThis`):
+Primary configuration (Vite environment variables):
+
+- `VITE_POLL_INTERVAL_MS` — event polling interval (ms).
+- `VITE_UPLOAD_INTERVAL_MS` — upload retry interval (ms).
+- `VITE_DISABLE_MEDIA` — skip getUserMedia/MediaRecorder capture (useful for tests/E2E).
+
+Runtime flags for testing/debug (set on `globalThis`):
 
 - `__PING_WATCH_DISABLE_MEDIA__` - Skip getUserMedia for headless testing
 - `__PING_WATCH_CLIP_DURATION_MS__` - Override clip duration
 - `__PING_WATCH_POLL_INTERVAL__` - Event polling interval
 - `__PING_WATCH_UPLOAD_INTERVAL__` - Upload retry interval
+
+Env values take precedence over runtime globals, and both fall back to defaults.
+
+## PWA Support
+
+Production builds register a service worker and expose a web manifest for installability.
+The manifest lives at `frontend/public/manifest.webmanifest`, and icons are in `frontend/public/`.

@@ -32,6 +32,7 @@ Two tiers:
 - Clip timeline UI with preview playback from IndexedDB.
 - Upload pipeline that initiates/finalizes clips with retries + offline queue.
 - Background upload retry loop while a session is active.
+- PWA install metadata (manifest + service worker) for production builds.
 - Backend API:
   - Sessions: start/stop/list.
   - Events: create/list.
