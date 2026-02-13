@@ -16,10 +16,12 @@ from app.azurite_sas import (
     load_config,
 )
 from app.db import get_db
+from app.queue import enqueue_inference_job
 from app.store import (
     create_event,
     event_to_dict,
     get_event,
+    get_session,
     list_events,
     mark_event_clip_uploaded,
     update_event_summary,
@@ -183,6 +185,20 @@ async def finalize_upload_endpoint(
     record = mark_event_clip_uploaded(db, event_id, payload.etag)
     if record is None:
         raise HTTPException(status_code=404, detail="event not found")
+
+    # Get session to retrieve analysis_prompt
+    session = get_session(db, record.session_id)
+    analysis_prompt = session.analysis_prompt if session else None
+
+    # Enqueue inference job (fire-and-forget, don't block on queue errors)
+    enqueue_inference_job(
+        event_id=record.event_id,
+        session_id=record.session_id,
+        clip_blob_name=record.clip_blob_name or "",
+        clip_container=record.clip_container or "",
+        analysis_prompt=analysis_prompt,
+    )
+
     return event_to_dict(record)
 
 

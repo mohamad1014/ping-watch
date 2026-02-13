@@ -84,7 +84,7 @@ Phase 2 complete: upload + event sync with retries/offline queue and background 
 ## Local Dev Commands
 
 - `./scripts/dev-up` — start local dependencies.
-- `./scripts/dev` — run frontend + backend together.
+- `./scripts/dev` — run frontend + backend + worker together.
 - `./scripts/test-unit` — unit tests (frontend + backend).
 - `./scripts/test-integration` — API + DB integration tests.
 - `./scripts/test-e2e` — Playwright E2E suite.

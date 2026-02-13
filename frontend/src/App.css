@@ -60,6 +60,48 @@
   font-size: 1.05rem;
 }
 
+.analysis-prompt-section {
+  padding: 1.25rem;
+  border-radius: 18px;
+  background: #f8f6f3;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
+}
+
+.analysis-prompt-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.analysis-prompt-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 1px solid #e2ddd5;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  resize: vertical;
+  background: #fff;
+  transition: border-color 150ms ease;
+}
+
+.analysis-prompt-input:focus {
+  outline: none;
+  border-color: #ff7a59;
+}
+
+.analysis-prompt-input:disabled {
+  background: #f0ede8;
+  color: #6a6a6a;
+  cursor: not-allowed;
+}
+
+.analysis-prompt-input::placeholder {
+  color: #9a9590;
+}
+
 .controls {
   display: flex;
   flex-wrap: wrap;

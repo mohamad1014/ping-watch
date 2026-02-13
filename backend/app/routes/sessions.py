@@ -10,6 +10,7 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 class StartSessionRequest(BaseModel):
     device_id: str
+    analysis_prompt: str | None = None
 
 
 class StopSessionRequest(BaseModel):
@@ -18,7 +19,7 @@ class StopSessionRequest(BaseModel):
 
 @router.post("/start")
 async def start_session(payload: StartSessionRequest, db: Session = Depends(get_db)):
-    record = create_session(db, payload.device_id)
+    record = create_session(db, payload.device_id, payload.analysis_prompt)
     return session_to_dict(record)
 
 

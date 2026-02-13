@@ -1,0 +1,130 @@
+"""Azure Blob Storage client for downloading clips."""
+
+import logging
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+from azure.storage.blob import BlobServiceClient
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class BlobConfig:
+    endpoint: str
+    account_name: str
+    account_key: str
+    container: str
+
+
+def load_blob_config() -> BlobConfig:
+    """Load blob storage configuration from environment variables."""
+    endpoint = os.environ.get("AZURITE_BLOB_ENDPOINT")
+    account_name = os.environ.get("AZURITE_ACCOUNT_NAME")
+    account_key = os.environ.get("AZURITE_ACCOUNT_KEY")
+    container = os.environ.get("AZURITE_CLIPS_CONTAINER", "clips")
+
+    if not all([endpoint, account_name, account_key]):
+        raise RuntimeError(
+            "Missing required blob storage environment variables: "
+            "AZURITE_BLOB_ENDPOINT, AZURITE_ACCOUNT_NAME, AZURITE_ACCOUNT_KEY"
+        )
+
+    return BlobConfig(
+        endpoint=endpoint,
+        account_name=account_name,
+        account_key=account_key,
+        container=container,
+    )
+
+
+def get_blob_service_client(config: Optional[BlobConfig] = None) -> BlobServiceClient:
+    """Create a BlobServiceClient from configuration."""
+    config = config or load_blob_config()
+    connection_string = (
+        f"DefaultEndpointsProtocol=http;"
+        f"AccountName={config.account_name};"
+        f"AccountKey={config.account_key};"
+        f"BlobEndpoint={config.endpoint};"
+    )
+    return BlobServiceClient.from_connection_string(connection_string)
+
+
+def download_clip(
+    blob_name: str,
+    container: Optional[str] = None,
+    config: Optional[BlobConfig] = None,
+) -> bytes:
+    """Download a clip from blob storage.
+
+    Args:
+        blob_name: The name/path of the blob to download
+        container: Container name (defaults to config.container)
+        config: Blob configuration (loads from env if not provided)
+
+    Returns:
+        The clip data as bytes
+
+    Raises:
+        RuntimeError: If download fails
+    """
+    config = config or load_blob_config()
+    container = container or config.container
+
+    logger.info(f"Downloading blob {blob_name} from container {container}")
+
+    try:
+        client = get_blob_service_client(config)
+        blob_client = client.get_blob_client(container=container, blob=blob_name)
+        data = blob_client.download_blob().readall()
+        logger.info(f"Downloaded {len(data)} bytes from {blob_name}")
+        return data
+    except Exception as exc:
+        logger.error(f"Failed to download blob {blob_name}: {exc}")
+        raise RuntimeError(f"Failed to download clip: {exc}") from exc
+
+
+def download_clip_to_file(
+    blob_name: str,
+    output_path: Path,
+    container: Optional[str] = None,
+    config: Optional[BlobConfig] = None,
+) -> Path:
+    """Download a clip to a local file.
+
+    Args:
+        blob_name: The name/path of the blob to download
+        output_path: Local path to save the file
+        container: Container name (defaults to config.container)
+        config: Blob configuration (loads from env if not provided)
+
+    Returns:
+        The path to the downloaded file
+    """
+    data = download_clip(blob_name, container, config)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(data)
+    logger.info(f"Saved clip to {output_path}")
+    return output_path
+
+
+def download_local_clip(blob_name: str, local_upload_dir: Optional[str] = None) -> bytes:
+    """Download a clip from local storage (for development without Azurite).
+
+    Args:
+        blob_name: The name/path of the blob
+        local_upload_dir: Directory where local uploads are stored
+
+    Returns:
+        The clip data as bytes
+    """
+    local_dir = Path(local_upload_dir or os.environ.get("LOCAL_UPLOAD_DIR", "./.local_uploads"))
+    file_path = local_dir / blob_name
+
+    if not file_path.exists():
+        raise RuntimeError(f"Local clip not found: {file_path}")
+
+    logger.info(f"Reading local clip from {file_path}")
+    return file_path.read_bytes()

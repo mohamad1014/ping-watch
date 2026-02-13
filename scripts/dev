@@ -25,4 +25,10 @@ pids+=("$!")
 ) &
 pids+=("$!")
 
+(
+  cd "$repo_root/worker"
+  .venv/bin/python -m app.cli run --queue clip_uploaded
+) &
+pids+=("$!")
+
 wait -n

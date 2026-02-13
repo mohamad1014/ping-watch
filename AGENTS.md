@@ -17,7 +17,7 @@
 Primary scripts:
 
 - `./scripts/dev-up` — start all local dependencies (db, blob emulator, queue).
-- `./scripts/dev` — run frontend + backend concurrently.
+- `./scripts/dev` — run frontend + backend + worker concurrently.
 - `./scripts/test-unit` — run unit tests for frontend + backend.
 - `./scripts/test-integration` — run API + DB integration tests.
 - `./scripts/test-e2e` — run full-stack E2E tests (Playwright).
@@ -39,6 +39,17 @@ No formatter or linter is configured yet. If you introduce one, document it and 
 - Document minimum coverage expectations if enforced.
 - Test-first is mandatory for new behavior (write failing test before implementation).
 - Add E2E coverage for core flows (session start/stop, clip upload, event timeline).
+
+### Codex Verification Workflow (Mandatory)
+
+- Write/adjust tests first for changed behavior.
+- Run targeted tests for touched area.
+- Run full gate before finalizing:
+  - `./scripts/test-unit`
+  - `./scripts/test-integration`
+  - `./scripts/test-e2e`
+  - or `./scripts/test-all`
+- Report exact pass/fail output and any blockers.
 
 ## Commit & Pull Request Guidelines
 

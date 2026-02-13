@@ -19,12 +19,15 @@ def reset_store(db: Session) -> None:
     db.commit()
 
 
-def create_session(db: Session, device_id: str) -> SessionModel:
+def create_session(
+    db: Session, device_id: str, analysis_prompt: Optional[str] = None
+) -> SessionModel:
     record = SessionModel(
         session_id=str(uuid4()),
         device_id=device_id,
         status="active",
         started_at=_now(),
+        analysis_prompt=analysis_prompt,
     )
     db.add(record)
     db.commit()
@@ -182,6 +185,7 @@ def session_to_dict(record: SessionModel) -> dict:
         "status": record.status,
         "started_at": _format_dt(record.started_at),
         "stopped_at": _format_dt(record.stopped_at),
+        "analysis_prompt": record.analysis_prompt,
     }
 
 

@@ -27,6 +27,7 @@ export type SessionResponse = {
   status: string
   started_at?: string
   stopped_at?: string | null
+  analysis_prompt?: string | null
 }
 
 export type DeviceResponse = {
@@ -82,10 +83,13 @@ export type InitiateUploadResponse = {
   expiresAt: string
 }
 
-export const startSession = (deviceId: string) =>
+export const startSession = (deviceId: string, analysisPrompt?: string) =>
   request<SessionResponse>('/sessions/start', {
     method: 'POST',
-    body: { device_id: deviceId },
+    body: {
+      device_id: deviceId,
+      analysis_prompt: analysisPrompt || null,
+    },
   })
 
 export const stopSession = (sessionId: string) =>

@@ -109,6 +109,7 @@ function App() {
   const [isBusy, setIsBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copiedEventId, setCopiedEventId] = useState<string | null>(null)
+  const [analysisPrompt, setAnalysisPrompt] = useState('')
 
   // Clips state
   const [clips, setClips] = useState<StoredClip[]>([])
@@ -348,7 +349,7 @@ function App() {
 
     try {
       const resolvedDeviceId = await ensureDeviceId()
-      const session = await startSession(resolvedDeviceId)
+      const session = await startSession(resolvedDeviceId, analysisPrompt || undefined)
       setSessionId(session.session_id)
       sessionIdRef.current = session.session_id
       deviceIdRef.current = session.device_id
@@ -566,6 +567,20 @@ function App() {
             <span className="status-label">Last event</span>
             <span className="status-value">{lastEvent ? lastEvent.event_id : 'No events yet'}</span>
           </div>
+        </section>
+
+        <section className="analysis-prompt-section" aria-label="Analysis prompt">
+          <label className="analysis-prompt-label">
+            <span>Analysis prompt (optional)</span>
+            <textarea
+              className="analysis-prompt-input"
+              placeholder="Add custom instructions for the VLM analysis, e.g., 'Focus on detecting people near the door' or 'Alert for any animal activity'"
+              value={analysisPrompt}
+              onChange={(e) => setAnalysisPrompt(e.target.value)}
+              disabled={sessionStatus === 'active'}
+              rows={3}
+            />
+          </label>
         </section>
 
         <div className="controls">

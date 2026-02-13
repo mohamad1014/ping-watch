@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -18,6 +18,7 @@ class SessionModel(Base):
     stopped_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    analysis_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     events: Mapped[list["EventModel"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
