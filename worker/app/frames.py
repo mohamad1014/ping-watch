@@ -1,7 +1,9 @@
 """Frame extraction from video clips."""
 
 import base64
+import binascii
 import logging
+import os
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -9,6 +11,105 @@ from typing import Optional
 import cv2
 
 logger = logging.getLogger(__name__)
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _resolve_inference_frames_dir(output_dir: Optional[str] = None) -> Path:
+    configured = output_dir or os.environ.get("INFERENCE_FRAMES_DIR")
+    if not configured:
+        return _repo_root() / ".inference_frames"
+
+    path = Path(configured).expanduser()
+    if path.is_absolute():
+        return path
+    return _repo_root() / path
+
+
+def _safe_segment(value: str) -> str:
+    return value.replace("/", "_").replace("\\", "_").strip() or "unknown"
+
+
+def _image_extension_for_mime(mime_type: str) -> str:
+    normalized = (mime_type or "").lower().strip()
+    if normalized == "image/png":
+        return ".png"
+    return ".jpg"
+
+
+def save_frame_data_uris(
+    frame_data_uris: list[str],
+    *,
+    event_id: str,
+    session_id: Optional[str] = None,
+    output_dir: Optional[str] = None,
+) -> list[Path]:
+    """Persist extracted frame data URIs to disk for later inspection."""
+    if not frame_data_uris:
+        return []
+
+    root_dir = _resolve_inference_frames_dir(output_dir)
+    safe_event_id = _safe_segment(event_id)
+    if session_id:
+        safe_session_id = _safe_segment(session_id)
+        target_dir = root_dir / "sessions" / safe_session_id / "events" / safe_event_id
+    else:
+        target_dir = root_dir / "events" / safe_event_id
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_paths: list[Path] = []
+    for index, data_uri in enumerate(frame_data_uris, start=1):
+        if not data_uri.startswith("data:") or ";base64," not in data_uri:
+            logger.warning("Skipping malformed frame data URI for event %s", event_id)
+            continue
+
+        header, encoded = data_uri.split(",", 1)
+        mime_type = header[5:].split(";", 1)[0]
+        extension = _image_extension_for_mime(mime_type)
+
+        try:
+            image_bytes = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError):
+            logger.warning("Skipping undecodable frame data URI for event %s", event_id)
+            continue
+
+        frame_path = target_dir / f"frame_{index:02d}{extension}"
+        frame_path.write_bytes(image_bytes)
+        saved_paths.append(frame_path)
+
+    if saved_paths:
+        logger.info(
+            "Saved %s inference frame(s) for event %s to %s",
+            len(saved_paths),
+            event_id,
+            target_dir,
+        )
+    return saved_paths
+
+
+def _calculate_positions(total_frames: int, num_frames: int) -> list[int]:
+    if total_frames <= 0:
+        return []
+    if num_frames <= 1:
+        return [total_frames // 2]
+
+    step = total_frames / (num_frames + 1)
+    return [int(step * (i + 1)) for i in range(num_frames)]
+
+
+def _encode_frame(frame, output_format: str, quality: int) -> bytes | None:
+    if output_format.lower() == "png":
+        success, buffer = cv2.imencode(".png", frame)
+    else:
+        encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+        success, buffer = cv2.imencode(".jpg", frame, encode_params)
+
+    if not success:
+        return None
+    return buffer.tobytes()
 
 
 def extract_frames_from_bytes(
@@ -64,41 +165,67 @@ def extract_frames_from_file(
 
     try:
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if total_frames <= 0:
-            raise RuntimeError(f"Video has no frames: {video_path}")
-
-        # Calculate frame positions (evenly distributed)
-        if num_frames == 1:
-            # For single frame, use middle of video
-            positions = [total_frames // 2]
-        else:
-            # Evenly distribute frames, avoiding very first and last
-            step = total_frames / (num_frames + 1)
-            positions = [int(step * (i + 1)) for i in range(num_frames)]
-
-        logger.info(f"Total frames: {total_frames}, extracting at positions: {positions}")
-
         frames = []
-        for pos in positions:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
-            ret, frame = cap.read()
-            if not ret:
-                logger.warning(f"Failed to read frame at position {pos}")
-                continue
 
-            # Encode frame to bytes
-            if output_format.lower() == "png":
-                success, buffer = cv2.imencode(".png", frame)
-            else:
-                encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
-                success, buffer = cv2.imencode(".jpg", frame, encode_params)
+        if total_frames <= 0:
+            logger.warning(
+                "Invalid frame count (%s); falling back to sequential scan for %s",
+                total_frames,
+                video_path,
+            )
+            scan_count = 0
+            while True:
+                ret, _ = cap.read()
+                if not ret:
+                    break
+                scan_count += 1
 
-            if success:
-                frames.append(buffer.tobytes())
-            else:
-                logger.warning(f"Failed to encode frame at position {pos}")
+            if scan_count <= 0:
+                raise RuntimeError(f"Video has no frames: {video_path}")
+
+            positions = _calculate_positions(scan_count, num_frames)
+            logger.info(
+                "Scanned %s frames; extracting at positions: %s",
+                scan_count,
+                positions,
+            )
+
+            cap.release()
+            cap = cv2.VideoCapture(str(video_path))
+            if not cap.isOpened():
+                raise RuntimeError(f"Failed to reopen video: {video_path}")
+
+            position_set = set(positions)
+            frame_index = 0
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                if frame_index in position_set:
+                    encoded = _encode_frame(frame, output_format, quality)
+                    if encoded is not None:
+                        frames.append(encoded)
+                frame_index += 1
+        else:
+            positions = _calculate_positions(total_frames, num_frames)
+            logger.info(f"Total frames: {total_frames}, extracting at positions: {positions}")
+
+            for pos in positions:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
+                ret, frame = cap.read()
+                if not ret:
+                    logger.warning(f"Failed to read frame at position {pos}")
+                    continue
+
+                encoded = _encode_frame(frame, output_format, quality)
+                if encoded is not None:
+                    frames.append(encoded)
+                else:
+                    logger.warning(f"Failed to encode frame at position {pos}")
 
         logger.info(f"Extracted {len(frames)} frames")
+        if len(frames) == 0:
+            raise RuntimeError(f"Failed to decode frames from video: {video_path}")
         return frames
 
     finally:

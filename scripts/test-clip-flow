@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$scripts_dir/.." && pwd)
+
+(
+  cd "$repo_root/worker"
+  PYTHONPATH=. ./.venv/bin/pytest tests/test_frames.py -k invalid_frame_count
+  PYTHONPATH=. ./.venv/bin/pytest tests/test_dev_script.py -k loads_repo_env_file
+)
+
+(
+  cd "$repo_root/e2e"
+  AZURITE_BLOB_ENDPOINT= \
+  AZURITE_ACCOUNT_NAME= \
+  AZURITE_ACCOUNT_KEY= \
+  AZURITE_AUTO_CREATE_CONTAINER=false \
+  PING_WATCH_E2E_BACKEND_URL=http://127.0.0.1:8001 \
+  npm test -- --config playwright.clip-flow.config.ts --grep "critical flow: start session, upload clip, worker summary, event done"
+)

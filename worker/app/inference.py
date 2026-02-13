@@ -46,6 +46,12 @@ def get_hf_token() -> str:
     token = os.environ.get("HF_TOKEN") or os.environ.get("HF_API_TOKEN")
     if not token:
         raise RuntimeError("Missing HF_TOKEN or HF_API_TOKEN environment variable")
+    token = token.strip().strip('"').strip("'")
+    if token.startswith("yhf_"):
+        logger.warning(
+            "HF token appears invalid (starts with 'yhf_'). "
+            "Use a Hugging Face access token that starts with 'hf_'."
+        )
     return token
 
 
@@ -187,6 +193,11 @@ def run_inference(
 
     except httpx.HTTPStatusError as exc:
         logger.error(f"HTTP error during inference: {exc.response.status_code} - {exc.response.text}")
+        if exc.response.status_code == 401:
+            raise RuntimeError(
+                "Inference authentication failed (401 Unauthorized): "
+                "check HF_TOKEN/HF_API_TOKEN."
+            ) from exc
         raise RuntimeError(f"Inference API error: {exc.response.status_code}") from exc
     except httpx.RequestError as exc:
         logger.error(f"Request error during inference: {exc}")

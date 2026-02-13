@@ -9,6 +9,7 @@ from typing import Optional
 from azure.storage.blob import BlobServiceClient
 
 logger = logging.getLogger(__name__)
+DEFAULT_AZURITE_BLOB_API_VERSION = "2021-12-02"
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,21 @@ class BlobConfig:
     account_name: str
     account_key: str
     container: str
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _resolve_local_upload_dir(local_upload_dir: Optional[str]) -> Path:
+    configured = local_upload_dir or os.environ.get("LOCAL_UPLOAD_DIR")
+    if not configured:
+        return _repo_root() / ".local_uploads"
+
+    path = Path(configured).expanduser()
+    if path.is_absolute():
+        return path
+    return _repo_root() / path
 
 
 def load_blob_config() -> BlobConfig:
@@ -43,13 +59,17 @@ def load_blob_config() -> BlobConfig:
 def get_blob_service_client(config: Optional[BlobConfig] = None) -> BlobServiceClient:
     """Create a BlobServiceClient from configuration."""
     config = config or load_blob_config()
+    api_version = os.environ.get("AZURITE_BLOB_API_VERSION", DEFAULT_AZURITE_BLOB_API_VERSION)
     connection_string = (
         f"DefaultEndpointsProtocol=http;"
         f"AccountName={config.account_name};"
         f"AccountKey={config.account_key};"
         f"BlobEndpoint={config.endpoint};"
     )
-    return BlobServiceClient.from_connection_string(connection_string)
+    return BlobServiceClient.from_connection_string(
+        connection_string,
+        api_version=api_version,
+    )
 
 
 def download_clip(
@@ -120,7 +140,7 @@ def download_local_clip(blob_name: str, local_upload_dir: Optional[str] = None) 
     Returns:
         The clip data as bytes
     """
-    local_dir = Path(local_upload_dir or os.environ.get("LOCAL_UPLOAD_DIR", "./.local_uploads"))
+    local_dir = _resolve_local_upload_dir(local_upload_dir)
     file_path = local_dir / blob_name
 
     if not file_path.exists():

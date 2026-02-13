@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 
 from app.blob_client import download_clip, download_local_clip
-from app.frames import extract_frames_as_base64
+from app.frames import extract_frames_as_base64, save_frame_data_uris
 from app.inference import InferenceResult, run_inference
 
 logger = logging.getLogger(__name__)
@@ -134,6 +134,18 @@ def process_clip(payload: dict[str, Any]) -> dict[str, Any]:
             quality=85,
         )
         logger.info(f"Extracted {len(frame_data_uris)} frames")
+        try:
+            save_frame_data_uris(
+                frame_data_uris,
+                event_id=event_id,
+                session_id=session_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to persist inference frames for event %s: %s",
+                event_id,
+                exc,
+            )
 
         # Step 3: Run inference
         logger.info("Running VLM inference")
@@ -160,7 +172,13 @@ def process_clip(payload: dict[str, Any]) -> dict[str, Any]:
         }
 
     except Exception as exc:
-        logger.exception(f"Failed to process clip for event {event_id}: {exc}")
+        is_auth_error = isinstance(exc, RuntimeError) and (
+            "Inference authentication failed" in str(exc)
+        )
+        if is_auth_error:
+            logger.error(f"Failed to process clip for event {event_id}: {exc}")
+        else:
+            logger.exception(f"Failed to process clip for event {event_id}: {exc}")
 
         # Post a fallback summary indicating failure
         try:

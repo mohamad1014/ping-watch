@@ -8,6 +8,27 @@ import {
   saveClip,
 } from './clipStore'
 
+const deleteDatabase = async (name: string) =>
+  new Promise<void>((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(name)
+    request.onsuccess = () => resolve()
+    request.onerror = () => reject(request.error)
+    request.onblocked = () => reject(new Error(`deleteDatabase blocked for ${name}`))
+  })
+
+const createLegacyDbWithoutClipsStore = async () =>
+  new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open('ping-watch', 1)
+    request.onupgradeneeded = () => {
+      // Simulate an old/broken schema that never created the clips store.
+    }
+    request.onsuccess = () => {
+      request.result.close()
+      resolve()
+    }
+    request.onerror = () => reject(request.error)
+  })
+
 const makeClip = (label: string) => ({
   sessionId: 'sess-1',
   deviceId: 'device-1',
@@ -19,6 +40,18 @@ const makeClip = (label: string) => ({
 })
 
 describe('clipStore', () => {
+  it('recovers when an existing db is missing the clips object store', async () => {
+    await deleteDatabase('ping-watch')
+    await createLegacyDbWithoutClipsStore()
+
+    const initial = await listClips()
+    expect(initial).toEqual([])
+
+    const stored = await saveClip(makeClip('legacy'))
+    const fetched = await getClip(stored.id)
+    expect(fetched?.id).toBe(stored.id)
+  })
+
   afterEach(async () => {
     const clips = await listClips()
     await Promise.all(clips.map((clip) => deleteClip(clip.id)))

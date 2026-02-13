@@ -156,6 +156,40 @@ def test_process_clip_error_posts_fallback_summary(monkeypatch):
     assert "Processing failed" in call_kwargs["summary"]
 
 
+def test_process_clip_auth_error_logs_without_traceback(monkeypatch):
+    """Test that auth failures avoid noisy traceback logging."""
+    mock_download = MagicMock(return_value=b"video data")
+    mock_extract = MagicMock(return_value=["data:image/jpeg;base64,frame1"])
+    mock_inference = MagicMock(
+        side_effect=RuntimeError(
+            "Inference authentication failed (401 Unauthorized): check HF_TOKEN/HF_API_TOKEN."
+        )
+    )
+    mock_post = MagicMock(return_value={"status": "done"})
+    mock_log_exception = MagicMock()
+    mock_log_error = MagicMock()
+
+    monkeypatch.setattr(tasks, "download_clip_data", mock_download)
+    monkeypatch.setattr("app.tasks.extract_frames_as_base64", mock_extract)
+    monkeypatch.setattr("app.tasks.run_inference", mock_inference)
+    monkeypatch.setattr(tasks, "post_event_summary", mock_post)
+    monkeypatch.setattr(tasks.logger, "exception", mock_log_exception)
+    monkeypatch.setattr(tasks.logger, "error", mock_log_error)
+
+    payload = {
+        "event_id": "evt_401",
+        "session_id": "sess_401",
+        "clip_blob_name": "test.webm",
+        "clip_container": "clips",
+    }
+
+    result = tasks.process_clip(payload)
+
+    assert result["status"] == "error"
+    mock_log_exception.assert_not_called()
+    mock_log_error.assert_called()
+
+
 def test_process_clip_without_analysis_prompt(monkeypatch):
     """Test process_clip works without analysis_prompt."""
     mock_download = MagicMock(return_value=b"video data")
@@ -184,6 +218,41 @@ def test_process_clip_without_analysis_prompt(monkeypatch):
     assert result["status"] == "done"
     # Verify inference was called without user_prompt
     assert mock_inference.call_args[1]["user_prompt"] is None
+
+
+def test_process_clip_saves_inference_frames(monkeypatch):
+    """Persist extracted frame images for later reference."""
+    mock_download = MagicMock(return_value=b"video data")
+    mock_extract = MagicMock(return_value=["data:image/jpeg;base64,Zm9v"])
+    mock_save_frames = MagicMock(return_value=[])
+    mock_inference = MagicMock(return_value=InferenceResult(
+        label="person",
+        summary="Detected person",
+        confidence=0.91,
+    ))
+    mock_post = MagicMock(return_value={"status": "done"})
+
+    monkeypatch.setattr(tasks, "download_clip_data", mock_download)
+    monkeypatch.setattr("app.tasks.extract_frames_as_base64", mock_extract)
+    monkeypatch.setattr("app.tasks.save_frame_data_uris", mock_save_frames)
+    monkeypatch.setattr("app.tasks.run_inference", mock_inference)
+    monkeypatch.setattr(tasks, "post_event_summary", mock_post)
+
+    payload = {
+        "event_id": "evt_save",
+        "session_id": "sess_save",
+        "clip_blob_name": "test.webm",
+        "clip_container": "clips",
+    }
+
+    result = tasks.process_clip(payload)
+
+    assert result["status"] == "done"
+    mock_save_frames.assert_called_once_with(
+        ["data:image/jpeg;base64,Zm9v"],
+        event_id="evt_save",
+        session_id="sess_save",
+    )
 
 
 def test_process_clip_test_mode_skips_pipeline(monkeypatch):

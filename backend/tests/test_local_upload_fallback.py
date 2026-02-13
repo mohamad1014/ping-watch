@@ -115,3 +115,46 @@ async def test_local_upload_rejects_traversal_paths(monkeypatch, tmp_path):
         assert put.status_code == 400
 
     assert not (tmp_path.parent / "escape").exists()
+
+
+@pytest.mark.anyio
+async def test_local_upload_fallback_when_azurite_unreachable(monkeypatch, tmp_path):
+    monkeypatch.setenv("AZURITE_BLOB_ENDPOINT", "http://127.0.0.1:10000/devstoreaccount1")
+    monkeypatch.setenv("AZURITE_ACCOUNT_NAME", "devstoreaccount1")
+    monkeypatch.setenv(
+        "AZURITE_ACCOUNT_KEY",
+        "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",
+    )
+    monkeypatch.setenv("AZURITE_CLIPS_CONTAINER", "clips")
+    monkeypatch.setenv("AZURITE_AUTO_CREATE_CONTAINER", "true")
+    monkeypatch.setenv("LOCAL_UPLOAD_DIR", str(tmp_path))
+
+    def _raise_azurite_unreachable(_):
+        raise RuntimeError("azurite unreachable")
+
+    monkeypatch.setattr("app.routes.events.ensure_container_exists", _raise_azurite_unreachable)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        start = await client.post("/sessions/start", json={"device_id": "dev_1"})
+        session_id = start.json()["session_id"]
+
+        initiate = await client.post(
+            "/events/upload/initiate",
+            json={
+                "event_id": "clip-azurite-down",
+                "session_id": session_id,
+                "device_id": "dev_1",
+                "trigger_type": "motion",
+                "duration_seconds": 1.0,
+                "clip_mime": "video/webm",
+                "clip_size_bytes": 3,
+            },
+        )
+
+    assert initiate.status_code == 200
+    payload = initiate.json()
+    assert payload["event"]["event_id"] == "clip-azurite-down"
+    assert payload["event"]["clip_container"] == "local"
+    assert payload["upload_url"].startswith("http://test/events/clip-azurite-down/upload")

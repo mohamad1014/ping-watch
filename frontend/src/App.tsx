@@ -2,14 +2,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import {
   type EventResponse,
+  forceStopSession,
   listEvents,
   startSession,
   stopSession,
 } from './api'
-import { getClip, listClips, saveClip, type StoredClip } from './clipStore'
+import {
+  deleteClipsBySession,
+  getClip,
+  listClips,
+  saveClip,
+  type StoredClip,
+} from './clipStore'
 import { uploadPendingClips } from './clipUpload'
 import { ensureDeviceId } from './device'
 import { SequentialRecorder, type ClipCompleteData } from './sequentialRecorder'
+import { createSerialQueue, type SerialQueue } from './clipProcessingQueue'
 import {
   setBenchmark,
   compareWithBenchmark,
@@ -37,6 +45,11 @@ const statusLabels = {
 
 type SessionStatus = keyof typeof statusLabels
 type CaptureStatus = 'idle' | 'active' | 'error'
+type QueuedClip = {
+  data: ClipCompleteData
+  sessionId: string
+  deviceId: string
+}
 
 const getEnvNumber = (key: string) => {
   const env = (import.meta as ImportMeta & {
@@ -107,6 +120,7 @@ function App() {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [events, setEvents] = useState<EventResponse[]>([])
   const [isBusy, setIsBusy] = useState(false)
+  const [isForceStopping, setIsForceStopping] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copiedEventId, setCopiedEventId] = useState<string | null>(null)
   const [analysisPrompt, setAnalysisPrompt] = useState('')
@@ -121,6 +135,7 @@ function App() {
   const [currentClipIndex, setCurrentClipIndex] = useState(0)
   const [benchmarkClipId, setBenchmarkClipId] = useState<string | null>(null)
   const [sessionCounts, setSessionCounts] = useState({ stored: 0, discarded: 0 })
+  const [queuedClipsRemaining, setQueuedClipsRemaining] = useState(0)
 
   // Custom hooks
   const settings = useRecordingSettings()
@@ -134,10 +149,34 @@ function App() {
   const sequentialRecorderRef = useRef<SequentialRecorder | null>(null)
   const clipUrlRef = useRef<string | null>(null)
   const uploadInFlightRef = useRef(false)
-  const isProcessingClipRef = useRef(false)
+  const dropQueuedProcessingRef = useRef(false)
+  const processQueuedClipRef = useRef<(clip: QueuedClip) => Promise<void>>(async () => {})
+  const clipQueueRef = useRef<SerialQueue<QueuedClip> | null>(null)
+
+  if (!clipQueueRef.current) {
+    clipQueueRef.current = createSerialQueue(
+      (queuedClip) => processQueuedClipRef.current(queuedClip),
+      {
+        onError: (error) => {
+          console.error('[App] Error processing clip:', error)
+        },
+        onSizeChange: (size) => {
+          setQueuedClipsRemaining(size)
+        },
+      }
+    )
+  }
 
   // Memoized values
   const lastEvent = useMemo(() => events[events.length - 1], [events])
+  const eventsById = useMemo(
+    () => new Map(events.map((event) => [event.event_id, event])),
+    [events]
+  )
+  const hasProcessingEvents = useMemo(
+    () => events.some((event) => event.status === 'processing'),
+    [events]
+  )
   const clipStats = useMemo(() => {
     const pending = clips.filter((clip) => !clip.uploaded).length
     const failed = clips.filter((clip) => !clip.uploaded && clip.lastUploadError).length
@@ -150,9 +189,134 @@ function App() {
     setClips(nextClips)
   }
 
-  const handleClipComplete = useCallback(
-    async (data: ClipCompleteData) => {
+  const processQueuedClip = useCallback(
+    async (queuedClip: QueuedClip) => {
+      const { data, sessionId: resolvedSessionId, deviceId: resolvedDeviceId } = queuedClip
       const { blob, clipIndex, startTime, metrics } = data
+
+      if (!resolvedSessionId || !resolvedDeviceId) {
+        console.warn('[App] Clip completed but no active session')
+        return
+      }
+      if (dropQueuedProcessingRef.current) {
+        return
+      }
+
+      const clipId = generateClipId()
+      const durationSeconds = (Date.now() - startTime) / 1000
+      setCurrentClipIndex(clipIndex)
+
+      if (clipIndex === 0) {
+        // First clip = benchmark
+        const benchmarkData = createBenchmarkData(clipId, metrics)
+        setBenchmark(benchmarkData)
+        setBenchmarkClipId(clipId)
+        if (dropQueuedProcessingRef.current) return
+
+        await saveClip({
+          sessionId: resolvedSessionId,
+          deviceId: resolvedDeviceId,
+          triggerType: 'benchmark',
+          blob,
+          mimeType: blob.type || 'video/webm',
+          sizeBytes: blob.size,
+          durationSeconds,
+          isBenchmark: true,
+          clipIndex,
+          peakMotionScore: metrics.peakMotionScore,
+          avgMotionScore: metrics.avgMotionScore,
+          motionEventCount: metrics.motionEventCount,
+          peakAudioScore: metrics.peakAudioScore,
+          avgAudioScore: metrics.avgAudioScore,
+        })
+
+        logClipAnalysis({
+          clipIndex,
+          clipId,
+          isBenchmark: true,
+          motionScore: metrics.peakMotionScore,
+          audioScore: metrics.peakAudioScore,
+          decision: 'stored',
+          timestamp: Date.now(),
+          durationMs: durationSeconds * 1000,
+          sizeBytes: blob.size,
+        })
+
+        if (dropQueuedProcessingRef.current) return
+        await refreshClips()
+        setSessionCounts(getCurrentSessionCounts())
+        return
+      }
+
+      // Compare with benchmark
+      const comparison = compareWithBenchmark(metrics, {
+        motionDeltaThreshold: settings.motionDeltaThreshold,
+        motionAbsoluteThreshold: settings.motionAbsoluteThreshold,
+        audioDeltaEnabled: settings.audioDeltaEnabled,
+        audioDeltaThreshold: settings.audioDeltaThreshold,
+        audioAbsoluteEnabled: settings.audioAbsoluteEnabled,
+        audioAbsoluteThreshold: settings.audioAbsoluteThreshold,
+      })
+
+      logClipAnalysis({
+        clipIndex,
+        clipId,
+        isBenchmark: false,
+        motionScore: metrics.peakMotionScore,
+        audioScore: metrics.peakAudioScore,
+        motionDelta: comparison.motionDelta,
+        audioDelta: comparison.audioDelta,
+        decision: comparison.shouldStore ? 'stored' : 'discarded',
+        timestamp: Date.now(),
+        durationMs: durationSeconds * 1000,
+        sizeBytes: blob.size,
+      })
+      if (dropQueuedProcessingRef.current) return
+
+      if (comparison.shouldStore) {
+        const triggerType =
+          comparison.triggeredBy.includes('motionDelta') ||
+          comparison.triggeredBy.includes('motionAbsolute')
+            ? 'motion'
+            : 'audio'
+
+        await saveClip({
+          sessionId: resolvedSessionId,
+          deviceId: resolvedDeviceId,
+          triggerType,
+          blob,
+          mimeType: blob.type || 'video/webm',
+          sizeBytes: blob.size,
+          durationSeconds,
+          isBenchmark: false,
+          clipIndex,
+          peakMotionScore: metrics.peakMotionScore,
+          avgMotionScore: metrics.avgMotionScore,
+          motionEventCount: metrics.motionEventCount,
+          peakAudioScore: metrics.peakAudioScore,
+          avgAudioScore: metrics.avgAudioScore,
+          motionDelta: comparison.motionDelta,
+          audioDelta: comparison.audioDelta,
+          triggeredBy: comparison.triggeredBy,
+        })
+
+        if (dropQueuedProcessingRef.current) return
+        await refreshClips()
+
+        const benchmarkData = createBenchmarkData(clipId, metrics)
+        setBenchmark(benchmarkData)
+        setBenchmarkClipId(clipId)
+      }
+
+      setSessionCounts(getCurrentSessionCounts())
+    },
+    [settings]
+  )
+
+  processQueuedClipRef.current = processQueuedClip
+
+  const handleClipComplete = useCallback(
+    (data: ClipCompleteData) => {
       const resolvedSessionId = sessionIdRef.current
       const resolvedDeviceId = deviceIdRef.current
 
@@ -161,127 +325,13 @@ function App() {
         return
       }
 
-      if (isProcessingClipRef.current) {
-        console.warn('[App] Already processing a clip, skipping')
-        return
-      }
-      isProcessingClipRef.current = true
-
-      try {
-        const clipId = generateClipId()
-        const durationSeconds = (Date.now() - startTime) / 1000
-        setCurrentClipIndex(clipIndex)
-
-        if (clipIndex === 0) {
-          // First clip = benchmark
-          const benchmarkData = createBenchmarkData(clipId, metrics)
-          setBenchmark(benchmarkData)
-          setBenchmarkClipId(clipId)
-
-          await saveClip({
-            sessionId: resolvedSessionId,
-            deviceId: resolvedDeviceId,
-            triggerType: 'benchmark',
-            blob,
-            mimeType: blob.type || 'video/webm',
-            sizeBytes: blob.size,
-            durationSeconds,
-            isBenchmark: true,
-            clipIndex,
-            peakMotionScore: metrics.peakMotionScore,
-            avgMotionScore: metrics.avgMotionScore,
-            motionEventCount: metrics.motionEventCount,
-            peakAudioScore: metrics.peakAudioScore,
-            avgAudioScore: metrics.avgAudioScore,
-          })
-
-          logClipAnalysis({
-            clipIndex,
-            clipId,
-            isBenchmark: true,
-            motionScore: metrics.peakMotionScore,
-            audioScore: metrics.peakAudioScore,
-            decision: 'stored',
-            timestamp: Date.now(),
-            durationMs: durationSeconds * 1000,
-            sizeBytes: blob.size,
-          })
-
-          await refreshClips()
-          await uploadPendingClips({ sessionId: resolvedSessionId })
-          setSessionCounts(getCurrentSessionCounts())
-          setEvents(await listEvents(resolvedSessionId))
-          return
-        }
-
-        // Compare with benchmark
-        const comparison = compareWithBenchmark(metrics, {
-          motionDeltaThreshold: settings.motionDeltaThreshold,
-          motionAbsoluteThreshold: settings.motionAbsoluteThreshold,
-          audioDeltaEnabled: settings.audioDeltaEnabled,
-          audioDeltaThreshold: settings.audioDeltaThreshold,
-          audioAbsoluteEnabled: settings.audioAbsoluteEnabled,
-          audioAbsoluteThreshold: settings.audioAbsoluteThreshold,
-        })
-
-        logClipAnalysis({
-          clipIndex,
-          clipId,
-          isBenchmark: false,
-          motionScore: metrics.peakMotionScore,
-          audioScore: metrics.peakAudioScore,
-          motionDelta: comparison.motionDelta,
-          audioDelta: comparison.audioDelta,
-          decision: comparison.shouldStore ? 'stored' : 'discarded',
-          timestamp: Date.now(),
-          durationMs: durationSeconds * 1000,
-          sizeBytes: blob.size,
-        })
-
-        if (comparison.shouldStore) {
-          const triggerType =
-            comparison.triggeredBy.includes('motionDelta') ||
-            comparison.triggeredBy.includes('motionAbsolute')
-              ? 'motion'
-              : 'audio'
-
-          await saveClip({
-            sessionId: resolvedSessionId,
-            deviceId: resolvedDeviceId,
-            triggerType,
-            blob,
-            mimeType: blob.type || 'video/webm',
-            sizeBytes: blob.size,
-            durationSeconds,
-            isBenchmark: false,
-            clipIndex,
-            peakMotionScore: metrics.peakMotionScore,
-            avgMotionScore: metrics.avgMotionScore,
-            motionEventCount: metrics.motionEventCount,
-            peakAudioScore: metrics.peakAudioScore,
-            avgAudioScore: metrics.avgAudioScore,
-            motionDelta: comparison.motionDelta,
-            audioDelta: comparison.audioDelta,
-            triggeredBy: comparison.triggeredBy,
-          })
-
-          await refreshClips()
-          await uploadPendingClips({ sessionId: resolvedSessionId })
-
-          const benchmarkData = createBenchmarkData(clipId, metrics)
-          setBenchmark(benchmarkData)
-          setBenchmarkClipId(clipId)
-          setEvents(await listEvents(resolvedSessionId))
-        }
-
-        setSessionCounts(getCurrentSessionCounts())
-      } catch (err) {
-        console.error('[App] Error processing clip:', err)
-      } finally {
-        isProcessingClipRef.current = false
-      }
+      clipQueueRef.current?.enqueue({
+        data,
+        sessionId: resolvedSessionId,
+        deviceId: resolvedDeviceId,
+      })
     },
-    [settings]
+    []
   )
 
   const startCapture = async () => {
@@ -356,6 +406,8 @@ function App() {
       setSessionStatus('active')
 
       startLogSession(session.session_id)
+      dropQueuedProcessingRef.current = false
+      clipQueueRef.current?.clear()
       setCurrentClipIndex(0)
       setBenchmarkClipId(null)
       clearBenchmark()
@@ -373,22 +425,20 @@ function App() {
   }
 
   const handleStop = async () => {
-    if (!sessionId) return
+    const resolvedSessionId = sessionIdRef.current ?? sessionId
+    if (!resolvedSessionId) return
 
-    setIsBusy(true)
     setError(null)
+    stopCapture()
+    setSessionStatus('stopped')
+    endLogSession()
 
     try {
-      await stopSession(sessionId)
-      setSessionStatus('stopped')
-      sessionIdRef.current = null
-      endLogSession()
-      stopCapture()
+      await stopSession(resolvedSessionId)
+      setEvents(await listEvents(resolvedSessionId))
     } catch (err) {
       console.error(err)
-      setError('Unable to stop session')
-    } finally {
-      setIsBusy(false)
+      setError('Stopped locally, but unable to stop session on server')
     }
   }
 
@@ -400,6 +450,33 @@ function App() {
     clipUrlRef.current = url
     setSelectedClipUrl(url)
     setSelectedClipId(clipId)
+  }
+
+  const handleForceStop = async () => {
+    const resolvedSessionId = sessionIdRef.current ?? sessionId
+    if (!resolvedSessionId) return
+
+    setIsForceStopping(true)
+    setError(null)
+    dropQueuedProcessingRef.current = true
+    clipQueueRef.current?.clear()
+    stopCapture()
+    setSessionStatus('stopped')
+    setSessionId(null)
+    sessionIdRef.current = null
+    endLogSession()
+    setEvents([])
+
+    try {
+      await deleteClipsBySession(resolvedSessionId)
+      await refreshClips()
+      await forceStopSession(resolvedSessionId)
+    } catch (err) {
+      console.error(err)
+      setError('Force stop failed to cancel server processing')
+    } finally {
+      setIsForceStopping(false)
+    }
   }
 
   const handleUploadClips = async () => {
@@ -437,7 +514,7 @@ function App() {
 
   // Poll for events
   useEffect(() => {
-    if (sessionStatus !== 'active' || !sessionId) return
+    if (!sessionId || (sessionStatus !== 'active' && !hasProcessingEvents)) return
 
     let cancelled = false
     const refresh = async () => {
@@ -449,12 +526,13 @@ function App() {
       }
     }
 
+    void refresh()
     const interval = setInterval(refresh, getPollIntervalMs())
     return () => {
       cancelled = true
       clearInterval(interval)
     }
-  }, [sessionId, sessionStatus])
+  }, [hasProcessingEvents, sessionId, sessionStatus])
 
   // Upload clips periodically
   useEffect(() => {
@@ -555,6 +633,20 @@ function App() {
             <span className="status-label">Session stats</span>
             <span className="status-value">
               Stored: {sessionCounts.stored} / Discarded: {sessionCounts.discarded}
+            </span>
+          </div>
+          <div className="status-row">
+            <span className="status-label">Queued clips</span>
+            <span className="status-value status-queue">
+              {queuedClipsRemaining} remaining
+              <button
+                className="secondary status-inline-action"
+                type="button"
+                onClick={handleForceStop}
+                disabled={!sessionId || isForceStopping}
+              >
+                Force stop
+              </button>
             </span>
           </div>
           <div className="status-row">
@@ -769,44 +861,62 @@ function App() {
             <p className="events-empty">No stored clips yet.</p>
           ) : (
             <ul className="clip-list">
-              {clips.map((clip) => (
-                <li key={clip.id} className="clip-item">
-                  <div>
-                    <div className="clip-id">
-                      {clip.id}
-                      {clip.isBenchmark && <span className="clip-badge benchmark">Benchmark</span>}
+              {clips.map((clip) => {
+                const relatedEvent = eventsById.get(clip.id)
+                const relatedConfidence = formatConfidence(relatedEvent?.confidence)
+                return (
+                  <li key={clip.id} className="clip-item">
+                    <div>
+                      <div className="clip-id">
+                        {clip.id}
+                        {clip.isBenchmark && <span className="clip-badge benchmark">Benchmark</span>}
+                      </div>
+                      <div className="clip-meta">
+                        <span>{formatDuration(clip.durationSeconds)}</span>
+                        <span>{formatBytes(clip.sizeBytes)}</span>
+                        <span>{clip.triggerType}</span>
+                        <span>{clip.uploaded ? 'uploaded' : 'pending'}</span>
+                        {relatedEvent && (
+                          <span className={`clip-inference-status status-${relatedEvent.status}`}>
+                            inference: {relatedEvent.status}
+                          </span>
+                        )}
+                        {clip.peakMotionScore !== undefined && (
+                          <span>peak motion: {clip.peakMotionScore.toFixed(3)}</span>
+                        )}
+                        {clip.peakAudioScore !== undefined && (
+                          <span>peak audio: {clip.peakAudioScore.toFixed(3)}</span>
+                        )}
+                        {clip.triggeredBy && clip.triggeredBy.length > 0 && (
+                          <span className="clip-triggers">
+                            triggered: {formatTriggers(clip.triggeredBy)}
+                          </span>
+                        )}
+                        {!clip.uploaded && clip.lastUploadError && (
+                          <span className="clip-error">{clip.lastUploadError}</span>
+                        )}
+                      </div>
+                      {relatedEvent?.summary && (
+                        <p className="clip-inference-summary">{relatedEvent.summary}</p>
+                      )}
+                      {(relatedEvent?.label || relatedConfidence) && (
+                        <div className="clip-inference-meta">
+                          {relatedEvent?.label && <span>{relatedEvent.label}</span>}
+                          {relatedConfidence && <span>{relatedConfidence}</span>}
+                        </div>
+                      )}
                     </div>
-                    <div className="clip-meta">
-                      <span>{formatDuration(clip.durationSeconds)}</span>
-                      <span>{formatBytes(clip.sizeBytes)}</span>
-                      <span>{clip.triggerType}</span>
-                      <span>{clip.uploaded ? 'uploaded' : 'pending'}</span>
-                      {clip.peakMotionScore !== undefined && (
-                        <span>peak motion: {clip.peakMotionScore.toFixed(3)}</span>
-                      )}
-                      {clip.peakAudioScore !== undefined && (
-                        <span>peak audio: {clip.peakAudioScore.toFixed(3)}</span>
-                      )}
-                      {clip.triggeredBy && clip.triggeredBy.length > 0 && (
-                        <span className="clip-triggers">
-                          triggered: {formatTriggers(clip.triggeredBy)}
-                        </span>
-                      )}
-                      {!clip.uploaded && clip.lastUploadError && (
-                        <span className="clip-error">{clip.lastUploadError}</span>
-                      )}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => handlePreviewClip(clip.id)}
-                    aria-label={`Preview ${clip.id}`}
-                  >
-                    Preview
-                  </button>
-                </li>
-              ))}
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => handlePreviewClip(clip.id)}
+                      aria-label={`Preview ${clip.id}`}
+                    >
+                      Preview
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
           )}
           {selectedClipUrl && (

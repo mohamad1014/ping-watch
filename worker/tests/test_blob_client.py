@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -57,6 +58,24 @@ def test_download_local_clip_not_found():
             blob_client.download_local_clip("nonexistent.webm", local_upload_dir=tmpdir)
 
 
+def test_download_local_clip_uses_repo_root_default_dir(monkeypatch, tmp_path):
+    monkeypatch.delenv("LOCAL_UPLOAD_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    clip_name = f"{uuid.uuid4()}.webm"
+    blob_name = f"sessions/sess-default/events/{clip_name}"
+    repo_root = Path(__file__).resolve().parents[2]
+    clip_path = repo_root / ".local_uploads" / "sessions" / "sess-default" / "events" / clip_name
+    clip_path.parent.mkdir(parents=True, exist_ok=True)
+    clip_path.write_bytes(b"default repo-root clip")
+
+    try:
+        result = blob_client.download_local_clip(blob_name)
+        assert result == b"default repo-root clip"
+    finally:
+        clip_path.unlink(missing_ok=True)
+
+
 def test_download_clip_calls_blob_service(monkeypatch):
     """Test that download_clip calls the blob service client."""
     mock_config = blob_client.BlobConfig(
@@ -88,3 +107,38 @@ def test_download_clip_calls_blob_service(monkeypatch):
         container="clips",
         blob="sessions/sess_1/events/evt_1.webm",
     )
+
+
+def test_get_blob_service_client_uses_default_api_version():
+    config = blob_client.BlobConfig(
+        endpoint="http://localhost:10000/devstoreaccount1",
+        account_name="devstoreaccount1",
+        account_key="localkey",
+        container="clips",
+    )
+
+    with patch.object(blob_client.BlobServiceClient, "from_connection_string") as factory:
+        blob_client.get_blob_service_client(config)
+
+    factory.assert_called_once_with(
+        "DefaultEndpointsProtocol=http;"
+        "AccountName=devstoreaccount1;"
+        "AccountKey=localkey;"
+        "BlobEndpoint=http://localhost:10000/devstoreaccount1;",
+        api_version="2021-12-02",
+    )
+
+
+def test_get_blob_service_client_uses_env_api_version_override(monkeypatch):
+    config = blob_client.BlobConfig(
+        endpoint="http://localhost:10000/devstoreaccount1",
+        account_name="devstoreaccount1",
+        account_key="localkey",
+        container="clips",
+    )
+    monkeypatch.setenv("AZURITE_BLOB_API_VERSION", "2023-11-03")
+
+    with patch.object(blob_client.BlobServiceClient, "from_connection_string") as factory:
+        blob_client.get_blob_service_client(config)
+
+    assert factory.call_args.kwargs["api_version"] == "2023-11-03"

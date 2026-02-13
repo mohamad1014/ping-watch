@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test'
 import { processUploadedEventWithWorker } from './helpers/worker'
 
+const backendBaseUrl = process.env.PING_WATCH_E2E_BACKEND_URL ?? 'http://localhost:8000'
+
 type SessionResponse = {
   session_id: string
   device_id: string
@@ -40,7 +42,7 @@ test('shows the app shell and backend health', async ({ page, request }) => {
       .__PING_WATCH_DISABLE_MEDIA__ = true
   })
 
-  const response = await request.get('http://localhost:8000/health')
+  const response = await request.get(`${backendBaseUrl}/health`)
   expect(response.ok()).toBeTruthy()
   await expect(response.json()).resolves.toMatchObject({ status: 'ok' })
 
@@ -127,7 +129,7 @@ test('critical flow: start session, upload clip, worker summary, event done', as
   await expect(page.getByText('Capture disabled')).toBeVisible()
 
   const session = await pollFor(async () => {
-    const response = await request.get('http://localhost:8000/sessions')
+    const response = await request.get(`${backendBaseUrl}/sessions`)
     const sessions = await response.json() as SessionResponse[]
     const latest = sessions.at(-1)
     if (!latest || latest.status !== 'active') return undefined
@@ -142,7 +144,7 @@ test('critical flow: start session, upload clip, worker summary, event done', as
 
   const uploadedEvent = await pollFor(async () => {
     const response = await request.get(
-      `http://localhost:8000/events?session_id=${session.session_id}`
+      `${backendBaseUrl}/events?session_id=${session.session_id}`
     )
     const events = await response.json() as EventResponse[]
     return events.find(
@@ -152,7 +154,7 @@ test('critical flow: start session, upload clip, worker summary, event done', as
 
   expect(uploadedEvent?.clip_etag).toBeTruthy()
 
-  await processUploadedEventWithWorker('http://localhost:8000', {
+  await processUploadedEventWithWorker(backendBaseUrl, {
     event_id: uploadedEvent.event_id,
     session_id: uploadedEvent.session_id,
     clip_container: uploadedEvent.clip_container ?? '',
@@ -161,7 +163,7 @@ test('critical flow: start session, upload clip, worker summary, event done', as
 
   const completedEvent = await pollFor(async () => {
     const response = await request.get(
-      `http://localhost:8000/events?session_id=${session.session_id}`
+      `${backendBaseUrl}/events?session_id=${session.session_id}`
     )
     const events = await response.json() as EventResponse[]
     const event = events.find((entry) => entry.event_id === clipId)
@@ -170,6 +172,6 @@ test('critical flow: start session, upload clip, worker summary, event done', as
   }, 10_000)
 
   expect(completedEvent.label).toBe('test')
-  await expect(page.getByText('done')).toBeVisible()
-  await expect(page.getByText(/Critical flow test summary/)).toBeVisible()
+  await expect(page.locator('.event-status.status-done').first()).toBeVisible()
+  await expect(page.locator('.event-summary').filter({ hasText: /Critical flow test summary/ }).first()).toBeVisible()
 })

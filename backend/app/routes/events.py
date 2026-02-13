@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from uuid import uuid4
 import anyio
 import hashlib
+import logging
 import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -28,6 +29,7 @@ from app.store import (
 )
 
 router = APIRouter(prefix="/events", tags=["events"])
+logger = logging.getLogger(__name__)
 
 
 class CreateEventRequest(BaseModel):
@@ -64,8 +66,30 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
 def _get_local_upload_dir() -> Path:
-    return Path(os.environ.get("LOCAL_UPLOAD_DIR", "./.local_uploads"))
+    configured = os.environ.get("LOCAL_UPLOAD_DIR")
+    if not configured:
+        return _repo_root() / ".local_uploads"
+
+    path = Path(configured).expanduser()
+    if path.is_absolute():
+        return path
+    return _repo_root() / path
+
+
+def _build_local_upload_info(request: Request, event_id: str, blob_name: str) -> dict[str, str]:
+    upload_url = str(request.base_url).rstrip("/") + f"/events/{event_id}/upload"
+    return {
+        "upload_url": upload_url,
+        "blob_url": upload_url,
+        "clip_container": "local",
+        "clip_blob_name": blob_name,
+        "clip_uri": f"local://{blob_name}",
+    }
 
 
 @router.post("")
@@ -96,6 +120,7 @@ async def initiate_upload_endpoint(
     event_id = payload.event_id or str(uuid4())
     blob_name = build_blob_name(payload.session_id, event_id, payload.clip_mime)
     expiry = _utc_now() + timedelta(seconds=900)
+    upload_info = _build_local_upload_info(request, event_id, blob_name)
 
     config = None
     try:
@@ -103,25 +128,27 @@ async def initiate_upload_endpoint(
     except RuntimeError:
         config = None
 
-    if config is None:
-        upload_url = str(request.base_url).rstrip("/") + f"/events/{event_id}/upload"
-        blob_url = upload_url
-        clip_container = "local"
-        clip_blob_name = blob_name
-    else:
-        blob_url = build_blob_url(config, blob_name)
-        sas_query, expiry = generate_blob_upload_sas(config=config, blob_name=blob_name)
-        upload_url = f"{blob_url}?{sas_query}"
-        clip_container = config.container
-        clip_blob_name = blob_name
-
+    if config is not None:
         if config.auto_create_container:
             try:
                 await anyio.to_thread.run_sync(ensure_container_exists, config)
             except Exception as exc:
-                raise HTTPException(
-                    status_code=500, detail=f"failed to ensure container exists: {exc}"
-                ) from exc
+                logger.warning(
+                    "Falling back to local uploads because Azurite container init failed: %s",
+                    exc,
+                )
+                config = None
+
+    if config is not None:
+        blob_url = build_blob_url(config, blob_name)
+        sas_query, expiry = generate_blob_upload_sas(config=config, blob_name=blob_name)
+        upload_info = {
+            "upload_url": f"{blob_url}?{sas_query}",
+            "blob_url": blob_url,
+            "clip_container": config.container,
+            "clip_blob_name": blob_name,
+            "clip_uri": blob_url,
+        }
 
     try:
         record = create_event(
@@ -130,12 +157,12 @@ async def initiate_upload_endpoint(
             payload.device_id,
             payload.trigger_type,
             payload.duration_seconds,
-            blob_url if config is not None else f"local://{blob_name}",
+            upload_info["clip_uri"],
             payload.clip_mime,
             payload.clip_size_bytes,
             event_id=event_id,
-            clip_container=clip_container,
-            clip_blob_name=clip_blob_name,
+            clip_container=upload_info["clip_container"],
+            clip_blob_name=upload_info["clip_blob_name"],
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -145,8 +172,8 @@ async def initiate_upload_endpoint(
 
     return {
         "event": event_to_dict(record),
-        "upload_url": upload_url,
-        "blob_url": blob_url,
+        "upload_url": upload_info["upload_url"],
+        "blob_url": upload_info["blob_url"],
         "expires_at": expiry.isoformat(),
     }
 

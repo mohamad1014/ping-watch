@@ -2,6 +2,7 @@ import { spawn } from 'child_process'
 import { once } from 'events'
 import { access, rm } from 'fs/promises'
 import net from 'net'
+import { tmpdir } from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
@@ -57,8 +58,17 @@ export const startServers = async () => {
 
   const uvicornPath = path.join(backendDir, '.venv', 'bin', 'uvicorn')
   await access(uvicornPath)
-  const dbPath = path.join(backendDir, 'integration.db')
+  const dbPath = path.join(
+    tmpdir(),
+    `ping-watch-live-flow-${process.pid}-${Date.now()}.db`
+  )
+  const dbUrl = `sqlite:///${dbPath.replace(/\\/g, '/')}`
+  const localUploadDir = path.join(
+    tmpdir(),
+    `ping-watch-live-flow-uploads-${process.pid}-${Date.now()}`
+  )
   await rm(dbPath, { force: true })
+  await rm(localUploadDir, { recursive: true, force: true })
 
   const backendProcess = spawn(
     uvicornPath,
@@ -68,7 +78,8 @@ export const startServers = async () => {
       env: {
         ...process.env,
         PYTHONPATH: backendDir,
-        DATABASE_URL: 'sqlite:///./integration.db',
+        DATABASE_URL: dbUrl,
+        LOCAL_UPLOAD_DIR: localUploadDir,
       },
       stdio: 'inherit',
     }
@@ -97,6 +108,7 @@ export const startServers = async () => {
       once(frontendProcess, 'exit').catch(() => undefined),
     ])
     await rm(dbPath, { force: true })
+    await rm(localUploadDir, { recursive: true, force: true })
   }
 
   try {

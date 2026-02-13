@@ -116,6 +116,15 @@ def test_get_hf_token_fallback(monkeypatch):
     assert result == "fallback_token"
 
 
+def test_get_hf_token_strips_whitespace(monkeypatch):
+    """Test that HF token is sanitized from accidental whitespace."""
+    monkeypatch.setenv("HF_TOKEN", "  test_token_123 \n")
+
+    result = inference.get_hf_token()
+
+    assert result == "test_token_123"
+
+
 def test_get_hf_token_missing(monkeypatch):
     """Test that missing HF token raises RuntimeError."""
     monkeypatch.delenv("HF_TOKEN", raising=False)
@@ -178,6 +187,26 @@ def test_run_inference_api_error(monkeypatch):
 
     with patch.object(httpx, "post", return_value=mock_response):
         with pytest.raises(RuntimeError, match="Inference API error"):
+            inference.run_inference(
+                frame_data_uris=["data:image/jpeg;base64,test"],
+            )
+
+
+def test_run_inference_unauthorized_error(monkeypatch):
+    """Test that 401 errors return an actionable auth message."""
+    monkeypatch.setenv("HF_TOKEN", "test_token")
+
+    mock_response = MagicMock()
+    mock_response.status_code = 401
+    mock_response.text = '{"error":"Invalid username or password."}'
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "Unauthorized",
+        request=MagicMock(),
+        response=mock_response,
+    )
+
+    with patch.object(httpx, "post", return_value=mock_response):
+        with pytest.raises(RuntimeError, match="Inference authentication failed"):
             inference.run_inference(
                 frame_data_uris=["data:image/jpeg;base64,test"],
             )

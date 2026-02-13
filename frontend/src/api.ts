@@ -98,6 +98,17 @@ export const stopSession = (sessionId: string) =>
     body: { session_id: sessionId },
   })
 
+export type ForceStopSessionResponse = SessionResponse & {
+  dropped_processing_events: number
+  dropped_queued_jobs: number
+}
+
+export const forceStopSession = (sessionId: string) =>
+  request<ForceStopSessionResponse>('/sessions/force-stop', {
+    method: 'POST',
+    body: { session_id: sessionId },
+  })
+
 export const listEvents = (sessionId: string) =>
   request<EventResponse[]>(`/events?session_id=${encodeURIComponent(sessionId)}`)
 
@@ -161,3 +172,26 @@ export const finalizeUpload = (eventId: string, etag: string | null) =>
     method: 'POST',
     body: { etag },
   })
+
+export const uploadClipViaApi = async (
+  eventId: string,
+  blob: Blob,
+  options: { contentType: string }
+): Promise<{ etag: string | null }> => {
+  const response = await fetch(
+    `${API_BASE_URL}/events/${encodeURIComponent(eventId)}/upload`,
+    {
+      method: 'PUT',
+      body: blob,
+      headers: {
+        'Content-Type': options.contentType,
+      },
+    }
+  )
+
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`)
+  }
+
+  return { etag: response.headers.get('etag') }
+}

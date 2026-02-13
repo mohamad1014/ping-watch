@@ -172,6 +172,17 @@ def list_events(db: Session, session_id: Optional[str] = None) -> list[EventMode
     return list(db.scalars(stmt))
 
 
+def delete_processing_events_for_session(db: Session, session_id: str) -> int:
+    result = db.execute(
+        delete(EventModel).where(
+            EventModel.session_id == session_id,
+            EventModel.status == "processing",
+        )
+    )
+    db.commit()
+    return int(result.rowcount or 0)
+
+
 def _format_dt(value: Optional[datetime]) -> Optional[str]:
     if value is None:
         return None

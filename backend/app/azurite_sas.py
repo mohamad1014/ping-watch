@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 
 @dataclass(frozen=True)
@@ -192,9 +192,11 @@ def ensure_container_exists(config: AzuriteConfig) -> None:
     x_ms_version = config.sas_version
     x_ms_date = _format_sas_dt(_utc_now())
     container_url = f"{config.endpoint}/{config.container}?restype=container"
-    canonicalized_resource = (
-        f"/{config.account_name}/{config.container}\nrestype:container"
+    endpoint_path = urlparse(config.endpoint).path.strip("/")
+    resource_path = "/".join(
+        part for part in (endpoint_path, config.container) if part
     )
+    canonicalized_resource = f"/{config.account_name}/{resource_path}\nrestype:container"
     authorization = _build_shared_key_authorization(
         config=config,
         method="PUT",

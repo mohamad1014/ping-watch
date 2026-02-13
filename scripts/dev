@@ -4,6 +4,12 @@ set -euo pipefail
 scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$scripts_dir/.." && pwd)
 
+if [[ -f "$repo_root/.env" ]]; then
+  set -a
+  . "$repo_root/.env"
+  set +a
+fi
+
 pids=()
 cleanup() {
   for pid in "${pids[@]}"; do

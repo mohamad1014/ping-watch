@@ -3,12 +3,13 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import * as clipUpload from './clipUpload'
-import { getClip, listClips, saveClip } from './clipStore'
+import { deleteClipsBySession, getClip, listClips, saveClip } from './clipStore'
 
 vi.mock('./clipStore', () => ({
   saveClip: vi.fn(),
   listClips: vi.fn(),
   getClip: vi.fn(),
+  deleteClipsBySession: vi.fn(),
   markClipUploaded: vi.fn(),
   scheduleClipRetry: vi.fn(),
 }))
@@ -16,6 +17,7 @@ vi.mock('./clipStore', () => ({
 const mockedSaveClip = vi.mocked(saveClip)
 const mockedListClips = vi.mocked(listClips)
 const mockedGetClip = vi.mocked(getClip)
+const mockedDeleteClipsBySession = vi.mocked(deleteClipsBySession)
 
 const buildResponse = (payload: unknown) =>
   Promise.resolve({
@@ -36,6 +38,7 @@ const createFetchMock = (routes: {
   registerDevice?: unknown
   start: unknown
   stop: unknown
+  forceStop?: unknown
   createEvent?: unknown
   initiateUpload?: unknown
   finalizeUpload?: unknown
@@ -85,6 +88,16 @@ const createFetchMock = (routes: {
       return buildResponse(routes.stop)
     }
 
+    if (url.endsWith('/sessions/force-stop')) {
+      return buildResponse(
+        routes.forceStop ?? {
+          ...(routes.stop as Record<string, unknown>),
+          dropped_processing_events: 0,
+          dropped_queued_jobs: 0,
+        }
+      )
+    }
+
     return buildResponse({})
   })
 }
@@ -100,6 +113,7 @@ describe('App', () => {
     runtimeFlags.__PING_WATCH_CLIP_DURATION_MS__ = 10000
     mockedSaveClip.mockClear()
     mockedListClips.mockResolvedValue([])
+    mockedDeleteClipsBySession.mockResolvedValue(undefined)
     localStorage.clear()
   })
 
@@ -140,7 +154,7 @@ describe('App', () => {
     )
     expect(await screen.findByText('Active')).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: /stop/i }))
+    await user.click(screen.getByRole('button', { name: /^stop$/i }))
 
     expect(fetchMock).toHaveBeenCalledWith(
       'http://localhost:8000/sessions/stop',
@@ -151,6 +165,329 @@ describe('App', () => {
     expect(await screen.findByText('Stopped')).toBeInTheDocument()
 
     vi.restoreAllMocks()
+  })
+
+  it('shows queued clips counter and force stop control', async () => {
+    render(<App />)
+
+    expect(await screen.findByText(/queued clips/i)).toBeInTheDocument()
+    expect(screen.getByText('0 remaining')).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /force stop/i })
+    ).toBeInTheDocument()
+  })
+
+  it('force stop clears local clips and requests server-side force stop', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      forceStop: {
+        session_id: 'sess_1',
+        device_id: 'device-1',
+        status: 'stopped',
+        dropped_processing_events: 2,
+        dropped_queued_jobs: 1,
+      },
+      createEvent: {},
+      events: [[]],
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    await user.click(
+      screen.getByRole('button', { name: /start monitoring/i })
+    )
+    expect(await screen.findByText('Active')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /force stop/i }))
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/sessions/force-stop',
+      expect.objectContaining({
+        method: 'POST',
+      })
+    )
+    expect(mockedDeleteClipsBySession).toHaveBeenCalledWith('sess_1')
+    expect(await screen.findByText('Stopped')).toBeInTheDocument()
+  })
+
+  it('allows force stop after normal stop while backend processing may still be running', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      forceStop: {
+        session_id: 'sess_1',
+        device_id: 'device-1',
+        status: 'stopped',
+        dropped_processing_events: 1,
+        dropped_queued_jobs: 1,
+      },
+      createEvent: {},
+      events: [[]],
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: /start monitoring/i }))
+    await user.click(screen.getByRole('button', { name: /^stop$/i }))
+
+    const forceStopButton = screen.getByRole('button', { name: /force stop/i })
+    expect(forceStopButton).toBeEnabled()
+
+    await user.click(forceStopButton)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/sessions/force-stop',
+      expect.objectContaining({
+        method: 'POST',
+      })
+    )
+  })
+
+  it('stops local capture immediately even when stop API is pending', async () => {
+    runtimeFlags.__PING_WATCH_DISABLE_MEDIA__ = false
+    const user = userEvent.setup()
+    const trackStop = vi.fn()
+    const playSpy = vi
+      .spyOn(HTMLMediaElement.prototype, 'play')
+      .mockImplementation(() => Promise.resolve())
+    const originalMediaDevices = navigator.mediaDevices
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: {
+        getUserMedia: vi.fn().mockResolvedValue({
+          getTracks: () => [{ stop: trackStop }],
+        }),
+      },
+      configurable: true,
+    })
+
+    const originalMediaRecorder = globalThis.MediaRecorder
+    class PassiveMediaRecorder {
+      static isTypeSupported() {
+        return true
+      }
+      state: 'inactive' | 'recording' = 'inactive'
+      constructor() {}
+      addEventListener() {}
+      start() {
+        this.state = 'recording'
+      }
+      stop() {
+        this.state = 'inactive'
+      }
+    }
+    Object.defineProperty(globalThis, 'MediaRecorder', {
+      value: PassiveMediaRecorder,
+      configurable: true,
+    })
+
+    let resolveStopRequest: ((response: Response) => void) | null = null
+    const pendingStopRequest = new Promise<Response>((resolve) => {
+      resolveStopRequest = resolve
+    })
+
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString()
+      if (url.endsWith('/devices/register')) {
+        return buildResponse({
+          device_id: 'device-1',
+          label: null,
+          created_at: 'now',
+        })
+      }
+      if (url.endsWith('/sessions/start')) {
+        return buildResponse({
+          session_id: 'sess_1',
+          device_id: 'device-1',
+          status: 'active',
+        })
+      }
+      if (url.endsWith('/sessions/stop')) {
+        return pendingStopRequest
+      }
+      if (url.includes('/events')) {
+        return buildResponse([])
+      }
+      if (url.endsWith('/events/upload/initiate') && init?.method === 'POST') {
+        return buildResponse({})
+      }
+      if (url.includes('/upload/finalize') && init?.method === 'POST') {
+        return buildResponse({})
+      }
+      if (init?.method === 'PUT') {
+        return buildUploadResponse('"etag-1"')
+      }
+      return buildResponse({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    await user.click(
+      screen.getByRole('button', { name: /start monitoring/i })
+    )
+    expect(await screen.findByText(/capture active/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^stop$/i }))
+
+    expect(await screen.findByText('Stopped')).toBeInTheDocument()
+    expect(screen.getByText(/capture idle/i)).toBeInTheDocument()
+    expect(trackStop).toHaveBeenCalled()
+
+    resolveStopRequest?.({
+      ok: true,
+      json: async () => ({
+        session_id: 'sess_1',
+        device_id: 'device-1',
+        status: 'stopped',
+      }),
+    } as Response)
+
+    Object.defineProperty(globalThis, 'MediaRecorder', {
+      value: originalMediaRecorder,
+      configurable: true,
+    })
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: originalMediaDevices,
+      configurable: true,
+    })
+    playSpy.mockRestore()
+  })
+
+  it('keeps the final async clip when stop is pressed', async () => {
+    runtimeFlags.__PING_WATCH_DISABLE_MEDIA__ = false
+    const user = userEvent.setup()
+    const trackStop = vi.fn()
+    const playSpy = vi
+      .spyOn(HTMLMediaElement.prototype, 'play')
+      .mockImplementation(() => Promise.resolve())
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const originalMediaDevices = navigator.mediaDevices
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: {
+        getUserMedia: vi.fn().mockResolvedValue({
+          getTracks: () => [{ stop: trackStop }],
+        }),
+      },
+      configurable: true,
+    })
+
+    const originalMediaRecorder = globalThis.MediaRecorder
+    type RecorderListener = (event?: unknown) => void
+    class AsyncFinalClipMediaRecorder {
+      static isTypeSupported() {
+        return true
+      }
+      state: 'inactive' | 'recording' = 'inactive'
+      private listeners: Record<string, RecorderListener[]> = {}
+
+      constructor() {}
+
+      addEventListener(type: string, listener: RecorderListener) {
+        if (!this.listeners[type]) {
+          this.listeners[type] = []
+        }
+        this.listeners[type].push(listener)
+      }
+
+      private emit(type: string, event?: unknown) {
+        for (const listener of this.listeners[type] ?? []) {
+          listener(event)
+        }
+      }
+
+      start() {
+        this.state = 'recording'
+      }
+
+      stop() {
+        this.state = 'inactive'
+        setTimeout(() => {
+          this.emit('dataavailable', { data: new Blob(['final']) })
+          this.emit('stop')
+        }, 0)
+      }
+    }
+    Object.defineProperty(globalThis, 'MediaRecorder', {
+      value: AsyncFinalClipMediaRecorder,
+      configurable: true,
+    })
+
+    let resolveStopRequest: ((response: Response) => void) | null = null
+    const pendingStopRequest = new Promise<Response>((resolve) => {
+      resolveStopRequest = resolve
+    })
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString()
+      if (url.endsWith('/devices/register')) {
+        return buildResponse({
+          device_id: 'device-1',
+          label: null,
+          created_at: 'now',
+        })
+      }
+      if (url.endsWith('/sessions/start')) {
+        return buildResponse({
+          session_id: 'sess_1',
+          device_id: 'device-1',
+          status: 'active',
+        })
+      }
+      if (url.endsWith('/sessions/stop')) {
+        return pendingStopRequest
+      }
+      if (url.includes('/events')) {
+        return buildResponse([])
+      }
+      if (url.endsWith('/events/upload/initiate') && init?.method === 'POST') {
+        return buildResponse({})
+      }
+      if (url.includes('/upload/finalize') && init?.method === 'POST') {
+        return buildResponse({})
+      }
+      if (init?.method === 'PUT') {
+        return buildUploadResponse('"etag-1"')
+      }
+      return buildResponse({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    await user.click(
+      screen.getByRole('button', { name: /start monitoring/i })
+    )
+    await user.click(screen.getByRole('button', { name: /^stop$/i }))
+    await new Promise((resolve) => setTimeout(resolve, 5))
+
+    expect(trackStop).toHaveBeenCalled()
+    expect(mockedSaveClip).toHaveBeenCalled()
+    expect(warnSpy).not.toHaveBeenCalledWith('[App] Clip completed but no active session')
+
+    resolveStopRequest?.({
+      ok: true,
+      json: async () => ({
+        session_id: 'sess_1',
+        device_id: 'device-1',
+        status: 'stopped',
+      }),
+    } as Response)
+
+    Object.defineProperty(globalThis, 'MediaRecorder', {
+      value: originalMediaRecorder,
+      configurable: true,
+    })
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: originalMediaDevices,
+      configurable: true,
+    })
+    warnSpy.mockRestore()
+    playSpy.mockRestore()
   })
 
   it('copies event ids for manual testing', async () => {
@@ -234,6 +571,58 @@ describe('App', () => {
       'src',
       'blob:clip-1'
     )
+
+    vi.restoreAllMocks()
+  })
+
+  it('shows inference output alongside stored clips', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[
+        {
+          event_id: 'clip-1',
+          status: 'done',
+          trigger_type: 'motion',
+          summary: 'Person entered room',
+          label: 'person',
+          confidence: 0.9,
+        },
+      ]],
+    })
+    const clip = {
+      id: 'clip-1',
+      sessionId: 'sess_1',
+      deviceId: 'device-1',
+      triggerType: 'motion' as const,
+      blob: new Blob(['clip']),
+      sizeBytes: 4,
+      mimeType: 'video/webm',
+      durationSeconds: 2,
+      createdAt: 0,
+      uploaded: true,
+      uploadedAt: 1,
+    }
+    mockedListClips.mockResolvedValue([clip])
+    mockedGetClip.mockResolvedValue(clip)
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    await user.click(
+      screen.getByRole('button', { name: /start monitoring/i })
+    )
+
+    const clipSection = screen.getByRole('heading', { name: /stored clips/i }).closest('section')
+    expect(clipSection).not.toBeNull()
+    const scoped = within(clipSection as HTMLElement)
+
+    expect(await scoped.findByText(/inference: done/i)).toBeInTheDocument()
+    expect(scoped.getByText(/person entered room/i)).toBeInTheDocument()
+    expect(scoped.getByText(/^person$/i)).toBeInTheDocument()
+    expect(scoped.getByText(/90%/i)).toBeInTheDocument()
 
     vi.restoreAllMocks()
   })
@@ -502,18 +891,76 @@ describe('App', () => {
       screen.getByRole('button', { name: /start monitoring/i })
     )
 
-    expect(await screen.findByText('1 captured')).toBeInTheDocument()
-
     const list = screen.getByRole('list')
-    expect(within(list).getByText('evt_1')).toBeInTheDocument()
-
     expect(await screen.findByText('2 captured')).toBeInTheDocument()
+    expect(within(list).getByText('evt_1')).toBeInTheDocument()
     expect(within(list).getByText('evt_2')).toBeInTheDocument()
     expect(within(list).getByText('Motion detected')).toBeInTheDocument()
     expect(within(list).getByText('Audio spike')).toBeInTheDocument()
     expect(within(list).getAllByText('done').length).toBeGreaterThan(0)
 
-    await user.click(screen.getByRole('button', { name: /stop/i }))
+    await user.click(screen.getByRole('button', { name: /^stop$/i }))
+
+    vi.restoreAllMocks()
+    ;(globalThis as { __PING_WATCH_POLL_INTERVAL__?: number }).__PING_WATCH_POLL_INTERVAL__ = undefined
+  })
+
+  it('continues polling after stop until processing events become done', async () => {
+    const user = userEvent.setup()
+    ;(globalThis as { __PING_WATCH_POLL_INTERVAL__?: number }).__PING_WATCH_POLL_INTERVAL__ = 20
+
+    const fetchMock = createFetchMock({
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [
+        [
+          {
+            event_id: 'evt_1',
+            status: 'processing',
+            trigger_type: 'motion',
+          },
+        ],
+        [
+          {
+            event_id: 'evt_1',
+            status: 'processing',
+            trigger_type: 'motion',
+          },
+        ],
+        [
+          {
+            event_id: 'evt_1',
+            status: 'processing',
+            trigger_type: 'motion',
+          },
+        ],
+        [
+          {
+            event_id: 'evt_1',
+            status: 'done',
+            trigger_type: 'motion',
+            summary: 'Detected person near desk',
+            label: 'person',
+            confidence: 0.93,
+          },
+        ],
+      ],
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    await user.click(
+      screen.getByRole('button', { name: /start monitoring/i })
+    )
+
+    expect(await screen.findByText(/processing/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /^stop$/i }))
+
+    expect(await screen.findByText('Detected person near desk')).toBeInTheDocument()
+    expect(screen.getByText('done')).toBeInTheDocument()
 
     vi.restoreAllMocks()
     ;(globalThis as { __PING_WATCH_POLL_INTERVAL__?: number }).__PING_WATCH_POLL_INTERVAL__ = undefined

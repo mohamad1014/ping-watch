@@ -1,6 +1,7 @@
 const DB_NAME = 'ping-watch'
 const STORE_NAME = 'clips'
 const DB_VERSION = 1
+const CREATED_AT_INDEX = 'createdAt'
 
 type ClipInput = {
   sessionId: string
@@ -45,21 +46,60 @@ const ensureIndexedDb = () => {
   }
 }
 
+const ensureSchema = (request: IDBOpenDBRequest) => {
+  const db = request.result
+  let store: IDBObjectStore | null = null
+  if (!db.objectStoreNames.contains(STORE_NAME)) {
+    store = db.createObjectStore(STORE_NAME, { keyPath: 'id' })
+  } else {
+    store = request.transaction?.objectStore(STORE_NAME) ?? null
+  }
+
+  if (store && !store.indexNames.contains(CREATED_AT_INDEX)) {
+    store.createIndex(CREATED_AT_INDEX, CREATED_AT_INDEX)
+  }
+}
+
+const openDbConnection = (version: number) =>
+  new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, version)
+    request.onupgradeneeded = () => ensureSchema(request)
+    request.onsuccess = () => {
+      const db = request.result
+      db.onversionchange = () => {
+        db.close()
+        dbPromise = null
+      }
+      resolve(db)
+    }
+    request.onerror = () => reject(request.error)
+  })
+
+const ensureStoreAvailable = async (db: IDBDatabase): Promise<IDBDatabase> => {
+  if (db.objectStoreNames.contains(STORE_NAME)) {
+    return db
+  }
+
+  const nextVersion = db.version + 1
+  db.close()
+  const upgradedDb = await openDbConnection(nextVersion)
+  if (upgradedDb.objectStoreNames.contains(STORE_NAME)) {
+    return upgradedDb
+  }
+
+  upgradedDb.close()
+  throw new Error(`Missing required IndexedDB object store: ${STORE_NAME}`)
+}
+
 const openDb = () => {
   ensureIndexedDb()
   if (!dbPromise) {
-    dbPromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION)
-      request.onupgradeneeded = () => {
-        const db = request.result
-        if (!db.objectStoreNames.contains(STORE_NAME)) {
-          const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' })
-          store.createIndex('createdAt', 'createdAt')
-        }
-      }
-      request.onsuccess = () => resolve(request.result)
-      request.onerror = () => reject(request.error)
-    })
+    dbPromise = openDbConnection(DB_VERSION)
+      .then(ensureStoreAvailable)
+      .catch((error) => {
+        dbPromise = null
+        throw error
+      })
   }
   return dbPromise
 }
@@ -143,6 +183,19 @@ export const deleteClip = async (id: string) => {
   const db = await openDb()
   const tx = db.transaction(STORE_NAME, 'readwrite')
   tx.objectStore(STORE_NAME).delete(id)
+  await waitForTransaction(tx)
+}
+
+export const deleteClipsBySession = async (sessionId: string) => {
+  const db = await openDb()
+  const tx = db.transaction(STORE_NAME, 'readwrite')
+  const store = tx.objectStore(STORE_NAME)
+  const records = await requestToPromise(store.getAll())
+  for (const record of records ?? []) {
+    if (record.sessionId === sessionId) {
+      store.delete(record.id)
+    }
+  }
   await waitForTransaction(tx)
 }
 

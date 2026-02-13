@@ -71,3 +71,33 @@ def test_enqueue_inference_job_without_prompt(monkeypatch):
     assert job_id == "job_456"
     payload = mock_queue.enqueue.call_args[0][1]
     assert payload["analysis_prompt"] is None
+
+
+def test_cancel_session_jobs_removes_matching_jobs():
+    from app import queue
+
+    matching_one = MagicMock()
+    matching_one.args = ({"session_id": "sess_1"},)
+    matching_two = MagicMock()
+    matching_two.args = ({"session_id": "sess_1"},)
+    other = MagicMock()
+    other.args = ({"session_id": "sess_2"},)
+
+    mock_queue = MagicMock()
+    mock_queue.jobs = [matching_one, other, matching_two]
+
+    cancelled = queue.cancel_session_jobs("sess_1", queue=mock_queue)
+
+    assert cancelled == 2
+    matching_one.cancel.assert_called_once()
+    matching_two.cancel.assert_called_once()
+    other.cancel.assert_not_called()
+
+
+def test_cancel_session_jobs_returns_zero_on_queue_error():
+    from app import queue
+
+    with patch.object(queue, "get_queue", side_effect=RuntimeError("queue unavailable")):
+        cancelled = queue.cancel_session_jobs("sess_1")
+
+    assert cancelled == 0

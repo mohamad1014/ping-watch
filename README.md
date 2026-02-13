@@ -89,6 +89,7 @@ Phase 2 complete: upload + event sync with retries/offline queue and background 
 - `./scripts/test-integration` — API + DB integration tests.
 - `./scripts/test-e2e` — Playwright E2E suite.
 - `./scripts/test-all` — run all tests.
+- `./scripts/test-clip-flow` — rerun clip flow verification (worker decode fallback + critical E2E flow).
 - `./scripts/logs` — tail backend logs.
 
 ## Getting Started (local)
@@ -137,7 +138,7 @@ Frontend tests can also override poll/upload intervals via runtime globals; see 
 The “Upload stored clips” button uploads pending clips from IndexedDB to Azurite via SAS URLs issued by the backend.
 While a session is active, the frontend also retries pending uploads on an interval.
 
-If `AZURITE_BLOB_ENDPOINT` / `AZURITE_ACCOUNT_NAME` / `AZURITE_ACCOUNT_KEY` are not set, the backend falls back to a local upload URL and writes clips under `backend/.local_uploads` (override with `LOCAL_UPLOAD_DIR`).
+If `AZURITE_BLOB_ENDPOINT` / `AZURITE_ACCOUNT_NAME` / `AZURITE_ACCOUNT_KEY` are not set, the backend falls back to a local upload URL and writes clips under `./.local_uploads` at the repo root (override with `LOCAL_UPLOAD_DIR`).
 
 1) Start deps: `./scripts/dev-up` (starts Azurite on `:10000`).
 2) Run app: `./scripts/dev`.

@@ -5,6 +5,7 @@ import pytest
 from app.azurite_sas import (
     AzuriteConfig,
     _build_shared_key_string_to_sign,
+    ensure_container_exists,
 )
 
 
@@ -54,3 +55,30 @@ def test_shared_key_string_to_sign_includes_content_length_when_nonzero():
     lines = string_to_sign.split("\n")
     assert lines[3] == "123"
 
+
+def test_ensure_container_exists_uses_path_style_canonicalized_resource(monkeypatch):
+    config = _dummy_config()
+    captured: dict[str, str] = {}
+
+    def _fake_build_auth(**kwargs):
+        captured["canonicalized_resource"] = kwargs["canonicalized_resource"]
+        return "SharedKey devstoreaccount1:signature"
+
+    class _Response:
+        status = 201
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr("app.azurite_sas._build_shared_key_authorization", _fake_build_auth)
+    monkeypatch.setattr("app.azurite_sas.urlopen", lambda *_args, **_kwargs: _Response())
+
+    ensure_container_exists(config)
+
+    assert (
+        captured["canonicalized_resource"]
+        == "/devstoreaccount1/devstoreaccount1/clips\nrestype:container"
+    )

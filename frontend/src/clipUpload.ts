@@ -1,4 +1,4 @@
-import { finalizeUpload, initiateUpload } from './api'
+import { finalizeUpload, initiateUpload, uploadClipViaApi } from './api'
 import {
   listClips,
   markClipUploaded,
@@ -11,6 +11,11 @@ type UploadDeps = {
   finalizeUpload: typeof finalizeUpload
   uploadBlob: (
     uploadUrl: string,
+    blob: Blob,
+    options: { contentType: string }
+  ) => Promise<{ etag: string | null }>
+  uploadBlobViaApi?: (
+    eventId: string,
     blob: Blob,
     options: { contentType: string }
   ) => Promise<{ etag: string | null }>
@@ -62,6 +67,17 @@ const defaultUploadBlob: UploadDeps['uploadBlob'] = async (
 const defaultIsOnline = () =>
   typeof navigator !== 'undefined' ? navigator.onLine : true
 
+const isLocalAzuriteUploadUrl = (uploadUrl: string): boolean => {
+  try {
+    const parsed = new URL(uploadUrl)
+    const localHostnames = new Set(['localhost', '127.0.0.1', '::1'])
+    if (!localHostnames.has(parsed.hostname)) return false
+    return parsed.port === '10000' || parsed.pathname.includes('/devstoreaccount1/')
+  } catch {
+    return false
+  }
+}
+
 export const uploadPendingClips = async ({
   sessionId: _sessionId,
   deps,
@@ -76,10 +92,12 @@ export const uploadPendingClips = async ({
     getNow,
     sleep,
     isOnline,
+    uploadBlobViaApi,
   } = deps ?? {
     initiateUpload,
     finalizeUpload,
     uploadBlob: defaultUploadBlob,
+    uploadBlobViaApi: uploadClipViaApi,
     listClips,
     markClipUploaded,
     scheduleClipRetry,
@@ -108,6 +126,7 @@ export const uploadPendingClips = async ({
       getNow,
       sleep,
       isOnline,
+      uploadBlobViaApi,
     })
     if (uploaded) {
       uploadedCount += 1
@@ -127,7 +146,9 @@ type UploadClipDeps = Pick<
   | 'getNow'
   | 'sleep'
   | 'isOnline'
->
+> & {
+  uploadBlobViaApi?: UploadDeps['uploadBlobViaApi']
+}
 
 const uploadClip = async (
   clip: StoredClip,
@@ -162,9 +183,30 @@ const uploadClip = async (
         clipSizeBytes: clip.sizeBytes,
       })
 
-      const { etag } = await deps.uploadBlob(initiated.uploadUrl, clip.blob, {
-        contentType: clip.mimeType,
-      })
+      if (deps.uploadBlobViaApi && isLocalAzuriteUploadUrl(initiated.uploadUrl)) {
+        const fallbackUpload = await deps.uploadBlobViaApi(clip.id, clip.blob, {
+          contentType: clip.mimeType,
+        })
+        await deps.finalizeUpload(clip.id, fallbackUpload.etag)
+        await deps.markClipUploaded(clip.id)
+        return true
+      }
+
+      let etag: string | null
+      try {
+        const directUpload = await deps.uploadBlob(initiated.uploadUrl, clip.blob, {
+          contentType: clip.mimeType,
+        })
+        etag = directUpload.etag
+      } catch (directUploadError) {
+        if (!deps.uploadBlobViaApi || !isLocalAzuriteUploadUrl(initiated.uploadUrl)) {
+          throw directUploadError
+        }
+        const fallbackUpload = await deps.uploadBlobViaApi(clip.id, clip.blob, {
+          contentType: clip.mimeType,
+        })
+        etag = fallbackUpload.etag
+      }
 
       await deps.finalizeUpload(clip.id, etag)
       await deps.markClipUploaded(clip.id)
