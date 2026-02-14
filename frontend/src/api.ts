@@ -54,6 +54,29 @@ export type EventResponse = {
   summary?: string | null
   label?: string | null
   confidence?: number | null
+  inference_provider?: string | null
+  inference_model?: string | null
+  should_notify?: boolean | null
+  alert_reason?: string | null
+  matched_rules?: string[] | null
+  detected_entities?: string[] | null
+  detected_actions?: string[] | null
+}
+
+export type TelegramReadinessResponse = {
+  enabled: boolean
+  ready: boolean
+  status: string
+  reason: string | null
+  connectUrl: string | null
+}
+
+type TelegramReadinessApiResponse = {
+  enabled: boolean
+  ready: boolean
+  status: string
+  reason?: string | null
+  connect_url?: string | null
 }
 
 export type CreateEventPayload = {
@@ -111,6 +134,37 @@ export const forceStopSession = (sessionId: string) =>
 
 export const listEvents = (sessionId: string) =>
   request<EventResponse[]>(`/events?session_id=${encodeURIComponent(sessionId)}`)
+
+const toTelegramReadiness = (
+  response: TelegramReadinessApiResponse
+): TelegramReadinessResponse => ({
+  enabled: response.enabled,
+  ready: response.ready,
+  status: response.status,
+  reason: response.reason ?? null,
+  connectUrl: response.connect_url ?? null,
+})
+
+export const getTelegramReadiness = async (
+  deviceId: string
+): Promise<TelegramReadinessResponse> => {
+  const response = await request<TelegramReadinessApiResponse>(
+    `/notifications/telegram/readiness?device_id=${encodeURIComponent(deviceId)}`
+  )
+  return toTelegramReadiness(response)
+}
+
+export const confirmTelegramLink = async (
+  deviceId: string
+): Promise<TelegramReadinessResponse> => {
+  const response = await request<TelegramReadinessApiResponse>('/notifications/telegram/link', {
+    method: 'POST',
+    body: {
+      device_id: deviceId,
+    },
+  })
+  return toTelegramReadiness(response)
+}
 
 export const registerDevice = (payload: {
   deviceId?: string

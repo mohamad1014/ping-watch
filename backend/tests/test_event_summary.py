@@ -31,6 +31,13 @@ async def test_update_event_summary_marks_done():
                 "summary": "Motion detected",
                 "label": "person",
                 "confidence": 0.88,
+                "inference_provider": "nvidia",
+                "inference_model": "nvidia/nemotron-nano-12b-v2-vl",
+                "should_notify": True,
+                "alert_reason": "Matched person entering front door",
+                "matched_rules": ["person entering front door"],
+                "detected_entities": ["person", "door"],
+                "detected_actions": ["entering"],
             },
         )
 
@@ -40,6 +47,13 @@ async def test_update_event_summary_marks_done():
     assert payload["summary"] == "Motion detected"
     assert payload["label"] == "person"
     assert payload["confidence"] == 0.88
+    assert payload["inference_provider"] == "nvidia"
+    assert payload["inference_model"] == "nvidia/nemotron-nano-12b-v2-vl"
+    assert payload["should_notify"] is True
+    assert payload["alert_reason"] == "Matched person entering front door"
+    assert payload["matched_rules"] == ["person entering front door"]
+    assert payload["detected_entities"] == ["person", "door"]
+    assert payload["detected_actions"] == ["entering"]
     assert payload["duration_seconds"] == 9.5
 
 
@@ -70,6 +84,13 @@ async def test_get_event_summary():
                 "summary": "Motion detected",
                 "label": "person",
                 "confidence": 0.88,
+                "inference_provider": "nvidia",
+                "inference_model": "nvidia/nemotron-nano-12b-v2-vl",
+                "should_notify": True,
+                "alert_reason": "Matched person entering front door",
+                "matched_rules": ["person entering front door"],
+                "detected_entities": ["person", "door"],
+                "detected_actions": ["entering"],
             },
         )
 
@@ -82,6 +103,13 @@ async def test_get_event_summary():
         "summary": "Motion detected",
         "label": "person",
         "confidence": 0.88,
+        "inference_provider": "nvidia",
+        "inference_model": "nvidia/nemotron-nano-12b-v2-vl",
+        "should_notify": True,
+        "alert_reason": "Matched person entering front door",
+        "matched_rules": ["person entering front door"],
+        "detected_entities": ["person", "door"],
+        "detected_actions": ["entering"],
     }
 
 

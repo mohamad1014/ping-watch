@@ -114,6 +114,24 @@
   color: #9a9590;
 }
 
+.telegram-onboarding {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.9rem;
+  padding: 1rem 1.2rem;
+  border-radius: 14px;
+  background: #fff0d8;
+  border: 1px solid #f2d8aa;
+}
+
+.telegram-onboarding-copy {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #4f3a14;
+}
+
 .controls {
   display: flex;
   flex-wrap: wrap;

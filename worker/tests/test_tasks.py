@@ -33,9 +33,24 @@ def test_post_event_summary_calls_api(monkeypatch):
         summary="Motion detected",
         label="person",
         confidence=0.88,
+        inference_provider="nvidia",
+        inference_model="nvidia/nemotron-nano-12b-v2-vl",
+        should_notify=True,
+        alert_reason="Matched person entering front door",
+        matched_rules=["person entering front door"],
+        detected_entities=["person", "door"],
+        detected_actions=["entering"],
     )
 
     mock_post.assert_called_once()
+    payload = mock_post.call_args.kwargs["json"]
+    assert payload["inference_provider"] == "nvidia"
+    assert payload["inference_model"] == "nvidia/nemotron-nano-12b-v2-vl"
+    assert payload["should_notify"] is True
+    assert payload["alert_reason"] == "Matched person entering front door"
+    assert payload["matched_rules"] == ["person entering front door"]
+    assert payload["detected_entities"] == ["person", "door"]
+    assert payload["detected_actions"] == ["entering"]
     assert result["status"] == "done"
 
 
@@ -82,19 +97,30 @@ def test_process_clip_full_pipeline(monkeypatch):
         label="person",
         summary="Person detected in frame",
         confidence=0.92,
+        provider="nvidia",
+        model="nvidia/nemotron-nano-12b-v2-vl",
+        should_notify=True,
+        alert_reason="Matched person at front door",
+        matched_rules=["person at front door"],
+        detected_entities=["person", "door"],
+        detected_actions=["entering"],
     ))
     mock_post = MagicMock(return_value={"status": "done"})
+    mock_notify = MagicMock(return_value={"telegram_sent": False, "webhook_sent": False})
 
     monkeypatch.setattr(tasks, "download_clip_data", mock_download)
     monkeypatch.setattr("app.tasks.extract_frames_as_base64", mock_extract)
     monkeypatch.setattr("app.tasks.run_inference", mock_inference)
     monkeypatch.setattr(tasks, "post_event_summary", mock_post)
+    monkeypatch.setattr(tasks, "send_outbound_notifications", mock_notify)
 
     payload = {
         "event_id": "evt_123",
         "session_id": "sess_456",
+        "device_id": "dev_789",
         "clip_blob_name": "sessions/sess_456/events/evt_123.webm",
         "clip_container": "clips",
+        "clip_mime": "video/webm",
         "analysis_prompt": "Focus on people",
     }
 
@@ -104,6 +130,7 @@ def test_process_clip_full_pipeline(monkeypatch):
     assert result["event_id"] == "evt_123"
     assert result["label"] == "person"
     assert result["confidence"] == 0.92
+    assert result["should_notify"] is True
 
     # Verify pipeline was called correctly
     mock_download.assert_called_once_with(
@@ -113,12 +140,26 @@ def test_process_clip_full_pipeline(monkeypatch):
     mock_extract.assert_called_once()
     mock_inference.assert_called_once()
     assert mock_inference.call_args[1]["user_prompt"] == "Focus on people"
+    assert mock_inference.call_args[1]["clip_data"] == b"video data"
+    assert mock_inference.call_args[1]["clip_mime"] == "video/webm"
     mock_post.assert_called_once_with(
         event_id="evt_123",
         summary="Person detected in frame",
         label="person",
         confidence=0.92,
+        inference_provider="nvidia",
+        inference_model="nvidia/nemotron-nano-12b-v2-vl",
+        should_notify=True,
+        alert_reason="Matched person at front door",
+        matched_rules=["person at front door"],
+        detected_entities=["person", "door"],
+        detected_actions=["entering"],
     )
+    mock_notify.assert_called_once()
+    notify_payload = mock_notify.call_args.args[0]
+    assert notify_payload.event_id == "evt_123"
+    assert notify_payload.device_id == "dev_789"
+    assert notify_payload.should_notify is True
 
 
 def test_process_clip_missing_event_id():
@@ -142,6 +183,7 @@ def test_process_clip_error_posts_fallback_summary(monkeypatch):
         "session_id": "sess_456",
         "clip_blob_name": "test.webm",
         "clip_container": "clips",
+        "clip_mime": "video/webm",
     }
 
     result = tasks.process_clip(payload)
@@ -181,6 +223,7 @@ def test_process_clip_auth_error_logs_without_traceback(monkeypatch):
         "session_id": "sess_401",
         "clip_blob_name": "test.webm",
         "clip_container": "clips",
+        "clip_mime": "video/webm",
     }
 
     result = tasks.process_clip(payload)
@@ -198,19 +241,29 @@ def test_process_clip_without_analysis_prompt(monkeypatch):
         label="motion",
         summary="Motion detected",
         confidence=0.75,
+        provider="huggingface",
+        model="zai-org/GLM-4.6V-FP8:zai-org",
+        should_notify=False,
+        alert_reason="No user alert criteria matched",
+        matched_rules=[],
+        detected_entities=["motion"],
+        detected_actions=["movement"],
     ))
     mock_post = MagicMock(return_value={"status": "done"})
+    mock_notify = MagicMock(return_value={"telegram_sent": False, "webhook_sent": False})
 
     monkeypatch.setattr(tasks, "download_clip_data", mock_download)
     monkeypatch.setattr("app.tasks.extract_frames_as_base64", mock_extract)
     monkeypatch.setattr("app.tasks.run_inference", mock_inference)
     monkeypatch.setattr(tasks, "post_event_summary", mock_post)
+    monkeypatch.setattr(tasks, "send_outbound_notifications", mock_notify)
 
     payload = {
         "event_id": "evt_789",
         "session_id": "sess_789",
         "clip_blob_name": "test.webm",
         "clip_container": "clips",
+        "clip_mime": "video/webm",
     }
 
     result = tasks.process_clip(payload)
@@ -218,6 +271,20 @@ def test_process_clip_without_analysis_prompt(monkeypatch):
     assert result["status"] == "done"
     # Verify inference was called without user_prompt
     assert mock_inference.call_args[1]["user_prompt"] is None
+    mock_post.assert_called_once_with(
+        event_id="evt_789",
+        summary="Motion detected",
+        label="motion",
+        confidence=0.75,
+        inference_provider="huggingface",
+        inference_model="zai-org/GLM-4.6V-FP8:zai-org",
+        should_notify=False,
+        alert_reason="No user alert criteria matched",
+        matched_rules=[],
+        detected_entities=["motion"],
+        detected_actions=["movement"],
+    )
+    mock_notify.assert_not_called()
 
 
 def test_process_clip_saves_inference_frames(monkeypatch):
@@ -229,6 +296,13 @@ def test_process_clip_saves_inference_frames(monkeypatch):
         label="person",
         summary="Detected person",
         confidence=0.91,
+        provider="nvidia",
+        model="nvidia/nemotron-nano-12b-v2-vl",
+        should_notify=True,
+        alert_reason="Matched person rule",
+        matched_rules=["person rule"],
+        detected_entities=["person"],
+        detected_actions=["standing"],
     ))
     mock_post = MagicMock(return_value={"status": "done"})
 
@@ -243,6 +317,7 @@ def test_process_clip_saves_inference_frames(monkeypatch):
         "session_id": "sess_save",
         "clip_blob_name": "test.webm",
         "clip_container": "clips",
+        "clip_mime": "video/webm",
     }
 
     result = tasks.process_clip(payload)
@@ -274,6 +349,7 @@ def test_process_clip_test_mode_skips_pipeline(monkeypatch):
         "session_id": "sess_test_mode",
         "clip_blob_name": "sessions/sess/events/evt.webm",
         "clip_container": "clips",
+        "clip_mime": "video/webm",
     }
 
     result = tasks.process_clip(payload)
@@ -292,4 +368,11 @@ def test_process_clip_test_mode_skips_pipeline(monkeypatch):
         summary="Critical flow test summary for event evt_test_mode",
         label="test",
         confidence=1.0,
+        inference_provider="test-mode",
+        inference_model="test",
+        should_notify=True,
+        alert_reason="Test mode always notifies",
+        matched_rules=["test-mode"],
+        detected_entities=["test"],
+        detected_actions=["simulated"],
     )

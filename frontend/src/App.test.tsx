@@ -36,6 +36,8 @@ const buildUploadResponse = (etag: string) =>
 
 const createFetchMock = (routes: {
   registerDevice?: unknown
+  telegramReadiness?: unknown[]
+  telegramLink?: unknown[]
   start: unknown
   stop: unknown
   forceStop?: unknown
@@ -46,8 +48,32 @@ const createFetchMock = (routes: {
   events: unknown[]
 }) => {
   const eventQueue = [...routes.events]
+  const readinessQueue = routes.telegramReadiness?.length
+    ? [...routes.telegramReadiness]
+    : [{
+      enabled: false,
+      ready: false,
+      status: 'not_configured',
+      reason: null,
+      connect_url: null,
+    }]
+  const telegramLinkQueue = routes.telegramLink?.length
+    ? [...routes.telegramLink]
+    : [...readinessQueue]
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = input.toString()
+
+    if (url.includes('/notifications/telegram/readiness')) {
+      const payload =
+        readinessQueue.length > 1 ? readinessQueue.shift() : readinessQueue[0]
+      return buildResponse(payload)
+    }
+
+    if (url.endsWith('/notifications/telegram/link') && init?.method === 'POST') {
+      const payload =
+        telegramLinkQueue.length > 1 ? telegramLinkQueue.shift() : telegramLinkQueue[0]
+      return buildResponse(payload)
+    }
 
     if (url.endsWith('/devices/register')) {
       return buildResponse(
@@ -114,6 +140,27 @@ describe('App', () => {
     mockedSaveClip.mockClear()
     mockedListClips.mockResolvedValue([])
     mockedDeleteClipsBySession.mockResolvedValue(undefined)
+    delete process.env.VITE_TELEGRAM_BOT_URL
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = input.toString()
+      if (url.endsWith('/devices/register')) {
+        return buildResponse({
+          device_id: 'device-1',
+          label: null,
+          created_at: 'now',
+        })
+      }
+      if (url.includes('/notifications/telegram/readiness')) {
+        return buildResponse({
+          enabled: false,
+          ready: false,
+          status: 'not_configured',
+          reason: null,
+          connect_url: null,
+        })
+      }
+      return buildResponse({})
+    }))
     localStorage.clear()
   })
 
@@ -127,6 +174,100 @@ describe('App', () => {
     expect(
       await screen.findByRole('heading', { name: /ping watch/i })
     ).toBeInTheDocument()
+  })
+
+  it('shows alert instructions prompt copy', async () => {
+    render(<App />)
+
+    expect(await screen.findByText(/alert instructions/i)).toBeInTheDocument()
+    expect(
+      screen.getByPlaceholderText(/alert me if a person enters through the front door/i)
+    ).toBeInTheDocument()
+  })
+
+  it('requires Telegram readiness before start when backend reports not ready', async () => {
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: false,
+        status: 'needs_user_action',
+        reason: 'Open Telegram and send /start to your bot, then return.',
+        connect_url: 'https://t.me/pingwatch_bot?start=pingwatch',
+      }],
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    expect(
+      await screen.findByRole('button', { name: /connect telegram alerts/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/open telegram and send \/start to your bot/i)
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /start monitoring/i })).toBeDisabled()
+  })
+
+  it('opens Telegram onboarding and enables start when backend confirms readiness', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [
+        {
+          enabled: true,
+          ready: false,
+          status: 'needs_user_action',
+          reason: 'Open Telegram and send /start to your bot, then return.',
+          connect_url: 'https://t.me/pingwatch_bot?start=pingwatch',
+        },
+        {
+          enabled: true,
+          ready: true,
+          status: 'ready',
+          reason: null,
+          connect_url: 'https://t.me/pingwatch_bot?start=pingwatch',
+        },
+      ],
+      telegramLink: [{
+        enabled: true,
+        ready: true,
+        status: 'ready',
+        reason: null,
+        connect_url: 'https://t.me/pingwatch_bot?start=pingwatch',
+      }],
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue({} as Window)
+
+    render(<App />)
+
+    await user.click(
+      await screen.findByRole('button', { name: /connect telegram alerts/i })
+    )
+
+    expect(openSpy).toHaveBeenCalledWith(
+      'https://t.me/pingwatch_bot?start=pingwatch',
+      '_blank',
+      'noopener,noreferrer'
+    )
+
+    await user.click(screen.getByRole('button', { name: /check telegram status/i }))
+    expect(screen.getByRole('button', { name: /start monitoring/i })).toBeEnabled()
+
+    await user.click(screen.getByRole('button', { name: /start monitoring/i }))
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/sessions/start',
+      expect.objectContaining({ method: 'POST' })
+    )
+
+    openSpy.mockRestore()
   })
 
   it('starts and stops a session via the API', async () => {
@@ -589,6 +730,11 @@ describe('App', () => {
           summary: 'Person entered room',
           label: 'person',
           confidence: 0.9,
+          inference_provider: 'nvidia',
+          inference_model: 'nvidia/nemotron-nano-12b-v2-vl',
+          should_notify: true,
+          alert_reason: 'Matched person entering front door',
+          matched_rules: ['person entering front door'],
         },
       ]],
     })
@@ -620,9 +766,12 @@ describe('App', () => {
     const scoped = within(clipSection as HTMLElement)
 
     expect(await scoped.findByText(/inference: done/i)).toBeInTheDocument()
+    expect(scoped.getByText(/alert/i)).toBeInTheDocument()
     expect(scoped.getByText(/person entered room/i)).toBeInTheDocument()
+    expect(scoped.getByText(/matched person entering front door/i)).toBeInTheDocument()
     expect(scoped.getByText(/^person$/i)).toBeInTheDocument()
     expect(scoped.getByText(/90%/i)).toBeInTheDocument()
+    expect(scoped.getByText(/nvidia · nvidia\/nemotron-nano-12b-v2-vl/i)).toBeInTheDocument()
 
     vi.restoreAllMocks()
   })

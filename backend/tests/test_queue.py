@@ -17,8 +17,10 @@ def test_enqueue_inference_job_success(monkeypatch):
         job_id = queue.enqueue_inference_job(
             event_id="evt_1",
             session_id="sess_1",
+            device_id="dev_1",
             clip_blob_name="sessions/sess_1/events/evt_1.webm",
             clip_container="clips",
+            clip_mime="video/webm",
             analysis_prompt="Focus on people",
         )
 
@@ -29,6 +31,8 @@ def test_enqueue_inference_job_success(monkeypatch):
     payload = call_args[0][1]
     assert payload["event_id"] == "evt_1"
     assert payload["session_id"] == "sess_1"
+    assert payload["device_id"] == "dev_1"
+    assert payload["clip_mime"] == "video/webm"
     assert payload["analysis_prompt"] == "Focus on people"
 
 
@@ -43,8 +47,10 @@ def test_enqueue_inference_job_redis_unavailable(monkeypatch, caplog):
         job_id = queue.enqueue_inference_job(
             event_id="evt_1",
             session_id="sess_1",
+            device_id="dev_1",
             clip_blob_name="test.webm",
             clip_container="clips",
+            clip_mime="video/webm",
         )
 
     assert job_id is None
@@ -64,12 +70,15 @@ def test_enqueue_inference_job_without_prompt(monkeypatch):
         job_id = queue.enqueue_inference_job(
             event_id="evt_2",
             session_id="sess_2",
+            device_id="dev_2",
             clip_blob_name="test.webm",
             clip_container="clips",
+            clip_mime="video/webm",
         )
 
     assert job_id == "job_456"
     payload = mock_queue.enqueue.call_args[0][1]
+    assert payload["clip_mime"] == "video/webm"
     assert payload["analysis_prompt"] is None
 
 

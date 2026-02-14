@@ -91,6 +91,7 @@ Phase 2 complete: upload + event sync with retries/offline queue and background 
 - `./scripts/test-all` — run all tests.
 - `./scripts/test-clip-flow` — rerun clip flow verification (worker decode fallback + critical E2E flow).
 - `./scripts/logs` — tail backend logs.
+- `docs/worker-notification-logging.md` — notification/worker logging troubleshooting checklist.
 
 ## Getting Started (local)
 
@@ -122,6 +123,7 @@ Note: E2E/Playwright runs use a temp SQLite database for the backend; if you ove
 ## Environment
 
 - `VITE_API_URL` — backend base URL for the frontend (default `http://localhost:8000`).
+- `VITE_TELEGRAM_BOT_URL` — Telegram bot deep link used by the frontend onboarding button (for example `https://t.me/<your_bot>?start=pingwatch`).
 - `VITE_POLL_INTERVAL_MS` — polling interval for event refresh (default 5000).
 - `VITE_UPLOAD_INTERVAL_MS` — polling interval for retrying pending uploads (default 10000).
 - `VITE_DISABLE_MEDIA` — set to `true` to skip `getUserMedia`/`MediaRecorder` capture (useful for tests/E2E).
@@ -130,6 +132,14 @@ Note: E2E/Playwright runs use a temp SQLite database for the backend; if you ove
 - `AZURITE_CLIPS_CONTAINER` — container name for clips (default `clips`).
 - `AZURITE_AUTO_CREATE_CONTAINER` — auto-create the clips container on first upload (recommended in local dev).
 - `AZURITE_SAS_EXPIRY_SECONDS` — SAS expiry for upload URLs (default 900).
+- `TELEGRAM_BOT_TOKEN` — enables Telegram integration.
+- `TELEGRAM_BOT_ONBOARDING_URL` — bot deep link used by backend readiness responses and frontend onboarding button; backend appends `?start=<device_id>` (or replaces `{device_id}` placeholder) so each device can be linked to its own chat.
+- `TELEGRAM_CHAT_ID` — optional fallback chat id used only when no per-device Telegram mapping is available.
+- `TELEGRAM_SEND_VIDEO` — when `true` (default), Telegram alerts send the clip as `sendVideo`; when `false`, sends text-only alerts.
+- `NOTIFY_WEBHOOK_URL` — optional webhook endpoint to receive JSON alert payloads for `should_notify=true` events.
+- `NOTIFY_WEBHOOK_SECRET` — optional static secret sent as `X-Ping-Watch-Webhook-Secret` header on webhook requests.
+- `NOTIFICATION_TIMEOUT_SECONDS` — outbound notification request timeout (default 10 seconds).
+- `WORKER_LOG_LEVEL` — worker log level (`DEBUG`, `INFO`, `WARNING`, ...). Set to `INFO` to see notification dispatch logs.
 
 Frontend tests can also override poll/upload intervals via runtime globals; see `frontend/README.md`.
 

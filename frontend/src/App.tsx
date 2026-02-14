@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import {
+  confirmTelegramLink,
   type EventResponse,
   forceStopSession,
+  getTelegramReadiness,
   listEvents,
   startSession,
   stopSession,
+  type TelegramReadinessResponse,
 } from './api'
 import {
   deleteClipsBySession,
@@ -63,6 +66,16 @@ const getEnvNumber = (key: string) => {
   return Number.isFinite(value) ? value : undefined
 }
 
+const getEnvString = (key: string) => {
+  const env = (import.meta as ImportMeta & {
+    env?: Record<string, string | undefined>
+  }).env
+  const raw = env?.[key] ?? (typeof process !== 'undefined'
+    ? process.env?.[key]
+    : undefined)
+  return raw?.trim() || ''
+}
+
 const getPollIntervalMs = () => {
   const envValue = getEnvNumber('VITE_POLL_INTERVAL_MS')
   if (typeof envValue === 'number') return envValue
@@ -96,6 +109,15 @@ const formatConfidence = (value: number | null | undefined) => {
   return `${Math.round(value * 100)}%`
 }
 
+const formatInferenceSource = (
+  provider: string | null | undefined,
+  model: string | null | undefined
+) => {
+  if (!provider && !model) return null
+  if (provider && model) return `${provider} · ${model}`
+  return provider ?? model
+}
+
 const generateClipId = () => {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
   return `clip_${Date.now()}_${Math.random().toString(16).slice(2)}`
@@ -124,6 +146,9 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [copiedEventId, setCopiedEventId] = useState<string | null>(null)
   const [analysisPrompt, setAnalysisPrompt] = useState('')
+  const [telegramReadiness, setTelegramReadiness] = useState<TelegramReadinessResponse | null>(null)
+  const [checkingTelegramReadiness, setCheckingTelegramReadiness] = useState(false)
+  const [isWaitingForTelegramConnect, setIsWaitingForTelegramConnect] = useState(false)
 
   // Clips state
   const [clips, setClips] = useState<StoredClip[]>([])
@@ -182,12 +207,23 @@ function App() {
     const failed = clips.filter((clip) => !clip.uploaded && clip.lastUploadError).length
     return { pending, failed }
   }, [clips])
+  const telegramOnboardingUrl = getEnvString('VITE_TELEGRAM_BOT_URL')
+  const resolvedTelegramConnectUrl = telegramReadiness?.connectUrl || telegramOnboardingUrl || null
+  const requiresTelegramOnboarding = checkingTelegramReadiness
+    || (telegramReadiness?.enabled === true && telegramReadiness.ready === false)
 
   const refreshClips = async () => {
     const nextClips = await listClips()
     nextClips.sort((a, b) => b.createdAt - a.createdAt)
     setClips(nextClips)
   }
+
+  const ensureResolvedDeviceId = useCallback(async () => {
+    if (deviceIdRef.current) return deviceIdRef.current
+    const resolved = await ensureDeviceId()
+    deviceIdRef.current = resolved
+    return resolved
+  }, [])
 
   const processQueuedClip = useCallback(
     async (queuedClip: QueuedClip) => {
@@ -398,7 +434,7 @@ function App() {
     setError(null)
 
     try {
-      const resolvedDeviceId = await ensureDeviceId()
+      const resolvedDeviceId = await ensureResolvedDeviceId()
       const session = await startSession(resolvedDeviceId, analysisPrompt || undefined)
       setSessionId(session.session_id)
       sessionIdRef.current = session.session_id
@@ -421,6 +457,60 @@ function App() {
       setError('Unable to start session')
     } finally {
       setIsBusy(false)
+    }
+  }
+
+  const refreshTelegramReadiness = useCallback(async () => {
+    setCheckingTelegramReadiness(true)
+    try {
+      const resolvedDeviceId = await ensureResolvedDeviceId()
+      const status = await getTelegramReadiness(resolvedDeviceId)
+      setTelegramReadiness(status)
+      if (status.ready) {
+        setIsWaitingForTelegramConnect(false)
+      }
+    } catch (err) {
+      console.error(err)
+      setTelegramReadiness({
+        enabled: true,
+        ready: false,
+        status: 'error',
+        reason: 'Unable to verify Telegram readiness. Retry in a few seconds.',
+        connectUrl: telegramOnboardingUrl || null,
+      })
+    } finally {
+      setCheckingTelegramReadiness(false)
+    }
+  }, [ensureResolvedDeviceId, telegramOnboardingUrl])
+
+  const handleConnectTelegram = () => {
+    if (!resolvedTelegramConnectUrl) {
+      setError('Telegram bot link is not configured.')
+      return
+    }
+
+    const popup = window.open(resolvedTelegramConnectUrl, '_blank', 'noopener,noreferrer')
+    if (!popup) {
+      setError('Popup blocked. Please allow popups and try again.')
+      return
+    }
+
+    setIsWaitingForTelegramConnect(true)
+    setError(null)
+  }
+
+  const handleCheckTelegramReadiness = async () => {
+    setError(null)
+    try {
+      const resolvedDeviceId = await ensureResolvedDeviceId()
+      const status = await confirmTelegramLink(resolvedDeviceId)
+      setTelegramReadiness(status)
+      if (status.ready) {
+        setIsWaitingForTelegramConnect(false)
+      }
+    } catch (err) {
+      console.error(err)
+      await refreshTelegramReadiness()
     }
   }
 
@@ -581,6 +671,10 @@ function App() {
 
   // Initial clip load and cleanup
   useEffect(() => {
+    void refreshTelegramReadiness()
+  }, [refreshTelegramReadiness])
+
+  useEffect(() => {
     void refreshClips()
     return () => {
       if (clipUrlRef.current) URL.revokeObjectURL(clipUrlRef.current)
@@ -661,12 +755,12 @@ function App() {
           </div>
         </section>
 
-        <section className="analysis-prompt-section" aria-label="Analysis prompt">
+        <section className="analysis-prompt-section" aria-label="Alert instructions">
           <label className="analysis-prompt-label">
-            <span>Analysis prompt (optional)</span>
+            <span>Alert instructions</span>
             <textarea
               className="analysis-prompt-input"
-              placeholder="Add custom instructions for the VLM analysis, e.g., 'Focus on detecting people near the door' or 'Alert for any animal activity'"
+              placeholder="Example: Alert me if a person enters through the front door between 10 PM and 6 AM. Ignore TV motion."
               value={analysisPrompt}
               onChange={(e) => setAnalysisPrompt(e.target.value)}
               disabled={sessionStatus === 'active'}
@@ -675,12 +769,47 @@ function App() {
           </label>
         </section>
 
+        {(checkingTelegramReadiness || telegramReadiness?.enabled) && (
+          <section className="telegram-onboarding" aria-label="Telegram onboarding">
+            <p className="telegram-onboarding-copy">
+              {checkingTelegramReadiness
+                ? 'Checking Telegram readiness...'
+                : telegramReadiness?.ready
+                ? 'Telegram alerts are connected.'
+                : isWaitingForTelegramConnect
+                ? 'Waiting for Telegram confirmation. Send /start in Telegram, then tap Check Telegram status.'
+                : 'Connect Telegram and send /start to your bot before monitoring.'}
+            </p>
+            {telegramReadiness?.reason && !telegramReadiness.ready && (
+              <p className="telegram-onboarding-copy">{telegramReadiness.reason}</p>
+            )}
+            <button
+              className="secondary"
+              type="button"
+              onClick={handleConnectTelegram}
+              disabled={checkingTelegramReadiness || !resolvedTelegramConnectUrl}
+            >
+              Connect Telegram alerts
+            </button>
+            {telegramReadiness && !telegramReadiness.ready && (
+              <button
+                className="secondary"
+                type="button"
+                onClick={handleCheckTelegramReadiness}
+                disabled={checkingTelegramReadiness}
+              >
+                {checkingTelegramReadiness ? 'Checking...' : 'Check Telegram status'}
+              </button>
+            )}
+          </section>
+        )}
+
         <div className="controls">
           <button
             className="primary"
             type="button"
             onClick={handleStart}
-            disabled={sessionStatus === 'active' || isBusy}
+            disabled={sessionStatus === 'active' || isBusy || requiresTelegramOnboarding}
           >
             Start monitoring
           </button>
@@ -816,6 +945,11 @@ function App() {
             <ul className="events-list">
               {events.map((event) => {
                 const confidence = formatConfidence(event.confidence)
+                const inferenceSource = formatInferenceSource(
+                  event.inference_provider,
+                  event.inference_model
+                )
+                const notifyStatus = event.should_notify === true ? 'alert' : 'no alert'
                 const isCopied = copiedEventId === event.event_id
                 return (
                   <li key={event.event_id} className="event-item">
@@ -834,10 +968,19 @@ function App() {
                         <span className="event-trigger">{event.trigger_type}</span>
                       </div>
                       {event.summary && <p className="event-summary">{event.summary}</p>}
-                      {(event.label || confidence) && (
+                      {(event.label || confidence || inferenceSource || event.alert_reason) && (
                         <div className="event-meta">
+                          <span className={`event-notify-status status-${notifyStatus.replace(' ', '-')}`}>
+                            {notifyStatus}
+                          </span>
                           {event.label && <span className="event-label">{event.label}</span>}
                           {confidence && <span className="event-confidence">{confidence}</span>}
+                          {event.alert_reason && (
+                            <span className="event-alert-reason">{event.alert_reason}</span>
+                          )}
+                          {inferenceSource && (
+                            <span className="event-inference-source">{inferenceSource}</span>
+                          )}
                         </div>
                       )}
                     </div>
@@ -864,6 +1007,11 @@ function App() {
               {clips.map((clip) => {
                 const relatedEvent = eventsById.get(clip.id)
                 const relatedConfidence = formatConfidence(relatedEvent?.confidence)
+                const relatedInferenceSource = formatInferenceSource(
+                  relatedEvent?.inference_provider,
+                  relatedEvent?.inference_model
+                )
+                const relatedNotifyStatus = relatedEvent?.should_notify === true ? 'alert' : 'no alert'
                 return (
                   <li key={clip.id} className="clip-item">
                     <div>
@@ -899,10 +1047,13 @@ function App() {
                       {relatedEvent?.summary && (
                         <p className="clip-inference-summary">{relatedEvent.summary}</p>
                       )}
-                      {(relatedEvent?.label || relatedConfidence) && (
+                      {(relatedEvent?.label || relatedConfidence || relatedInferenceSource || relatedEvent?.alert_reason) && (
                         <div className="clip-inference-meta">
+                          <span>{relatedNotifyStatus}</span>
                           {relatedEvent?.label && <span>{relatedEvent.label}</span>}
                           {relatedConfidence && <span>{relatedConfidence}</span>}
+                          {relatedEvent?.alert_reason && <span>{relatedEvent.alert_reason}</span>}
+                          {relatedInferenceSource && <span>{relatedInferenceSource}</span>}
                         </div>
                       )}
                     </div>

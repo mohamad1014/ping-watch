@@ -59,8 +59,38 @@ def device_to_dict(record: DeviceModel) -> dict:
     return {
         "device_id": record.device_id,
         "label": record.label,
+        "telegram_chat_id": record.telegram_chat_id,
+        "telegram_username": record.telegram_username,
+        "telegram_linked_at": _format_dt(record.telegram_linked_at),
         "created_at": _format_dt(record.created_at),
     }
+
+
+def get_device(db: Session, device_id: str) -> Optional[DeviceModel]:
+    return db.get(DeviceModel, device_id)
+
+
+def link_device_telegram_chat(
+    db: Session,
+    device_id: str,
+    chat_id: str,
+    username: Optional[str] = None,
+) -> DeviceModel:
+    record = db.get(DeviceModel, device_id)
+    if record is None:
+        record = DeviceModel(
+            device_id=device_id,
+            label=None,
+            created_at=_now(),
+        )
+        db.add(record)
+
+    record.telegram_chat_id = chat_id
+    record.telegram_username = username
+    record.telegram_linked_at = _now()
+    db.commit()
+    db.refresh(record)
+    return record
 
 
 def stop_session(db: Session, session_id: str) -> Optional[SessionModel]:
@@ -137,6 +167,13 @@ def update_event_summary(
     summary: str,
     label: Optional[str],
     confidence: Optional[float],
+    inference_provider: Optional[str],
+    inference_model: Optional[str],
+    should_notify: Optional[bool],
+    alert_reason: Optional[str],
+    matched_rules: Optional[list[str]],
+    detected_entities: Optional[list[str]],
+    detected_actions: Optional[list[str]],
 ) -> Optional[EventModel]:
     record = db.get(EventModel, event_id)
     if record is None:
@@ -144,6 +181,13 @@ def update_event_summary(
     record.summary = summary
     record.label = label
     record.confidence = confidence
+    record.inference_provider = inference_provider
+    record.inference_model = inference_model
+    record.should_notify = should_notify
+    record.alert_reason = alert_reason
+    record.matched_rules = matched_rules
+    record.detected_entities = detected_entities
+    record.detected_actions = detected_actions
     record.status = "done"
     db.commit()
     db.refresh(record)
@@ -162,6 +206,31 @@ def mark_event_clip_uploaded(
         record.clip_etag = etag
     db.commit()
     db.refresh(record)
+    return record
+
+
+def mark_event_clip_uploaded_via_local_api(
+    db: Session,
+    event_id: str,
+    clip_blob_name: str,
+) -> Optional[EventModel]:
+    record = db.get(EventModel, event_id)
+    if record is None:
+        return None
+
+    changed = False
+    if record.clip_container != "local":
+        record.clip_container = "local"
+        changed = True
+
+    local_uri = f"local://{clip_blob_name}"
+    if record.clip_uri != local_uri:
+        record.clip_uri = local_uri
+        changed = True
+
+    if changed:
+        db.commit()
+        db.refresh(record)
     return record
 
 
@@ -219,4 +288,11 @@ def event_to_dict(record: EventModel) -> dict:
         "summary": record.summary,
         "label": record.label,
         "confidence": record.confidence,
+        "inference_provider": record.inference_provider,
+        "inference_model": record.inference_model,
+        "should_notify": record.should_notify,
+        "alert_reason": record.alert_reason,
+        "matched_rules": record.matched_rules,
+        "detected_entities": record.detected_entities,
+        "detected_actions": record.detected_actions,
     }

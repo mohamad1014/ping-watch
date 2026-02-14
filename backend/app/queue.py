@@ -22,8 +22,10 @@ def get_queue(name: str = DEFAULT_QUEUE_NAME) -> Queue:
 def enqueue_inference_job(
     event_id: str,
     session_id: str,
+    device_id: str,
     clip_blob_name: str,
     clip_container: str,
+    clip_mime: str,
     analysis_prompt: Optional[str] = None,
     queue: Optional[Queue] = None,
 ) -> Optional[str]:
@@ -34,8 +36,10 @@ def enqueue_inference_job(
     payload = {
         "event_id": event_id,
         "session_id": session_id,
+        "device_id": device_id,
         "clip_blob_name": clip_blob_name,
         "clip_container": clip_container,
+        "clip_mime": clip_mime,
         "analysis_prompt": analysis_prompt,
     }
 

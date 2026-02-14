@@ -68,6 +68,7 @@ No formatter or linter is configured yet. If you introduce one, document it and 
 - Log to stdout; local dev runs via `./scripts/dev`.
 - Prefer UTC time everywhere; store timezone only for display.
 - Local queue is Redis for dev/E2E; production queue remains Azure Service Bus via a small queue abstraction.
+- Worker notification logging runbook is in `docs/worker-notification-logging.md`; use it when alert delivery logs appear missing.
 
 ## Tooling Baseline
 

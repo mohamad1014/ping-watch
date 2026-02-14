@@ -25,6 +25,7 @@ from app.store import (
     get_session,
     list_events,
     mark_event_clip_uploaded,
+    mark_event_clip_uploaded_via_local_api,
     update_event_summary,
 )
 
@@ -46,6 +47,13 @@ class EventSummaryRequest(BaseModel):
     summary: str
     label: str | None = None
     confidence: float | None = None
+    inference_provider: str | None = None
+    inference_model: str | None = None
+    should_notify: bool | None = None
+    alert_reason: str | None = None
+    matched_rules: list[str] | None = None
+    detected_entities: list[str] | None = None
+    detected_actions: list[str] | None = None
 
 
 class InitiateUploadRequest(BaseModel):
@@ -201,6 +209,14 @@ async def upload_clip_endpoint(
     body = await request.body()
     target_path.write_bytes(body)
 
+    updated = mark_event_clip_uploaded_via_local_api(db, event_id, blob_name)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="event not found")
+    logger.info(
+        "Relay upload stored locally for event %s; clip source marked as local",
+        event_id,
+    )
+
     etag = f"\"{hashlib.md5(body).hexdigest()}\""
     return Response(status_code=201, headers={"etag": etag})
 
@@ -221,8 +237,10 @@ async def finalize_upload_endpoint(
     enqueue_inference_job(
         event_id=record.event_id,
         session_id=record.session_id,
+        device_id=record.device_id,
         clip_blob_name=record.clip_blob_name or "",
         clip_container=record.clip_container or "",
+        clip_mime=record.clip_mime,
         analysis_prompt=analysis_prompt,
     )
 
@@ -242,7 +260,18 @@ async def update_event_summary_endpoint(
     event_id: str, payload: EventSummaryRequest, db: Session = Depends(get_db)
 ):
     record = update_event_summary(
-        db, event_id, payload.summary, payload.label, payload.confidence
+        db,
+        event_id,
+        payload.summary,
+        payload.label,
+        payload.confidence,
+        payload.inference_provider,
+        payload.inference_model,
+        payload.should_notify,
+        payload.alert_reason,
+        payload.matched_rules,
+        payload.detected_entities,
+        payload.detected_actions,
     )
     if record is None:
         raise HTTPException(status_code=404, detail="event not found")
@@ -261,4 +290,11 @@ async def get_event_summary_endpoint(
         "summary": record.summary,
         "label": record.label,
         "confidence": record.confidence,
+        "inference_provider": record.inference_provider,
+        "inference_model": record.inference_model,
+        "should_notify": record.should_notify,
+        "alert_reason": record.alert_reason,
+        "matched_rules": record.matched_rules,
+        "detected_entities": record.detected_entities,
+        "detected_actions": record.detected_actions,
     }

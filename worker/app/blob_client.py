@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from azure.storage.blob import BlobServiceClient
+from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 
 logger = logging.getLogger(__name__)
 DEFAULT_AZURITE_BLOB_API_VERSION = "2021-12-02"
@@ -101,8 +102,29 @@ def download_clip(
         data = blob_client.download_blob().readall()
         logger.info(f"Downloaded {len(data)} bytes from {blob_name}")
         return data
+    except ResourceNotFoundError as exc:
+        logger.warning(
+            "Blob not found in storage: container=%s blob=%s",
+            container,
+            blob_name,
+        )
+        raise RuntimeError("Blob not found in storage") from exc
+    except HttpResponseError as exc:
+        status = getattr(exc, "status_code", None)
+        logger.error(
+            "Blob download HTTP error: container=%s blob=%s status=%s",
+            container,
+            blob_name,
+            status,
+        )
+        raise RuntimeError(f"Blob download HTTP error: status={status}") from exc
     except Exception as exc:
-        logger.error(f"Failed to download blob {blob_name}: {exc}")
+        logger.error(
+            "Failed to download blob %s from container %s: %s",
+            blob_name,
+            container,
+            exc,
+        )
         raise RuntimeError(f"Failed to download clip: {exc}") from exc
 
 
