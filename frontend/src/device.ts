@@ -27,11 +27,12 @@ export const ensureDeviceId = async (
   const resolvedDeps = { ...defaultDeps, ...(deps ?? {}) }
 
   const existing = resolvedDeps.getStorageItem(DEVICE_ID_KEY)
-  if (existing) {
-    return existing
-  }
-
-  const response = await resolvedDeps.registerDevice({ deviceId, label })
+  const preferredDeviceId = existing ?? deviceId
+  // Always verify/upsert with backend so stale local ids recover after DB resets.
+  const response = await resolvedDeps.registerDevice({
+    deviceId: preferredDeviceId,
+    label,
+  })
   resolvedDeps.setStorageItem(DEVICE_ID_KEY, response.device_id)
   return response.device_id
 }

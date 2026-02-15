@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import {
-  confirmTelegramLink,
+  ApiError,
   type EventResponse,
   forceStopSession,
+  getTelegramLinkStatus,
   getTelegramReadiness,
   listEvents,
+  startTelegramLink,
   startSession,
   stopSession,
   type TelegramReadinessResponse,
@@ -54,6 +56,11 @@ type QueuedClip = {
   deviceId: string
 }
 
+const TELEGRAM_LINK_ATTEMPT_KEY = 'ping-watch:telegram-link-attempt-id'
+const TELEGRAM_LINK_FALLBACK_URL_KEY = 'ping-watch:telegram-link-fallback-url'
+const TELEGRAM_LINK_FALLBACK_COMMAND_KEY = 'ping-watch:telegram-link-fallback-command'
+const TELEGRAM_LINK_WAITING_KEY = 'ping-watch:telegram-link-waiting'
+
 const getEnvNumber = (key: string) => {
   const env = (import.meta as ImportMeta & {
     env?: Record<string, string | undefined>
@@ -64,16 +71,6 @@ const getEnvNumber = (key: string) => {
   if (!raw) return undefined
   const value = Number(raw)
   return Number.isFinite(value) ? value : undefined
-}
-
-const getEnvString = (key: string) => {
-  const env = (import.meta as ImportMeta & {
-    env?: Record<string, string | undefined>
-  }).env
-  const raw = env?.[key] ?? (typeof process !== 'undefined'
-    ? process.env?.[key]
-    : undefined)
-  return raw?.trim() || ''
 }
 
 const getPollIntervalMs = () => {
@@ -136,6 +133,52 @@ const formatTriggers = (triggers: TriggerReason[]) =>
     })
     .join(', ')
 
+const readStoredTelegramValue = (key: string): string | null => {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+const writeStoredTelegramValue = (key: string, value: string | null) => {
+  try {
+    if (value === null) {
+      localStorage.removeItem(key)
+      return
+    }
+    localStorage.setItem(key, value)
+  } catch {
+    // Ignore storage errors and continue with in-memory state.
+  }
+}
+
+const shouldPreOpenTelegramPopup = () => {
+  if (typeof navigator === 'undefined') return false
+  return /android|iphone|ipad|ipod/i.test(navigator.userAgent)
+}
+
+const deriveTelegramFallbackCommand = (
+  explicitCommand: string | null,
+  connectUrl: string | null
+) => {
+  if (explicitCommand) return explicitCommand
+  if (!connectUrl) return null
+  try {
+    const token = new URL(connectUrl).searchParams.get('start')
+    if (!token) return null
+    return `/start ${token}`
+  } catch {
+    return null
+  }
+}
+
+const isTerminalTelegramLinkStatus = (status: string) =>
+  status === 'not_found'
+  || status === 'expired'
+  || status === 'unknown_device'
+  || status === 'not_configured'
+
 function App() {
   // Session state
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('idle')
@@ -148,7 +191,18 @@ function App() {
   const [analysisPrompt, setAnalysisPrompt] = useState('')
   const [telegramReadiness, setTelegramReadiness] = useState<TelegramReadinessResponse | null>(null)
   const [checkingTelegramReadiness, setCheckingTelegramReadiness] = useState(false)
-  const [isWaitingForTelegramConnect, setIsWaitingForTelegramConnect] = useState(false)
+  const [isWaitingForTelegramConnect, setIsWaitingForTelegramConnect] = useState(
+    () => readStoredTelegramValue(TELEGRAM_LINK_WAITING_KEY) === '1'
+  )
+  const [telegramPopupFallbackUrl, setTelegramPopupFallbackUrl] = useState<string | null>(
+    () => readStoredTelegramValue(TELEGRAM_LINK_FALLBACK_URL_KEY)
+  )
+  const [telegramFallbackCommand, setTelegramFallbackCommand] = useState<string | null>(
+    () => readStoredTelegramValue(TELEGRAM_LINK_FALLBACK_COMMAND_KEY)
+  )
+  const [telegramLinkAttemptId, setTelegramLinkAttemptId] = useState<string | null>(
+    () => readStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_KEY)
+  )
 
   // Clips state
   const [clips, setClips] = useState<StoredClip[]>([])
@@ -207,8 +261,6 @@ function App() {
     const failed = clips.filter((clip) => !clip.uploaded && clip.lastUploadError).length
     return { pending, failed }
   }, [clips])
-  const telegramOnboardingUrl = getEnvString('VITE_TELEGRAM_BOT_URL')
-  const resolvedTelegramConnectUrl = telegramReadiness?.connectUrl || telegramOnboardingUrl || null
   const requiresTelegramOnboarding = checkingTelegramReadiness
     || (telegramReadiness?.enabled === true && telegramReadiness.ready === false)
 
@@ -223,6 +275,46 @@ function App() {
     const resolved = await ensureDeviceId()
     deviceIdRef.current = resolved
     return resolved
+  }, [])
+
+  const clearTelegramLinkState = useCallback(() => {
+    setIsWaitingForTelegramConnect(false)
+    setTelegramPopupFallbackUrl(null)
+    setTelegramFallbackCommand(null)
+    setTelegramLinkAttemptId(null)
+    writeStoredTelegramValue(TELEGRAM_LINK_WAITING_KEY, null)
+    writeStoredTelegramValue(TELEGRAM_LINK_FALLBACK_URL_KEY, null)
+    writeStoredTelegramValue(TELEGRAM_LINK_FALLBACK_COMMAND_KEY, null)
+    writeStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_KEY, null)
+  }, [])
+
+  const persistTelegramLinkState = useCallback((
+    state: {
+      waiting?: boolean
+      fallbackUrl?: string | null
+      fallbackCommand?: string | null
+      attemptId?: string | null
+    }
+  ) => {
+    if (state.waiting !== undefined) {
+      setIsWaitingForTelegramConnect(state.waiting)
+      writeStoredTelegramValue(
+        TELEGRAM_LINK_WAITING_KEY,
+        state.waiting ? '1' : null
+      )
+    }
+    if (state.fallbackUrl !== undefined) {
+      setTelegramPopupFallbackUrl(state.fallbackUrl)
+      writeStoredTelegramValue(TELEGRAM_LINK_FALLBACK_URL_KEY, state.fallbackUrl)
+    }
+    if (state.fallbackCommand !== undefined) {
+      setTelegramFallbackCommand(state.fallbackCommand)
+      writeStoredTelegramValue(TELEGRAM_LINK_FALLBACK_COMMAND_KEY, state.fallbackCommand)
+    }
+    if (state.attemptId !== undefined) {
+      setTelegramLinkAttemptId(state.attemptId)
+      writeStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_KEY, state.attemptId)
+    }
   }, [])
 
   const processQueuedClip = useCallback(
@@ -464,10 +556,20 @@ function App() {
     setCheckingTelegramReadiness(true)
     try {
       const resolvedDeviceId = await ensureResolvedDeviceId()
+      console.info('[TelegramOnboarding] Checking readiness', {
+        deviceId: resolvedDeviceId,
+      })
       const status = await getTelegramReadiness(resolvedDeviceId)
       setTelegramReadiness(status)
+      console.info('[TelegramOnboarding] Readiness response', {
+        deviceId: resolvedDeviceId,
+        enabled: status.enabled,
+        ready: status.ready,
+        status: status.status,
+        reason: status.reason,
+      })
       if (status.ready) {
-        setIsWaitingForTelegramConnect(false)
+        clearTelegramLinkState()
       }
     } catch (err) {
       console.error(err)
@@ -476,43 +578,158 @@ function App() {
         ready: false,
         status: 'error',
         reason: 'Unable to verify Telegram readiness. Retry in a few seconds.',
-        connectUrl: telegramOnboardingUrl || null,
       })
     } finally {
       setCheckingTelegramReadiness(false)
     }
-  }, [ensureResolvedDeviceId, telegramOnboardingUrl])
+  }, [clearTelegramLinkState, ensureResolvedDeviceId])
 
-  const handleConnectTelegram = () => {
-    if (!resolvedTelegramConnectUrl) {
-      setError('Telegram bot link is not configured.')
-      return
-    }
-
-    const popup = window.open(resolvedTelegramConnectUrl, '_blank', 'noopener,noreferrer')
-    if (!popup) {
-      setError('Popup blocked. Please allow popups and try again.')
-      return
-    }
-
-    setIsWaitingForTelegramConnect(true)
+  const handleConnectTelegram = async () => {
     setError(null)
+    const preOpenedPopup = shouldPreOpenTelegramPopup()
+      ? window.open('', '_blank', 'noopener,noreferrer')
+      : null
+    console.info('[TelegramOnboarding] Connect clicked', {
+      preOpenedPopup: Boolean(preOpenedPopup),
+    })
+    try {
+      const resolvedDeviceId = await ensureResolvedDeviceId()
+      console.info('[TelegramOnboarding] Requesting link start', {
+        deviceId: resolvedDeviceId,
+      })
+      const start = await startTelegramLink(resolvedDeviceId)
+      const fallbackCommand = deriveTelegramFallbackCommand(
+        start.fallbackCommand,
+        start.connectUrl
+      )
+      setTelegramReadiness({
+        enabled: start.enabled,
+        ready: start.ready,
+        status: start.status,
+        reason: start.reason,
+      })
+      console.info('[TelegramOnboarding] Link start response', {
+        deviceId: resolvedDeviceId,
+        enabled: start.enabled,
+        ready: start.ready,
+        status: start.status,
+        attemptId: start.attemptId,
+        hasConnectUrl: Boolean(start.connectUrl),
+      })
+
+      if (!start.connectUrl || !start.attemptId) {
+        preOpenedPopup?.close()
+        clearTelegramLinkState()
+        setError(start.reason || 'Unable to generate Telegram connect link.')
+        return
+      }
+
+      persistTelegramLinkState({
+        attemptId: start.attemptId,
+        fallbackCommand,
+      })
+
+      let popup = preOpenedPopup
+      if (!popup) {
+        popup = window.open(start.connectUrl, '_blank', 'noopener,noreferrer')
+      }
+      if (!popup) {
+        console.warn('[TelegramOnboarding] Popup blocked; using backup link', {
+          attemptId: start.attemptId,
+        })
+        persistTelegramLinkState({
+          waiting: true,
+          fallbackUrl: start.connectUrl,
+          fallbackCommand,
+        })
+        setError('Popup blocked. Use the backup Telegram link below.')
+        return
+      }
+
+      if (preOpenedPopup) {
+        try {
+          popup.location.href = start.connectUrl
+          console.info('[TelegramOnboarding] Reused pre-opened popup', {
+            attemptId: start.attemptId,
+          })
+        } catch {
+          popup.close()
+          persistTelegramLinkState({
+            waiting: true,
+            fallbackUrl: start.connectUrl,
+            fallbackCommand,
+          })
+          setError('Unable to redirect popup. Use the backup Telegram link below.')
+          return
+        }
+      }
+
+      persistTelegramLinkState({
+        waiting: true,
+        fallbackUrl: start.connectUrl,
+        fallbackCommand,
+      })
+      console.info('[TelegramOnboarding] Waiting for Telegram confirmation', {
+        attemptId: start.attemptId,
+      })
+      setError(null)
+    } catch (err) {
+      console.error(err)
+      preOpenedPopup?.close()
+      setError('Unable to open Telegram link')
+    }
   }
 
-  const handleCheckTelegramReadiness = async () => {
+  const handleCheckTelegramReadiness = useCallback(async () => {
     setError(null)
     try {
       const resolvedDeviceId = await ensureResolvedDeviceId()
-      const status = await confirmTelegramLink(resolvedDeviceId)
-      setTelegramReadiness(status)
-      if (status.ready) {
-        setIsWaitingForTelegramConnect(false)
+      if (telegramLinkAttemptId) {
+        console.info('[TelegramOnboarding] Checking link attempt status', {
+          deviceId: resolvedDeviceId,
+          attemptId: telegramLinkAttemptId,
+        })
+        const status = await getTelegramLinkStatus(resolvedDeviceId, telegramLinkAttemptId)
+        console.info('[TelegramOnboarding] Link status response', {
+          deviceId: resolvedDeviceId,
+          attemptId: telegramLinkAttemptId,
+          ready: status.ready,
+          linked: status.linked,
+          status: status.status,
+          reason: status.reason,
+        })
+        if (status.ready) {
+          await refreshTelegramReadiness()
+          return
+        }
+        if (isTerminalTelegramLinkStatus(status.status)) {
+          console.warn('[TelegramOnboarding] Link attempt is terminal during manual check, clearing local attempt', {
+            attemptId: telegramLinkAttemptId,
+            status: status.status,
+          })
+          clearTelegramLinkState()
+          setError(status.reason)
+          await refreshTelegramReadiness()
+          return
+        }
       }
+      await refreshTelegramReadiness()
     } catch (err) {
       console.error(err)
+      if (err instanceof ApiError && err.status === 404) {
+        console.warn('[TelegramOnboarding] Stale link attempt during manual check, clearing local attempt', {
+          attemptId: telegramLinkAttemptId,
+        })
+        clearTelegramLinkState()
+      }
       await refreshTelegramReadiness()
     }
-  }
+  }, [
+    clearTelegramLinkState,
+    ensureResolvedDeviceId,
+    refreshTelegramReadiness,
+    telegramLinkAttemptId,
+  ])
 
   const handleStop = async () => {
     const resolvedSessionId = sessionIdRef.current ?? sessionId
@@ -675,6 +892,71 @@ function App() {
   }, [refreshTelegramReadiness])
 
   useEffect(() => {
+    if (!isWaitingForTelegramConnect) return
+
+    let cancelled = false
+    const poll = async () => {
+      if (cancelled) return
+      try {
+        const resolvedDeviceId = await ensureResolvedDeviceId()
+        if (telegramLinkAttemptId) {
+          console.info('[TelegramOnboarding] Polling link status', {
+            deviceId: resolvedDeviceId,
+            attemptId: telegramLinkAttemptId,
+          })
+          const status = await getTelegramLinkStatus(resolvedDeviceId, telegramLinkAttemptId)
+          console.info('[TelegramOnboarding] Poll result', {
+            deviceId: resolvedDeviceId,
+            attemptId: telegramLinkAttemptId,
+            ready: status.ready,
+            status: status.status,
+          })
+          if (status.ready) {
+            await refreshTelegramReadiness()
+            return
+          }
+          if (isTerminalTelegramLinkStatus(status.status)) {
+            console.warn('[TelegramOnboarding] Link attempt is terminal during poll, clearing local attempt', {
+              attemptId: telegramLinkAttemptId,
+              status: status.status,
+            })
+            clearTelegramLinkState()
+            setError(status.reason)
+            await refreshTelegramReadiness()
+            return
+          }
+        }
+        await refreshTelegramReadiness()
+      } catch (err) {
+        if (!cancelled) {
+          console.error(err)
+          if (err instanceof ApiError && err.status === 404) {
+            console.warn('[TelegramOnboarding] Stale link attempt during poll, clearing local attempt', {
+              attemptId: telegramLinkAttemptId,
+            })
+            clearTelegramLinkState()
+            await refreshTelegramReadiness()
+            return
+          }
+        }
+      }
+    }
+
+    void poll()
+    const interval = window.setInterval(poll, 2000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [
+    clearTelegramLinkState,
+    ensureResolvedDeviceId,
+    isWaitingForTelegramConnect,
+    refreshTelegramReadiness,
+    telegramLinkAttemptId,
+  ])
+
+  useEffect(() => {
     void refreshClips()
     return () => {
       if (clipUrlRef.current) URL.revokeObjectURL(clipUrlRef.current)
@@ -777,7 +1059,7 @@ function App() {
                 : telegramReadiness?.ready
                 ? 'Telegram alerts are connected.'
                 : isWaitingForTelegramConnect
-                ? 'Waiting for Telegram confirmation. Send /start in Telegram, then tap Check Telegram status.'
+                ? 'Waiting for Telegram confirmation. Keep this page open and we will detect the link automatically.'
                 : 'Connect Telegram and send /start to your bot before monitoring.'}
             </p>
             {telegramReadiness?.reason && !telegramReadiness.ready && (
@@ -787,10 +1069,25 @@ function App() {
               className="secondary"
               type="button"
               onClick={handleConnectTelegram}
-              disabled={checkingTelegramReadiness || !resolvedTelegramConnectUrl}
+              disabled={checkingTelegramReadiness}
             >
               Connect Telegram alerts
             </button>
+            {telegramPopupFallbackUrl && (
+              <a
+                className="secondary"
+                href={telegramPopupFallbackUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Open Telegram link again
+              </a>
+            )}
+            {isWaitingForTelegramConnect && telegramFallbackCommand && (
+              <p className="telegram-onboarding-copy telegram-onboarding-command">
+                If Telegram opens without payload, send <code>{telegramFallbackCommand}</code> in the bot chat.
+              </p>
+            )}
             {telegramReadiness && !telegramReadiness.ready && (
               <button
                 className="secondary"

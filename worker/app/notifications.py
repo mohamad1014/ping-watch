@@ -81,7 +81,6 @@ def _build_alert_text(payload: NotificationPayload) -> str:
 
 
 def _resolve_chat_id_for_payload(payload: NotificationPayload) -> str | None:
-    configured_chat_id = (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
     if payload.device_id:
         try:
             response = httpx.get(
@@ -118,14 +117,6 @@ def _resolve_chat_id_for_payload(payload: NotificationPayload) -> str | None:
                 payload.device_id,
                 exc,
             )
-
-    if configured_chat_id:
-        logger.info(
-            "Using fallback TELEGRAM_CHAT_ID for event %s (device=%s)",
-            payload.event_id,
-            payload.device_id or "n/a",
-        )
-        return configured_chat_id
 
     logger.info(
         "No Telegram chat target resolved for event %s (device=%s)",

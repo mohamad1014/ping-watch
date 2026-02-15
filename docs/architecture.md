@@ -70,3 +70,4 @@ flowchart TD
 - Telegram notifications and WebSocket updates.
 - Production queue adapter (Azure Service Bus).
 - GPU inference integration.
+- Week-by-week production delivery milestones are tracked in `PLAN.md` (`12-week milestone plan`).

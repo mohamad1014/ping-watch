@@ -78,6 +78,54 @@ See `README.md` for commands.
 
 ---
 
+## Production readiness comparison (as of 2026-02-14)
+
+Assumed planning start date: **Monday, February 16, 2026**.
+
+| Area | Current state | Production target | Gap summary |
+|---|---|---|---|
+| Identity & access | Device-centric, no user auth/ownership enforcement | Authenticated users, device ownership, access control | High |
+| Data & storage | Postgres + blob upload working; local fallback paths still present | Managed cloud storage + strict prod-only storage paths + retention jobs | Medium |
+| Queue/worker reliability | RQ/Redis flow working, retries and force stop in place | Durable retries, dead-letter handling, idempotency guarantees, backlog alerts | Medium |
+| Notifications | Telegram/webhook working, now device-linked chat mapping | Webhook-based Telegram onboarding + delivery tracking + retry policies | Medium |
+| Observability | Structured API logs + worker logs; troubleshooting doc exists | Metrics dashboards, alerting thresholds, tracing, runbooks | Medium |
+| Security | Basic env-based secrets and CORS handling | Hardened authz, rate limits, key rotation, vulnerability gates | High |
+| Delivery process | Local scripts + tests passing | CI/CD with migration gating, staged rollout, rollback drills | High |
+| Performance/SLO | Functional behavior validated by tests | Explicit SLOs (latency, availability), load/soak-tested and monitored | High |
+
+### Target production definition (v1)
+
+- Private beta: limited users/devices, monitored rollout.
+- Initial production: authenticated multi-user system with reliable event processing and outbound alerting.
+- Suggested launch window if milestones hold: **week of May 11, 2026**.
+
+---
+
+## 12-week milestone plan (week-by-week)
+
+| Week | Dates | Deliverables | Acceptance criteria |
+|---|---|---|---|
+| 1 | Feb 16-22, 2026 | Production scope doc, SLOs, prioritized backlog | Written targets for uptime, alert latency, retention, cost; team sign-off |
+| 2 | Feb 23-Mar 1, 2026 | Auth foundation + user/session model + ownership schema | Non-dev write APIs require auth; unauthorized access tests pass |
+| 3 | Mar 2-8, 2026 | Device ownership enforcement and auth middleware hardening | Cross-user data access blocked in API tests; migrations verified |
+| 4 | Mar 9-15, 2026 | Frontend auth/device binding UX and ownership-aware views | Users only see own devices/events; multi-user E2E isolation test passes |
+| 5 | Mar 16-22, 2026 | Queue hardening (retry/backoff/idempotency/failed state model) | No dropped jobs under normal retry paths; failed state visible and test-covered |
+| 6 | Mar 23-29, 2026 | Notification reliability (delivery status + retry policy) | Alert delivery outcomes persisted and queryable; retry behavior validated |
+| 7 | Mar 30-Apr 5, 2026 | Observability baseline (metrics + dashboards + alert rules) | Event traceability end-to-end via IDs; queue depth/failure/latency visible |
+| 8 | Apr 6-12, 2026 | Staging parity + CI/CD + rollback workflow | Staging deploy/migrate/rollback is automated and repeatable |
+| 9 | Apr 13-19, 2026 | Security hardening (rate limits, secrets handling, scans) | No unresolved critical/high findings; security checks in CI |
+| 10 | Apr 20-26, 2026 | Performance/soak testing + retention/cleanup jobs | Meets target load and latency for sustained run; cleanup jobs verified |
+| 11 | Apr 27-May 3, 2026 | Private beta rollout + incident runbooks | Beta users onboarded; top operational incidents documented with runbooks |
+| 12 | May 4-10, 2026 | Launch readiness review + go-live checklist | Launch gate passed: SLO, security, observability, rollback, on-call readiness |
+
+### Milestone gates
+
+- **Gate A (end Week 4):** Multi-user isolation complete.
+- **Gate B (end Week 8):** Deployment and rollback pipeline stable.
+- **Gate C (end Week 12):** Launch readiness complete.
+
+---
+
 ## Constraints (kept)
 
 * **MVP = PWA foreground** (screen on; best with plugged-in old phone)

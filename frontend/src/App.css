@@ -132,6 +132,17 @@
   color: #4f3a14;
 }
 
+.telegram-onboarding-command {
+  flex-basis: 100%;
+}
+
+.telegram-onboarding-command code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  background: rgba(79, 58, 20, 0.1);
+  border-radius: 8px;
+  padding: 0.15rem 0.4rem;
+}
+
 .controls {
   display: flex;
   flex-wrap: wrap;

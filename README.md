@@ -62,6 +62,10 @@ Free tier has monthly allowance; paid tier raises limits and retention.
 
 Phase 2 complete: upload + event sync with retries/offline queue and background retry loop. Auth/credits are still pending.
 
+Production planning is tracked in `PLAN.md` under:
+- `Production readiness comparison (as of 2026-02-14)`
+- `12-week milestone plan (week-by-week)`
+
 ## Repo Layout (current)
 
 - `frontend/` — PWA (React + TypeScript, Vite)
@@ -122,8 +126,8 @@ Note: E2E/Playwright runs use a temp SQLite database for the backend; if you ove
 
 ## Environment
 
-- `VITE_API_URL` — backend base URL for the frontend (default `http://localhost:8000`).
-- `VITE_TELEGRAM_BOT_URL` — Telegram bot deep link used by the frontend onboarding button (for example `https://t.me/<your_bot>?start=pingwatch`).
+- `VITE_API_URL` — optional backend base URL override for the frontend. If unset, frontend uses `<current-host>:8000` (better for phone/LAN testing). Set explicitly when backend is on a different host/port.
+- `VITE_ALLOWED_HOSTS` — optional comma-separated extra hostnames allowed by the Vite dev server (useful for tunnel domains).
 - `VITE_POLL_INTERVAL_MS` — polling interval for event refresh (default 5000).
 - `VITE_UPLOAD_INTERVAL_MS` — polling interval for retrying pending uploads (default 10000).
 - `VITE_DISABLE_MEDIA` — set to `true` to skip `getUserMedia`/`MediaRecorder` capture (useful for tests/E2E).
@@ -133,8 +137,10 @@ Note: E2E/Playwright runs use a temp SQLite database for the backend; if you ove
 - `AZURITE_AUTO_CREATE_CONTAINER` — auto-create the clips container on first upload (recommended in local dev).
 - `AZURITE_SAS_EXPIRY_SECONDS` — SAS expiry for upload URLs (default 900).
 - `TELEGRAM_BOT_TOKEN` — enables Telegram integration.
-- `TELEGRAM_BOT_ONBOARDING_URL` — bot deep link used by backend readiness responses and frontend onboarding button; backend appends `?start=<device_id>` (or replaces `{device_id}` placeholder) so each device can be linked to its own chat.
-- `TELEGRAM_CHAT_ID` — optional fallback chat id used only when no per-device Telegram mapping is available.
+- `TELEGRAM_BOT_ONBOARDING_URL` — bot URL used by onboarding (for example `https://t.me/<your_bot>`).
+- `TELEGRAM_API_BASE_URL` — optional Telegram API base URL override (default `https://api.telegram.org`; useful for tests/mocks).
+- `TELEGRAM_LINK_TOKEN_TTL_SECONDS` — TTL for Telegram link attempts (default `600`, clamped to 60..3600).
+- `TELEGRAM_WEBHOOK_SECRET` — optional secret token expected in `X-Telegram-Bot-Api-Secret-Token` for `/notifications/telegram/webhook`.
 - `TELEGRAM_SEND_VIDEO` — when `true` (default), Telegram alerts send the clip as `sendVideo`; when `false`, sends text-only alerts.
 - `NOTIFY_WEBHOOK_URL` — optional webhook endpoint to receive JSON alert payloads for `should_notify=true` events.
 - `NOTIFY_WEBHOOK_SECRET` — optional static secret sent as `X-Ping-Watch-Webhook-Secret` header on webhook requests.
@@ -142,6 +148,123 @@ Note: E2E/Playwright runs use a temp SQLite database for the backend; if you ove
 - `WORKER_LOG_LEVEL` — worker log level (`DEBUG`, `INFO`, `WARNING`, ...). Set to `INFO` to see notification dispatch logs.
 
 Frontend tests can also override poll/upload intervals via runtime globals; see `frontend/README.md`.
+
+## API quick reference
+
+Base URL (local): `http://localhost:8000`
+
+### Devices
+
+`POST /devices/register`
+- What it does: creates (or returns) a device record; caller may provide a stable `device_id`.
+- Example request:
+```bash
+curl -X POST http://localhost:8000/devices/register \
+  -H "Content-Type: application/json" \
+  -d '{"device_id":"device-123","label":"Pixel 8"}'
+```
+- Example response:
+```json
+{
+  "device_id": "device-123",
+  "label": "Pixel 8",
+  "created_at": "2026-02-14T20:00:00+00:00"
+}
+```
+
+### Sessions
+
+`POST /sessions/start`
+- What it does: starts a monitoring session for a device (optional `analysis_prompt`).
+- Example:
+```bash
+curl -X POST http://localhost:8000/sessions/start \
+  -H "Content-Type: application/json" \
+  -d '{"device_id":"device-123","analysis_prompt":"Alert me if someone enters."}'
+```
+
+`POST /sessions/stop`
+- What it does: stops capture for a session (processing jobs may still complete).
+
+`POST /sessions/force-stop`
+- What it does: stops the session and drops queued/processing work for that session.
+- Example response keys include `dropped_processing_events` and `dropped_queued_jobs`.
+
+`GET /sessions?device_id=<id>`
+- What it does: lists sessions; filter by device when query param is provided.
+
+### Events and uploads
+
+`POST /events`
+- What it does: creates an event directly when clip metadata + clip URI are already known.
+
+`POST /events/upload/initiate`
+- What it does: creates an event and returns upload target info.
+- Typical flow: call `initiate` -> upload bytes -> `finalize`.
+- Example:
+```bash
+curl -X POST http://localhost:8000/events/upload/initiate \
+  -H "Content-Type: application/json" \
+  -d '{"session_id":"sess-1","device_id":"device-123","trigger_type":"motion","duration_seconds":6.0,"clip_mime":"video/webm;codecs=vp8,opus","clip_size_bytes":1900000}'
+```
+- Example response:
+```json
+{
+  "event": { "event_id": "evt-1", "status": "processing" },
+  "upload_url": "http://.../events/evt-1/upload",
+  "blob_url": "http://.../events/evt-1/upload",
+  "expires_at": "2026-02-14T20:15:00+00:00"
+}
+```
+
+`PUT /events/{event_id}/upload`
+- What it does: relay upload endpoint (local dev fallback path); send raw clip bytes.
+
+`POST /events/{event_id}/upload/finalize`
+- What it does: marks upload complete and enqueues inference job.
+- Example:
+```bash
+curl -X POST http://localhost:8000/events/evt-1/upload/finalize \
+  -H "Content-Type: application/json" \
+  -d '{"etag":"\"abc123\""}'
+```
+
+`GET /events?session_id=<id>`
+- What it does: lists events; filter by session when query param is provided.
+
+`POST /events/{event_id}/summary`
+- What it does: worker callback endpoint to persist inference results.
+
+`GET /events/{event_id}/summary`
+- What it does: fetches persisted summary/inference output for an event.
+
+### Telegram readiness/linking
+
+`GET /notifications/telegram/readiness?device_id=<id>`
+- What it does: returns whether Telegram is enabled and linked for this device.
+
+`POST /notifications/telegram/link/start`
+- What it does: creates a short-lived one-time token and returns:
+  - `connect_url` deep link `https://t.me/<bot>?start=<token>`
+  - `fallback_command` (manual `/start <token>` command)
+  - `link_code` raw token (for client-side fallback UX)
+- Example:
+```bash
+curl -X POST http://localhost:8000/notifications/telegram/link/start \
+  -H "Content-Type: application/json" \
+  -d '{"device_id":"device-123"}'
+```
+
+`GET /notifications/telegram/link/status?device_id=<id>&attempt_id=<attempt>`
+- What it does: checks whether a specific link attempt is `pending`, `expired`, or `ready`.
+- Linking behavior: when status is checked, the backend also syncs bot updates via `getUpdates` so linking works even if webhook delivery is not configured yet.
+- Webhook conflict handling: if Telegram reports webhook/getUpdates conflict, the backend automatically calls `deleteWebhook` (without dropping pending updates) and retries linking sync.
+
+`POST /notifications/telegram/webhook`
+- What it does: Telegram webhook endpoint. `/start <token>` validates the one-time token and links the Telegram chat to the device.
+
+`GET /notifications/telegram/target?device_id=<id>`
+- What it does: returns resolved chat target metadata (`linked`, `chat_id`) for this device.
 
 ## Upload Pipeline (Azurite)
 

@@ -11,7 +11,6 @@ def test_run_command_sets_up_logging_and_runs_worker(monkeypatch):
     monkeypatch.setattr(cli, "run_worker", mock_run_worker)
     monkeypatch.setattr(cli, "logger", mock_logger)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
-    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
     monkeypatch.delenv("NOTIFY_WEBHOOK_URL", raising=False)
 
     cli.main(["run", "--queue", "clip_uploaded"])

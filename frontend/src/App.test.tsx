@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
@@ -18,6 +18,10 @@ const mockedSaveClip = vi.mocked(saveClip)
 const mockedListClips = vi.mocked(listClips)
 const mockedGetClip = vi.mocked(getClip)
 const mockedDeleteClipsBySession = vi.mocked(deleteClipsBySession)
+const TELEGRAM_LINK_ATTEMPT_KEY = 'ping-watch:telegram-link-attempt-id'
+const TELEGRAM_LINK_FALLBACK_URL_KEY = 'ping-watch:telegram-link-fallback-url'
+const TELEGRAM_LINK_FALLBACK_COMMAND_KEY = 'ping-watch:telegram-link-fallback-command'
+const TELEGRAM_LINK_WAITING_KEY = 'ping-watch:telegram-link-waiting'
 
 const buildResponse = (payload: unknown) =>
   Promise.resolve({
@@ -37,7 +41,8 @@ const buildUploadResponse = (etag: string) =>
 const createFetchMock = (routes: {
   registerDevice?: unknown
   telegramReadiness?: unknown[]
-  telegramLink?: unknown[]
+  telegramLinkStart?: unknown[]
+  telegramLinkStatus?: unknown[]
   start: unknown
   stop: unknown
   forceStop?: unknown
@@ -57,9 +62,29 @@ const createFetchMock = (routes: {
       reason: null,
       connect_url: null,
     }]
-  const telegramLinkQueue = routes.telegramLink?.length
-    ? [...routes.telegramLink]
-    : [...readinessQueue]
+  const telegramLinkStartQueue = routes.telegramLinkStart?.length
+    ? [...routes.telegramLinkStart]
+    : [{
+      enabled: true,
+      ready: false,
+      status: 'pending',
+      reason: null,
+      attempt_id: 'attempt-1',
+      connect_url: 'https://t.me/pingwatch_bot?start=token-1',
+      expires_at: '2099-01-01T00:00:00Z',
+      link_code: 'token-1',
+      fallback_command: '/start token-1',
+    }]
+  const telegramLinkStatusQueue = routes.telegramLinkStatus?.length
+    ? [...routes.telegramLinkStatus]
+    : [{
+      enabled: true,
+      ready: false,
+      linked: false,
+      status: 'pending',
+      reason: null,
+      attempt_id: 'attempt-1',
+    }]
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = input.toString()
 
@@ -69,9 +94,19 @@ const createFetchMock = (routes: {
       return buildResponse(payload)
     }
 
-    if (url.endsWith('/notifications/telegram/link') && init?.method === 'POST') {
+    if (url.endsWith('/notifications/telegram/link/start') && init?.method === 'POST') {
       const payload =
-        telegramLinkQueue.length > 1 ? telegramLinkQueue.shift() : telegramLinkQueue[0]
+        telegramLinkStartQueue.length > 1
+          ? telegramLinkStartQueue.shift()
+          : telegramLinkStartQueue[0]
+      return buildResponse(payload)
+    }
+
+    if (url.includes('/notifications/telegram/link/status')) {
+      const payload =
+        telegramLinkStatusQueue.length > 1
+          ? telegramLinkStatusQueue.shift()
+          : telegramLinkStatusQueue[0]
       return buildResponse(payload)
     }
 
@@ -140,7 +175,6 @@ describe('App', () => {
     mockedSaveClip.mockClear()
     mockedListClips.mockResolvedValue([])
     mockedDeleteClipsBySession.mockResolvedValue(undefined)
-    delete process.env.VITE_TELEGRAM_BOT_URL
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = input.toString()
       if (url.endsWith('/devices/register')) {
@@ -192,7 +226,7 @@ describe('App', () => {
         ready: false,
         status: 'needs_user_action',
         reason: 'Open Telegram and send /start to your bot, then return.',
-        connect_url: 'https://t.me/pingwatch_bot?start=pingwatch',
+        connect_url: 'https://t.me/pingwatch_bot',
       }],
       start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
       stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
@@ -221,22 +255,34 @@ describe('App', () => {
           ready: false,
           status: 'needs_user_action',
           reason: 'Open Telegram and send /start to your bot, then return.',
-          connect_url: 'https://t.me/pingwatch_bot?start=pingwatch',
+          connect_url: null,
         },
         {
           enabled: true,
           ready: true,
           status: 'ready',
           reason: null,
-          connect_url: 'https://t.me/pingwatch_bot?start=pingwatch',
+          connect_url: null,
         },
       ],
-      telegramLink: [{
+      telegramLinkStart: [{
+        enabled: true,
+        ready: false,
+        status: 'pending',
+        reason: null,
+        attempt_id: 'attempt-1',
+        connect_url: 'https://t.me/pingwatch_bot?start=token-1',
+        expires_at: '2099-01-01T00:00:00Z',
+        link_code: 'token-1',
+        fallback_command: '/start token-1',
+      }],
+      telegramLinkStatus: [{
         enabled: true,
         ready: true,
+        linked: true,
         status: 'ready',
         reason: null,
-        connect_url: 'https://t.me/pingwatch_bot?start=pingwatch',
+        attempt_id: 'attempt-1',
       }],
       start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
       stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
@@ -244,7 +290,8 @@ describe('App', () => {
       events: [[]],
     })
     vi.stubGlobal('fetch', fetchMock)
-    const openSpy = vi.spyOn(window, 'open').mockReturnValue({} as Window)
+    const popup = { location: { href: '' }, close: vi.fn() } as unknown as Window
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup)
 
     render(<App />)
 
@@ -253,13 +300,14 @@ describe('App', () => {
     )
 
     expect(openSpy).toHaveBeenCalledWith(
-      'https://t.me/pingwatch_bot?start=pingwatch',
+      'https://t.me/pingwatch_bot?start=token-1',
       '_blank',
       'noopener,noreferrer'
     )
-
-    await user.click(screen.getByRole('button', { name: /check telegram status/i }))
-    expect(screen.getByRole('button', { name: /start monitoring/i })).toBeEnabled()
+    expect(popup.location.href).toBe('')
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /start monitoring/i })).toBeEnabled()
+    })
 
     await user.click(screen.getByRole('button', { name: /start monitoring/i }))
     expect(fetchMock).toHaveBeenCalledWith(
@@ -268,6 +316,293 @@ describe('App', () => {
     )
 
     openSpy.mockRestore()
+  })
+
+  it('shows a backup Telegram link when popup is blocked', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: false,
+        status: 'needs_user_action',
+        reason: 'Open Telegram and send /start to your bot, then return.',
+        connect_url: null,
+      }],
+      telegramLinkStart: [{
+        enabled: true,
+        ready: false,
+        status: 'pending',
+        reason: null,
+        attempt_id: 'attempt-1',
+        connect_url: 'https://t.me/pingwatch_bot?start=token-1',
+        expires_at: '2099-01-01T00:00:00Z',
+      }],
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const openSpy = vi.spyOn(window, 'open')
+      .mockReturnValueOnce(null)
+
+    render(<App />)
+
+    await user.click(
+      await screen.findByRole('button', { name: /connect telegram alerts/i })
+    )
+
+    expect(openSpy).toHaveBeenNthCalledWith(
+      1,
+      'https://t.me/pingwatch_bot?start=token-1',
+      '_blank',
+      'noopener,noreferrer'
+    )
+    const fallbackLink = screen.getByRole('link', {
+      name: /open telegram link again/i,
+    })
+    expect(fallbackLink).toHaveAttribute(
+      'href',
+      'https://t.me/pingwatch_bot?start=token-1'
+    )
+    expect(screen.getByText(/popup blocked/i)).toBeInTheDocument()
+
+    openSpy.mockRestore()
+  })
+
+  it('opens a placeholder popup immediately while creating Telegram link on mobile', async () => {
+    const user = userEvent.setup()
+
+    let resolveLinkStart: ((value: Response) => void) | null = null
+    const linkStartPromise = new Promise<Response>((resolve) => {
+      resolveLinkStart = resolve
+    })
+
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString()
+      if (url.endsWith('/devices/register')) {
+        return Promise.resolve(buildResponse({
+          device_id: 'device-1',
+          label: null,
+          created_at: 'now',
+        }))
+      }
+      if (url.includes('/notifications/telegram/readiness')) {
+        return Promise.resolve(buildResponse({
+          enabled: true,
+          ready: false,
+          status: 'needs_user_action',
+          reason: 'Open Telegram and send /start to your bot, then return.',
+          connect_url: null,
+        }))
+      }
+      if (url.endsWith('/notifications/telegram/link/start') && init?.method === 'POST') {
+        return linkStartPromise
+      }
+      return Promise.resolve(buildResponse({}))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const previousUserAgent = navigator.userAgent
+    Object.defineProperty(window.navigator, 'userAgent', {
+      value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)',
+      configurable: true,
+    })
+
+    const popup = { location: { href: '' }, close: vi.fn() } as unknown as Window
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup)
+
+    render(<App />)
+
+    await user.click(
+      await screen.findByRole('button', { name: /connect telegram alerts/i })
+    )
+
+    expect(openSpy).toHaveBeenCalledWith('', '_blank', 'noopener,noreferrer')
+
+    await act(async () => {
+      resolveLinkStart?.(buildResponse({
+        enabled: true,
+        ready: false,
+        status: 'pending',
+        reason: null,
+        attempt_id: 'attempt-1',
+        connect_url: 'https://t.me/pingwatch_bot?start=token-1',
+        expires_at: '2099-01-01T00:00:00Z',
+      }))
+    })
+    await waitFor(() => {
+      expect(popup.location.href).toBe('https://t.me/pingwatch_bot?start=token-1')
+    })
+
+    Object.defineProperty(window.navigator, 'userAgent', {
+      value: previousUserAgent,
+      configurable: true,
+    })
+    openSpy.mockRestore()
+  })
+
+  it('persists telegram link attempt state for backup-check flow', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: false,
+        status: 'needs_user_action',
+        reason: 'Open Telegram and send /start to your bot, then return.',
+        connect_url: null,
+      }],
+      telegramLinkStart: [{
+        enabled: true,
+        ready: false,
+        status: 'pending',
+        reason: null,
+        attempt_id: 'attempt-1',
+        connect_url: 'https://t.me/pingwatch_bot?start=token-1',
+        expires_at: '2099-01-01T00:00:00Z',
+      }],
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(window, 'open').mockReturnValueOnce(null)
+
+    render(<App />)
+    await user.click(
+      await screen.findByRole('button', { name: /connect telegram alerts/i })
+    )
+
+    expect(localStorage.getItem(TELEGRAM_LINK_ATTEMPT_KEY)).toBe('attempt-1')
+    expect(localStorage.getItem(TELEGRAM_LINK_FALLBACK_URL_KEY)).toBe(
+      'https://t.me/pingwatch_bot?start=token-1'
+    )
+    expect(localStorage.getItem(TELEGRAM_LINK_FALLBACK_COMMAND_KEY)).toBe(
+      '/start token-1'
+    )
+  })
+
+  it('persists Telegram reopen link and fallback command even when popup opens', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: false,
+        status: 'needs_user_action',
+        reason: 'Open Telegram and send /start to your bot, then return.',
+        connect_url: null,
+      }],
+      telegramLinkStart: [{
+        enabled: true,
+        ready: false,
+        status: 'pending',
+        reason: null,
+        attempt_id: 'attempt-1',
+        connect_url: 'https://t.me/pingwatch_bot?start=token-1',
+        expires_at: '2099-01-01T00:00:00Z',
+        link_code: 'token-1',
+        fallback_command: '/start token-1',
+      }],
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(window, 'open').mockReturnValue({
+      location: { href: '' },
+      close: vi.fn(),
+    } as unknown as Window)
+
+    render(<App />)
+    await user.click(
+      await screen.findByRole('button', { name: /connect telegram alerts/i })
+    )
+
+    expect(localStorage.getItem(TELEGRAM_LINK_FALLBACK_URL_KEY)).toBe(
+      'https://t.me/pingwatch_bot?start=token-1'
+    )
+    expect(localStorage.getItem(TELEGRAM_LINK_FALLBACK_COMMAND_KEY)).toBe(
+      '/start token-1'
+    )
+  })
+
+  it('shows fallback Telegram start command while waiting for confirmation', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: false,
+        status: 'needs_user_action',
+        reason: 'Open Telegram and send /start to your bot, then return.',
+        connect_url: null,
+      }],
+      telegramLinkStart: [{
+        enabled: true,
+        ready: false,
+        status: 'pending',
+        reason: null,
+        attempt_id: 'attempt-1',
+        connect_url: 'https://t.me/pingwatch_bot?start=token-1',
+        expires_at: '2099-01-01T00:00:00Z',
+        link_code: 'token-1',
+        fallback_command: '/start token-1',
+      }],
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(window, 'open').mockReturnValueOnce(null)
+
+    render(<App />)
+    await user.click(
+      await screen.findByRole('button', { name: /connect telegram alerts/i })
+    )
+
+    expect(screen.getByText('/start token-1')).toBeInTheDocument()
+  })
+
+  it('clears stale telegram attempt state when status returns not_found', async () => {
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: false,
+        status: 'needs_user_action',
+        reason: 'Tap Connect Telegram alerts to start linking.',
+      }],
+      telegramLinkStatus: [{
+        enabled: true,
+        ready: false,
+        linked: false,
+        status: 'not_found',
+        reason: 'This link attempt no longer exists. Start a new Telegram connection.',
+        attempt_id: 'attempt-stale',
+      }],
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    localStorage.setItem(TELEGRAM_LINK_ATTEMPT_KEY, 'attempt-stale')
+    localStorage.setItem(TELEGRAM_LINK_WAITING_KEY, '1')
+    localStorage.setItem(
+      TELEGRAM_LINK_FALLBACK_URL_KEY,
+      'https://t.me/pingwatch_bot?start=token-stale'
+    )
+    localStorage.setItem(TELEGRAM_LINK_FALLBACK_COMMAND_KEY, '/start token-stale')
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(localStorage.getItem(TELEGRAM_LINK_ATTEMPT_KEY)).toBeNull()
+      expect(localStorage.getItem(TELEGRAM_LINK_WAITING_KEY)).toBeNull()
+      expect(localStorage.getItem(TELEGRAM_LINK_FALLBACK_URL_KEY)).toBeNull()
+      expect(localStorage.getItem(TELEGRAM_LINK_FALLBACK_COMMAND_KEY)).toBeNull()
+    })
   })
 
   it('starts and stops a session via the API', async () => {

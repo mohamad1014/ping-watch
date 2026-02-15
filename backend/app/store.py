@@ -5,7 +5,7 @@ from uuid import uuid4
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.models import DeviceModel, EventModel, SessionModel
+from app.models import DeviceModel, EventModel, SessionModel, TelegramLinkAttemptModel
 
 
 def _now() -> datetime:
@@ -13,6 +13,7 @@ def _now() -> datetime:
 
 
 def reset_store(db: Session) -> None:
+    db.execute(delete(TelegramLinkAttemptModel))
     db.execute(delete(EventModel))
     db.execute(delete(SessionModel))
     db.execute(delete(DeviceModel))
@@ -91,6 +92,70 @@ def link_device_telegram_chat(
     db.commit()
     db.refresh(record)
     return record
+
+
+def create_telegram_link_attempt(
+    db: Session,
+    *,
+    device_id: str,
+    token_hash: str,
+    expires_at: datetime,
+) -> TelegramLinkAttemptModel:
+    record = TelegramLinkAttemptModel(
+        attempt_id=str(uuid4()),
+        device_id=device_id,
+        token_hash=token_hash,
+        status="pending",
+        created_at=_now(),
+        expires_at=expires_at,
+        linked_at=None,
+        chat_id=None,
+        telegram_username=None,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def get_telegram_link_attempt(
+    db: Session, attempt_id: str
+) -> Optional[TelegramLinkAttemptModel]:
+    return db.get(TelegramLinkAttemptModel, attempt_id)
+
+
+def get_telegram_link_attempt_by_token_hash(
+    db: Session, token_hash: str
+) -> Optional[TelegramLinkAttemptModel]:
+    stmt = select(TelegramLinkAttemptModel).where(
+        TelegramLinkAttemptModel.token_hash == token_hash
+    )
+    return db.scalar(stmt)
+
+
+def mark_telegram_link_attempt_expired(
+    db: Session, attempt: TelegramLinkAttemptModel
+) -> TelegramLinkAttemptModel:
+    attempt.status = "expired"
+    db.commit()
+    db.refresh(attempt)
+    return attempt
+
+
+def mark_telegram_link_attempt_linked(
+    db: Session,
+    attempt: TelegramLinkAttemptModel,
+    *,
+    chat_id: str,
+    username: Optional[str] = None,
+) -> TelegramLinkAttemptModel:
+    attempt.status = "linked"
+    attempt.linked_at = _now()
+    attempt.chat_id = chat_id
+    attempt.telegram_username = username
+    db.commit()
+    db.refresh(attempt)
+    return attempt
 
 
 def stop_session(db: Session, session_id: str) -> Optional[SessionModel]:

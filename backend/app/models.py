@@ -85,3 +85,25 @@ class EventModel(Base):
     detected_actions: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
 
     session: Mapped[SessionModel] = relationship(back_populates="events")
+
+
+class TelegramLinkAttemptModel(Base):
+    __tablename__ = "telegram_link_attempts"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'linked', 'expired')",
+            name="ck_telegram_link_attempts_status",
+        ),
+    )
+
+    attempt_id: Mapped[str] = mapped_column(String, primary_key=True)
+    device_id: Mapped[str] = mapped_column(String, index=True)
+    token_hash: Mapped[str] = mapped_column(String, unique=True, index=True)
+    status: Mapped[str] = mapped_column(String, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    linked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    chat_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    telegram_username: Mapped[str | None] = mapped_column(String, nullable=True)

@@ -1,4 +1,25 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+const normalizeApiBaseUrl = (value: string): string => value.replace(/\/+$/, '')
+
+const getDefaultApiBaseUrl = (): string => {
+  if (typeof window !== 'undefined' && window.location?.hostname) {
+    return `${window.location.protocol}//${window.location.hostname}:8000`
+  }
+  return 'http://localhost:8000'
+}
+
+const API_BASE_URL = normalizeApiBaseUrl(
+  import.meta.env.VITE_API_URL?.trim() || getDefaultApiBaseUrl()
+)
+
+export class ApiError extends Error {
+  status: number
+
+  constructor(status: number, message?: string) {
+    super(message ?? `Request failed: ${status}`)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
 
 type RequestOptions = {
   method?: string
@@ -15,7 +36,7 @@ const request = async <T>(path: string, options: RequestOptions = {}) => {
   })
 
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`)
+    throw new ApiError(response.status)
   }
 
   return (await response.json()) as T
@@ -68,7 +89,27 @@ export type TelegramReadinessResponse = {
   ready: boolean
   status: string
   reason: string | null
+}
+
+export type TelegramLinkStartResponse = {
+  enabled: boolean
+  ready: boolean
+  status: string
+  reason: string | null
+  attemptId: string | null
   connectUrl: string | null
+  expiresAt: string | null
+  linkCode: string | null
+  fallbackCommand: string | null
+}
+
+export type TelegramLinkStatusResponse = {
+  enabled: boolean
+  ready: boolean
+  linked: boolean
+  status: string
+  reason: string | null
+  attemptId: string
 }
 
 type TelegramReadinessApiResponse = {
@@ -76,7 +117,27 @@ type TelegramReadinessApiResponse = {
   ready: boolean
   status: string
   reason?: string | null
+}
+
+type TelegramLinkStartApiResponse = {
+  enabled: boolean
+  ready: boolean
+  status: string
+  reason?: string | null
+  attempt_id?: string | null
   connect_url?: string | null
+  expires_at?: string | null
+  link_code?: string | null
+  fallback_command?: string | null
+}
+
+type TelegramLinkStatusApiResponse = {
+  enabled: boolean
+  ready: boolean
+  linked: boolean
+  status: string
+  reason?: string | null
+  attempt_id: string
 }
 
 export type CreateEventPayload = {
@@ -142,7 +203,31 @@ const toTelegramReadiness = (
   ready: response.ready,
   status: response.status,
   reason: response.reason ?? null,
+})
+
+const toTelegramLinkStart = (
+  response: TelegramLinkStartApiResponse
+): TelegramLinkStartResponse => ({
+  enabled: response.enabled,
+  ready: response.ready,
+  status: response.status,
+  reason: response.reason ?? null,
+  attemptId: response.attempt_id ?? null,
   connectUrl: response.connect_url ?? null,
+  expiresAt: response.expires_at ?? null,
+  linkCode: response.link_code ?? null,
+  fallbackCommand: response.fallback_command ?? null,
+})
+
+const toTelegramLinkStatus = (
+  response: TelegramLinkStatusApiResponse
+): TelegramLinkStatusResponse => ({
+  enabled: response.enabled,
+  ready: response.ready,
+  linked: response.linked,
+  status: response.status,
+  reason: response.reason ?? null,
+  attemptId: response.attempt_id,
 })
 
 export const getTelegramReadiness = async (
@@ -154,16 +239,29 @@ export const getTelegramReadiness = async (
   return toTelegramReadiness(response)
 }
 
-export const confirmTelegramLink = async (
+export const startTelegramLink = async (
   deviceId: string
-): Promise<TelegramReadinessResponse> => {
-  const response = await request<TelegramReadinessApiResponse>('/notifications/telegram/link', {
-    method: 'POST',
-    body: {
-      device_id: deviceId,
-    },
-  })
-  return toTelegramReadiness(response)
+): Promise<TelegramLinkStartResponse> => {
+  const response = await request<TelegramLinkStartApiResponse>(
+    '/notifications/telegram/link/start',
+    {
+      method: 'POST',
+      body: {
+        device_id: deviceId,
+      },
+    }
+  )
+  return toTelegramLinkStart(response)
+}
+
+export const getTelegramLinkStatus = async (
+  deviceId: string,
+  attemptId: string
+): Promise<TelegramLinkStatusResponse> => {
+  const response = await request<TelegramLinkStatusApiResponse>(
+    `/notifications/telegram/link/status?device_id=${encodeURIComponent(deviceId)}&attempt_id=${encodeURIComponent(attemptId)}`
+  )
+  return toTelegramLinkStatus(response)
 }
 
 export const registerDevice = (payload: {
