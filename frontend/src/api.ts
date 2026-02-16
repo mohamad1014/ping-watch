@@ -1,4 +1,25 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+const normalizeApiBaseUrl = (value: string): string => value.replace(/\/+$/, '')
+
+const getDefaultApiBaseUrl = (): string => {
+  if (typeof window !== 'undefined' && window.location?.hostname) {
+    return `${window.location.protocol}//${window.location.hostname}:8000`
+  }
+  return 'http://localhost:8000'
+}
+
+const API_BASE_URL = normalizeApiBaseUrl(
+  import.meta.env.VITE_API_URL?.trim() || getDefaultApiBaseUrl()
+)
+
+export class ApiError extends Error {
+  status: number
+
+  constructor(status: number, message?: string) {
+    super(message ?? `Request failed: ${status}`)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
 
 type RequestOptions = {
   method?: string
@@ -15,7 +36,7 @@ const request = async <T>(path: string, options: RequestOptions = {}) => {
   })
 
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`)
+    throw new ApiError(response.status)
   }
 
   return (await response.json()) as T
@@ -27,6 +48,7 @@ export type SessionResponse = {
   status: string
   started_at?: string
   stopped_at?: string | null
+  analysis_prompt?: string | null
 }
 
 export type DeviceResponse = {
@@ -53,6 +75,69 @@ export type EventResponse = {
   summary?: string | null
   label?: string | null
   confidence?: number | null
+  inference_provider?: string | null
+  inference_model?: string | null
+  should_notify?: boolean | null
+  alert_reason?: string | null
+  matched_rules?: string[] | null
+  detected_entities?: string[] | null
+  detected_actions?: string[] | null
+}
+
+export type TelegramReadinessResponse = {
+  enabled: boolean
+  ready: boolean
+  status: string
+  reason: string | null
+}
+
+export type TelegramLinkStartResponse = {
+  enabled: boolean
+  ready: boolean
+  status: string
+  reason: string | null
+  attemptId: string | null
+  connectUrl: string | null
+  expiresAt: string | null
+  linkCode: string | null
+  fallbackCommand: string | null
+}
+
+export type TelegramLinkStatusResponse = {
+  enabled: boolean
+  ready: boolean
+  linked: boolean
+  status: string
+  reason: string | null
+  attemptId: string
+}
+
+type TelegramReadinessApiResponse = {
+  enabled: boolean
+  ready: boolean
+  status: string
+  reason?: string | null
+}
+
+type TelegramLinkStartApiResponse = {
+  enabled: boolean
+  ready: boolean
+  status: string
+  reason?: string | null
+  attempt_id?: string | null
+  connect_url?: string | null
+  expires_at?: string | null
+  link_code?: string | null
+  fallback_command?: string | null
+}
+
+type TelegramLinkStatusApiResponse = {
+  enabled: boolean
+  ready: boolean
+  linked: boolean
+  status: string
+  reason?: string | null
+  attempt_id: string
 }
 
 export type CreateEventPayload = {
@@ -82,10 +167,13 @@ export type InitiateUploadResponse = {
   expiresAt: string
 }
 
-export const startSession = (deviceId: string) =>
+export const startSession = (deviceId: string, analysisPrompt?: string) =>
   request<SessionResponse>('/sessions/start', {
     method: 'POST',
-    body: { device_id: deviceId },
+    body: {
+      device_id: deviceId,
+      analysis_prompt: analysisPrompt || null,
+    },
   })
 
 export const stopSession = (sessionId: string) =>
@@ -94,8 +182,87 @@ export const stopSession = (sessionId: string) =>
     body: { session_id: sessionId },
   })
 
+export type ForceStopSessionResponse = SessionResponse & {
+  dropped_processing_events: number
+  dropped_queued_jobs: number
+}
+
+export const forceStopSession = (sessionId: string) =>
+  request<ForceStopSessionResponse>('/sessions/force-stop', {
+    method: 'POST',
+    body: { session_id: sessionId },
+  })
+
 export const listEvents = (sessionId: string) =>
   request<EventResponse[]>(`/events?session_id=${encodeURIComponent(sessionId)}`)
+
+const toTelegramReadiness = (
+  response: TelegramReadinessApiResponse
+): TelegramReadinessResponse => ({
+  enabled: response.enabled,
+  ready: response.ready,
+  status: response.status,
+  reason: response.reason ?? null,
+})
+
+const toTelegramLinkStart = (
+  response: TelegramLinkStartApiResponse
+): TelegramLinkStartResponse => ({
+  enabled: response.enabled,
+  ready: response.ready,
+  status: response.status,
+  reason: response.reason ?? null,
+  attemptId: response.attempt_id ?? null,
+  connectUrl: response.connect_url ?? null,
+  expiresAt: response.expires_at ?? null,
+  linkCode: response.link_code ?? null,
+  fallbackCommand: response.fallback_command ?? null,
+})
+
+const toTelegramLinkStatus = (
+  response: TelegramLinkStatusApiResponse
+): TelegramLinkStatusResponse => ({
+  enabled: response.enabled,
+  ready: response.ready,
+  linked: response.linked,
+  status: response.status,
+  reason: response.reason ?? null,
+  attemptId: response.attempt_id,
+})
+
+export const getTelegramReadiness = async (
+  deviceId: string
+): Promise<TelegramReadinessResponse> => {
+  const response = await request<TelegramReadinessApiResponse>(
+    `/notifications/telegram/readiness?device_id=${encodeURIComponent(deviceId)}`
+  )
+  return toTelegramReadiness(response)
+}
+
+export const startTelegramLink = async (
+  deviceId: string
+): Promise<TelegramLinkStartResponse> => {
+  const response = await request<TelegramLinkStartApiResponse>(
+    '/notifications/telegram/link/start',
+    {
+      method: 'POST',
+      body: {
+        device_id: deviceId,
+      },
+    }
+  )
+  return toTelegramLinkStart(response)
+}
+
+export const getTelegramLinkStatus = async (
+  deviceId: string,
+  attemptId: string
+): Promise<TelegramLinkStatusResponse> => {
+  const response = await request<TelegramLinkStatusApiResponse>(
+    `/notifications/telegram/link/status?device_id=${encodeURIComponent(deviceId)}&attempt_id=${encodeURIComponent(attemptId)}`
+  )
+  return toTelegramLinkStatus(response)
+}
 
 export const registerDevice = (payload: {
   deviceId?: string
@@ -157,3 +324,26 @@ export const finalizeUpload = (eventId: string, etag: string | null) =>
     method: 'POST',
     body: { etag },
   })
+
+export const uploadClipViaApi = async (
+  eventId: string,
+  blob: Blob,
+  options: { contentType: string }
+): Promise<{ etag: string | null }> => {
+  const response = await fetch(
+    `${API_BASE_URL}/events/${encodeURIComponent(eventId)}/upload`,
+    {
+      method: 'PUT',
+      body: blob,
+      headers: {
+        'Content-Type': options.contentType,
+      },
+    }
+  )
+
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`)
+  }
+
+  return { etag: response.headers.get('etag') }
+}

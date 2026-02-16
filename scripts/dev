@@ -4,6 +4,12 @@ set -euo pipefail
 scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$scripts_dir/.." && pwd)
 
+if [[ -f "$repo_root/.env" ]]; then
+  set -a
+  . "$repo_root/.env"
+  set +a
+fi
+
 pids=()
 cleanup() {
   for pid in "${pids[@]}"; do
@@ -22,6 +28,12 @@ pids+=("$!")
   cd "$repo_root/backend"
   .venv/bin/alembic upgrade head
   .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+) &
+pids+=("$!")
+
+(
+  cd "$repo_root/worker"
+  .venv/bin/python -m app.cli run --queue clip_uploaded
 ) &
 pids+=("$!")
 

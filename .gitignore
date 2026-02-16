@@ -60,6 +60,7 @@ tmp/
 *.sqlite
 *.db
 .local_uploads/
+.inference_frames/
 
 # Telegram Bot
 .codex/skills/update-user/assets/*

@@ -1,15 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import {
+  ApiError,
   type EventResponse,
+  forceStopSession,
+  getTelegramLinkStatus,
+  getTelegramReadiness,
   listEvents,
+  startTelegramLink,
   startSession,
   stopSession,
+  type TelegramReadinessResponse,
 } from './api'
-import { getClip, listClips, saveClip, type StoredClip } from './clipStore'
+import {
+  deleteClipsBySession,
+  getClip,
+  listClips,
+  saveClip,
+  type StoredClip,
+} from './clipStore'
 import { uploadPendingClips } from './clipUpload'
 import { ensureDeviceId } from './device'
 import { SequentialRecorder, type ClipCompleteData } from './sequentialRecorder'
+import { createSerialQueue, type SerialQueue } from './clipProcessingQueue'
 import {
   setBenchmark,
   compareWithBenchmark,
@@ -37,6 +50,16 @@ const statusLabels = {
 
 type SessionStatus = keyof typeof statusLabels
 type CaptureStatus = 'idle' | 'active' | 'error'
+type QueuedClip = {
+  data: ClipCompleteData
+  sessionId: string
+  deviceId: string
+}
+
+const TELEGRAM_LINK_ATTEMPT_KEY = 'ping-watch:telegram-link-attempt-id'
+const TELEGRAM_LINK_FALLBACK_URL_KEY = 'ping-watch:telegram-link-fallback-url'
+const TELEGRAM_LINK_FALLBACK_COMMAND_KEY = 'ping-watch:telegram-link-fallback-command'
+const TELEGRAM_LINK_WAITING_KEY = 'ping-watch:telegram-link-waiting'
 
 const getEnvNumber = (key: string) => {
   const env = (import.meta as ImportMeta & {
@@ -83,6 +106,15 @@ const formatConfidence = (value: number | null | undefined) => {
   return `${Math.round(value * 100)}%`
 }
 
+const formatInferenceSource = (
+  provider: string | null | undefined,
+  model: string | null | undefined
+) => {
+  if (!provider && !model) return null
+  if (provider && model) return `${provider} · ${model}`
+  return provider ?? model
+}
+
 const generateClipId = () => {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
   return `clip_${Date.now()}_${Math.random().toString(16).slice(2)}`
@@ -101,14 +133,76 @@ const formatTriggers = (triggers: TriggerReason[]) =>
     })
     .join(', ')
 
+const readStoredTelegramValue = (key: string): string | null => {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+const writeStoredTelegramValue = (key: string, value: string | null) => {
+  try {
+    if (value === null) {
+      localStorage.removeItem(key)
+      return
+    }
+    localStorage.setItem(key, value)
+  } catch {
+    // Ignore storage errors and continue with in-memory state.
+  }
+}
+
+const shouldPreOpenTelegramPopup = () => {
+  if (typeof navigator === 'undefined') return false
+  return /android|iphone|ipad|ipod/i.test(navigator.userAgent)
+}
+
+const deriveTelegramFallbackCommand = (
+  explicitCommand: string | null,
+  connectUrl: string | null
+) => {
+  if (explicitCommand) return explicitCommand
+  if (!connectUrl) return null
+  try {
+    const token = new URL(connectUrl).searchParams.get('start')
+    if (!token) return null
+    return `/start ${token}`
+  } catch {
+    return null
+  }
+}
+
+const isTerminalTelegramLinkStatus = (status: string) =>
+  status === 'not_found'
+  || status === 'expired'
+  || status === 'unknown_device'
+  || status === 'not_configured'
+
 function App() {
   // Session state
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('idle')
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [events, setEvents] = useState<EventResponse[]>([])
   const [isBusy, setIsBusy] = useState(false)
+  const [isForceStopping, setIsForceStopping] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copiedEventId, setCopiedEventId] = useState<string | null>(null)
+  const [analysisPrompt, setAnalysisPrompt] = useState('')
+  const [telegramReadiness, setTelegramReadiness] = useState<TelegramReadinessResponse | null>(null)
+  const [checkingTelegramReadiness, setCheckingTelegramReadiness] = useState(false)
+  const [isWaitingForTelegramConnect, setIsWaitingForTelegramConnect] = useState(
+    () => readStoredTelegramValue(TELEGRAM_LINK_WAITING_KEY) === '1'
+  )
+  const [telegramPopupFallbackUrl, setTelegramPopupFallbackUrl] = useState<string | null>(
+    () => readStoredTelegramValue(TELEGRAM_LINK_FALLBACK_URL_KEY)
+  )
+  const [telegramFallbackCommand, setTelegramFallbackCommand] = useState<string | null>(
+    () => readStoredTelegramValue(TELEGRAM_LINK_FALLBACK_COMMAND_KEY)
+  )
+  const [telegramLinkAttemptId, setTelegramLinkAttemptId] = useState<string | null>(
+    () => readStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_KEY)
+  )
 
   // Clips state
   const [clips, setClips] = useState<StoredClip[]>([])
@@ -120,6 +214,7 @@ function App() {
   const [currentClipIndex, setCurrentClipIndex] = useState(0)
   const [benchmarkClipId, setBenchmarkClipId] = useState<string | null>(null)
   const [sessionCounts, setSessionCounts] = useState({ stored: 0, discarded: 0 })
+  const [queuedClipsRemaining, setQueuedClipsRemaining] = useState(0)
 
   // Custom hooks
   const settings = useRecordingSettings()
@@ -133,15 +228,41 @@ function App() {
   const sequentialRecorderRef = useRef<SequentialRecorder | null>(null)
   const clipUrlRef = useRef<string | null>(null)
   const uploadInFlightRef = useRef(false)
-  const isProcessingClipRef = useRef(false)
+  const dropQueuedProcessingRef = useRef(false)
+  const processQueuedClipRef = useRef<(clip: QueuedClip) => Promise<void>>(async () => {})
+  const clipQueueRef = useRef<SerialQueue<QueuedClip> | null>(null)
+
+  if (!clipQueueRef.current) {
+    clipQueueRef.current = createSerialQueue(
+      (queuedClip) => processQueuedClipRef.current(queuedClip),
+      {
+        onError: (error) => {
+          console.error('[App] Error processing clip:', error)
+        },
+        onSizeChange: (size) => {
+          setQueuedClipsRemaining(size)
+        },
+      }
+    )
+  }
 
   // Memoized values
   const lastEvent = useMemo(() => events[events.length - 1], [events])
+  const eventsById = useMemo(
+    () => new Map(events.map((event) => [event.event_id, event])),
+    [events]
+  )
+  const hasProcessingEvents = useMemo(
+    () => events.some((event) => event.status === 'processing'),
+    [events]
+  )
   const clipStats = useMemo(() => {
     const pending = clips.filter((clip) => !clip.uploaded).length
     const failed = clips.filter((clip) => !clip.uploaded && clip.lastUploadError).length
     return { pending, failed }
   }, [clips])
+  const requiresTelegramOnboarding = checkingTelegramReadiness
+    || (telegramReadiness?.enabled === true && telegramReadiness.ready === false)
 
   const refreshClips = async () => {
     const nextClips = await listClips()
@@ -149,9 +270,181 @@ function App() {
     setClips(nextClips)
   }
 
-  const handleClipComplete = useCallback(
-    async (data: ClipCompleteData) => {
+  const ensureResolvedDeviceId = useCallback(async () => {
+    if (deviceIdRef.current) return deviceIdRef.current
+    const resolved = await ensureDeviceId()
+    deviceIdRef.current = resolved
+    return resolved
+  }, [])
+
+  const clearTelegramLinkState = useCallback(() => {
+    setIsWaitingForTelegramConnect(false)
+    setTelegramPopupFallbackUrl(null)
+    setTelegramFallbackCommand(null)
+    setTelegramLinkAttemptId(null)
+    writeStoredTelegramValue(TELEGRAM_LINK_WAITING_KEY, null)
+    writeStoredTelegramValue(TELEGRAM_LINK_FALLBACK_URL_KEY, null)
+    writeStoredTelegramValue(TELEGRAM_LINK_FALLBACK_COMMAND_KEY, null)
+    writeStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_KEY, null)
+  }, [])
+
+  const persistTelegramLinkState = useCallback((
+    state: {
+      waiting?: boolean
+      fallbackUrl?: string | null
+      fallbackCommand?: string | null
+      attemptId?: string | null
+    }
+  ) => {
+    if (state.waiting !== undefined) {
+      setIsWaitingForTelegramConnect(state.waiting)
+      writeStoredTelegramValue(
+        TELEGRAM_LINK_WAITING_KEY,
+        state.waiting ? '1' : null
+      )
+    }
+    if (state.fallbackUrl !== undefined) {
+      setTelegramPopupFallbackUrl(state.fallbackUrl)
+      writeStoredTelegramValue(TELEGRAM_LINK_FALLBACK_URL_KEY, state.fallbackUrl)
+    }
+    if (state.fallbackCommand !== undefined) {
+      setTelegramFallbackCommand(state.fallbackCommand)
+      writeStoredTelegramValue(TELEGRAM_LINK_FALLBACK_COMMAND_KEY, state.fallbackCommand)
+    }
+    if (state.attemptId !== undefined) {
+      setTelegramLinkAttemptId(state.attemptId)
+      writeStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_KEY, state.attemptId)
+    }
+  }, [])
+
+  const processQueuedClip = useCallback(
+    async (queuedClip: QueuedClip) => {
+      const { data, sessionId: resolvedSessionId, deviceId: resolvedDeviceId } = queuedClip
       const { blob, clipIndex, startTime, metrics } = data
+
+      if (!resolvedSessionId || !resolvedDeviceId) {
+        console.warn('[App] Clip completed but no active session')
+        return
+      }
+      if (dropQueuedProcessingRef.current) {
+        return
+      }
+
+      const clipId = generateClipId()
+      const durationSeconds = (Date.now() - startTime) / 1000
+      setCurrentClipIndex(clipIndex)
+
+      if (clipIndex === 0) {
+        // First clip = benchmark
+        const benchmarkData = createBenchmarkData(clipId, metrics)
+        setBenchmark(benchmarkData)
+        setBenchmarkClipId(clipId)
+        if (dropQueuedProcessingRef.current) return
+
+        await saveClip({
+          sessionId: resolvedSessionId,
+          deviceId: resolvedDeviceId,
+          triggerType: 'benchmark',
+          blob,
+          mimeType: blob.type || 'video/webm',
+          sizeBytes: blob.size,
+          durationSeconds,
+          isBenchmark: true,
+          clipIndex,
+          peakMotionScore: metrics.peakMotionScore,
+          avgMotionScore: metrics.avgMotionScore,
+          motionEventCount: metrics.motionEventCount,
+          peakAudioScore: metrics.peakAudioScore,
+          avgAudioScore: metrics.avgAudioScore,
+        })
+
+        logClipAnalysis({
+          clipIndex,
+          clipId,
+          isBenchmark: true,
+          motionScore: metrics.peakMotionScore,
+          audioScore: metrics.peakAudioScore,
+          decision: 'stored',
+          timestamp: Date.now(),
+          durationMs: durationSeconds * 1000,
+          sizeBytes: blob.size,
+        })
+
+        if (dropQueuedProcessingRef.current) return
+        await refreshClips()
+        setSessionCounts(getCurrentSessionCounts())
+        return
+      }
+
+      // Compare with benchmark
+      const comparison = compareWithBenchmark(metrics, {
+        motionDeltaThreshold: settings.motionDeltaThreshold,
+        motionAbsoluteThreshold: settings.motionAbsoluteThreshold,
+        audioDeltaEnabled: settings.audioDeltaEnabled,
+        audioDeltaThreshold: settings.audioDeltaThreshold,
+        audioAbsoluteEnabled: settings.audioAbsoluteEnabled,
+        audioAbsoluteThreshold: settings.audioAbsoluteThreshold,
+      })
+
+      logClipAnalysis({
+        clipIndex,
+        clipId,
+        isBenchmark: false,
+        motionScore: metrics.peakMotionScore,
+        audioScore: metrics.peakAudioScore,
+        motionDelta: comparison.motionDelta,
+        audioDelta: comparison.audioDelta,
+        decision: comparison.shouldStore ? 'stored' : 'discarded',
+        timestamp: Date.now(),
+        durationMs: durationSeconds * 1000,
+        sizeBytes: blob.size,
+      })
+      if (dropQueuedProcessingRef.current) return
+
+      if (comparison.shouldStore) {
+        const triggerType =
+          comparison.triggeredBy.includes('motionDelta') ||
+          comparison.triggeredBy.includes('motionAbsolute')
+            ? 'motion'
+            : 'audio'
+
+        await saveClip({
+          sessionId: resolvedSessionId,
+          deviceId: resolvedDeviceId,
+          triggerType,
+          blob,
+          mimeType: blob.type || 'video/webm',
+          sizeBytes: blob.size,
+          durationSeconds,
+          isBenchmark: false,
+          clipIndex,
+          peakMotionScore: metrics.peakMotionScore,
+          avgMotionScore: metrics.avgMotionScore,
+          motionEventCount: metrics.motionEventCount,
+          peakAudioScore: metrics.peakAudioScore,
+          avgAudioScore: metrics.avgAudioScore,
+          motionDelta: comparison.motionDelta,
+          audioDelta: comparison.audioDelta,
+          triggeredBy: comparison.triggeredBy,
+        })
+
+        if (dropQueuedProcessingRef.current) return
+        await refreshClips()
+
+        const benchmarkData = createBenchmarkData(clipId, metrics)
+        setBenchmark(benchmarkData)
+        setBenchmarkClipId(clipId)
+      }
+
+      setSessionCounts(getCurrentSessionCounts())
+    },
+    [settings]
+  )
+
+  processQueuedClipRef.current = processQueuedClip
+
+  const handleClipComplete = useCallback(
+    (data: ClipCompleteData) => {
       const resolvedSessionId = sessionIdRef.current
       const resolvedDeviceId = deviceIdRef.current
 
@@ -160,127 +453,13 @@ function App() {
         return
       }
 
-      if (isProcessingClipRef.current) {
-        console.warn('[App] Already processing a clip, skipping')
-        return
-      }
-      isProcessingClipRef.current = true
-
-      try {
-        const clipId = generateClipId()
-        const durationSeconds = (Date.now() - startTime) / 1000
-        setCurrentClipIndex(clipIndex)
-
-        if (clipIndex === 0) {
-          // First clip = benchmark
-          const benchmarkData = createBenchmarkData(clipId, metrics)
-          setBenchmark(benchmarkData)
-          setBenchmarkClipId(clipId)
-
-          await saveClip({
-            sessionId: resolvedSessionId,
-            deviceId: resolvedDeviceId,
-            triggerType: 'benchmark',
-            blob,
-            mimeType: blob.type || 'video/webm',
-            sizeBytes: blob.size,
-            durationSeconds,
-            isBenchmark: true,
-            clipIndex,
-            peakMotionScore: metrics.peakMotionScore,
-            avgMotionScore: metrics.avgMotionScore,
-            motionEventCount: metrics.motionEventCount,
-            peakAudioScore: metrics.peakAudioScore,
-            avgAudioScore: metrics.avgAudioScore,
-          })
-
-          logClipAnalysis({
-            clipIndex,
-            clipId,
-            isBenchmark: true,
-            motionScore: metrics.peakMotionScore,
-            audioScore: metrics.peakAudioScore,
-            decision: 'stored',
-            timestamp: Date.now(),
-            durationMs: durationSeconds * 1000,
-            sizeBytes: blob.size,
-          })
-
-          await refreshClips()
-          await uploadPendingClips({ sessionId: resolvedSessionId })
-          setSessionCounts(getCurrentSessionCounts())
-          setEvents(await listEvents(resolvedSessionId))
-          return
-        }
-
-        // Compare with benchmark
-        const comparison = compareWithBenchmark(metrics, {
-          motionDeltaThreshold: settings.motionDeltaThreshold,
-          motionAbsoluteThreshold: settings.motionAbsoluteThreshold,
-          audioDeltaEnabled: settings.audioDeltaEnabled,
-          audioDeltaThreshold: settings.audioDeltaThreshold,
-          audioAbsoluteEnabled: settings.audioAbsoluteEnabled,
-          audioAbsoluteThreshold: settings.audioAbsoluteThreshold,
-        })
-
-        logClipAnalysis({
-          clipIndex,
-          clipId,
-          isBenchmark: false,
-          motionScore: metrics.peakMotionScore,
-          audioScore: metrics.peakAudioScore,
-          motionDelta: comparison.motionDelta,
-          audioDelta: comparison.audioDelta,
-          decision: comparison.shouldStore ? 'stored' : 'discarded',
-          timestamp: Date.now(),
-          durationMs: durationSeconds * 1000,
-          sizeBytes: blob.size,
-        })
-
-        if (comparison.shouldStore) {
-          const triggerType =
-            comparison.triggeredBy.includes('motionDelta') ||
-            comparison.triggeredBy.includes('motionAbsolute')
-              ? 'motion'
-              : 'audio'
-
-          await saveClip({
-            sessionId: resolvedSessionId,
-            deviceId: resolvedDeviceId,
-            triggerType,
-            blob,
-            mimeType: blob.type || 'video/webm',
-            sizeBytes: blob.size,
-            durationSeconds,
-            isBenchmark: false,
-            clipIndex,
-            peakMotionScore: metrics.peakMotionScore,
-            avgMotionScore: metrics.avgMotionScore,
-            motionEventCount: metrics.motionEventCount,
-            peakAudioScore: metrics.peakAudioScore,
-            avgAudioScore: metrics.avgAudioScore,
-            motionDelta: comparison.motionDelta,
-            audioDelta: comparison.audioDelta,
-            triggeredBy: comparison.triggeredBy,
-          })
-
-          await refreshClips()
-          await uploadPendingClips({ sessionId: resolvedSessionId })
-
-          const benchmarkData = createBenchmarkData(clipId, metrics)
-          setBenchmark(benchmarkData)
-          setBenchmarkClipId(clipId)
-          setEvents(await listEvents(resolvedSessionId))
-        }
-
-        setSessionCounts(getCurrentSessionCounts())
-      } catch (err) {
-        console.error('[App] Error processing clip:', err)
-      } finally {
-        isProcessingClipRef.current = false
-      }
+      clipQueueRef.current?.enqueue({
+        data,
+        sessionId: resolvedSessionId,
+        deviceId: resolvedDeviceId,
+      })
     },
-    [settings]
+    []
   )
 
   const startCapture = async () => {
@@ -347,14 +526,16 @@ function App() {
     setError(null)
 
     try {
-      const resolvedDeviceId = await ensureDeviceId()
-      const session = await startSession(resolvedDeviceId)
+      const resolvedDeviceId = await ensureResolvedDeviceId()
+      const session = await startSession(resolvedDeviceId, analysisPrompt || undefined)
       setSessionId(session.session_id)
       sessionIdRef.current = session.session_id
       deviceIdRef.current = session.device_id
       setSessionStatus('active')
 
       startLogSession(session.session_id)
+      dropQueuedProcessingRef.current = false
+      clipQueueRef.current?.clear()
       setCurrentClipIndex(0)
       setBenchmarkClipId(null)
       clearBenchmark()
@@ -371,23 +552,200 @@ function App() {
     }
   }
 
-  const handleStop = async () => {
-    if (!sessionId) return
-
-    setIsBusy(true)
-    setError(null)
-
+  const refreshTelegramReadiness = useCallback(async () => {
+    setCheckingTelegramReadiness(true)
     try {
-      await stopSession(sessionId)
-      setSessionStatus('stopped')
-      sessionIdRef.current = null
-      endLogSession()
-      stopCapture()
+      const resolvedDeviceId = await ensureResolvedDeviceId()
+      console.info('[TelegramOnboarding] Checking readiness', {
+        deviceId: resolvedDeviceId,
+      })
+      const status = await getTelegramReadiness(resolvedDeviceId)
+      setTelegramReadiness(status)
+      console.info('[TelegramOnboarding] Readiness response', {
+        deviceId: resolvedDeviceId,
+        enabled: status.enabled,
+        ready: status.ready,
+        status: status.status,
+        reason: status.reason,
+      })
+      if (status.ready) {
+        clearTelegramLinkState()
+      }
     } catch (err) {
       console.error(err)
-      setError('Unable to stop session')
+      setTelegramReadiness({
+        enabled: true,
+        ready: false,
+        status: 'error',
+        reason: 'Unable to verify Telegram readiness. Retry in a few seconds.',
+      })
     } finally {
-      setIsBusy(false)
+      setCheckingTelegramReadiness(false)
+    }
+  }, [clearTelegramLinkState, ensureResolvedDeviceId])
+
+  const handleConnectTelegram = async () => {
+    setError(null)
+    const preOpenedPopup = shouldPreOpenTelegramPopup()
+      ? window.open('', '_blank', 'noopener,noreferrer')
+      : null
+    console.info('[TelegramOnboarding] Connect clicked', {
+      preOpenedPopup: Boolean(preOpenedPopup),
+    })
+    try {
+      const resolvedDeviceId = await ensureResolvedDeviceId()
+      console.info('[TelegramOnboarding] Requesting link start', {
+        deviceId: resolvedDeviceId,
+      })
+      const start = await startTelegramLink(resolvedDeviceId)
+      const fallbackCommand = deriveTelegramFallbackCommand(
+        start.fallbackCommand,
+        start.connectUrl
+      )
+      setTelegramReadiness({
+        enabled: start.enabled,
+        ready: start.ready,
+        status: start.status,
+        reason: start.reason,
+      })
+      console.info('[TelegramOnboarding] Link start response', {
+        deviceId: resolvedDeviceId,
+        enabled: start.enabled,
+        ready: start.ready,
+        status: start.status,
+        attemptId: start.attemptId,
+        hasConnectUrl: Boolean(start.connectUrl),
+      })
+
+      if (!start.connectUrl || !start.attemptId) {
+        preOpenedPopup?.close()
+        clearTelegramLinkState()
+        setError(start.reason || 'Unable to generate Telegram connect link.')
+        return
+      }
+
+      persistTelegramLinkState({
+        attemptId: start.attemptId,
+        fallbackCommand,
+      })
+
+      let popup = preOpenedPopup
+      if (!popup) {
+        popup = window.open(start.connectUrl, '_blank', 'noopener,noreferrer')
+      }
+      if (!popup) {
+        console.warn('[TelegramOnboarding] Popup blocked; using backup link', {
+          attemptId: start.attemptId,
+        })
+        persistTelegramLinkState({
+          waiting: true,
+          fallbackUrl: start.connectUrl,
+          fallbackCommand,
+        })
+        setError('Popup blocked. Use the backup Telegram link below.')
+        return
+      }
+
+      if (preOpenedPopup) {
+        try {
+          popup.location.href = start.connectUrl
+          console.info('[TelegramOnboarding] Reused pre-opened popup', {
+            attemptId: start.attemptId,
+          })
+        } catch {
+          popup.close()
+          persistTelegramLinkState({
+            waiting: true,
+            fallbackUrl: start.connectUrl,
+            fallbackCommand,
+          })
+          setError('Unable to redirect popup. Use the backup Telegram link below.')
+          return
+        }
+      }
+
+      persistTelegramLinkState({
+        waiting: true,
+        fallbackUrl: start.connectUrl,
+        fallbackCommand,
+      })
+      console.info('[TelegramOnboarding] Waiting for Telegram confirmation', {
+        attemptId: start.attemptId,
+      })
+      setError(null)
+    } catch (err) {
+      console.error(err)
+      preOpenedPopup?.close()
+      setError('Unable to open Telegram link')
+    }
+  }
+
+  const handleCheckTelegramReadiness = useCallback(async () => {
+    setError(null)
+    try {
+      const resolvedDeviceId = await ensureResolvedDeviceId()
+      if (telegramLinkAttemptId) {
+        console.info('[TelegramOnboarding] Checking link attempt status', {
+          deviceId: resolvedDeviceId,
+          attemptId: telegramLinkAttemptId,
+        })
+        const status = await getTelegramLinkStatus(resolvedDeviceId, telegramLinkAttemptId)
+        console.info('[TelegramOnboarding] Link status response', {
+          deviceId: resolvedDeviceId,
+          attemptId: telegramLinkAttemptId,
+          ready: status.ready,
+          linked: status.linked,
+          status: status.status,
+          reason: status.reason,
+        })
+        if (status.ready) {
+          await refreshTelegramReadiness()
+          return
+        }
+        if (isTerminalTelegramLinkStatus(status.status)) {
+          console.warn('[TelegramOnboarding] Link attempt is terminal during manual check, clearing local attempt', {
+            attemptId: telegramLinkAttemptId,
+            status: status.status,
+          })
+          clearTelegramLinkState()
+          setError(status.reason)
+          await refreshTelegramReadiness()
+          return
+        }
+      }
+      await refreshTelegramReadiness()
+    } catch (err) {
+      console.error(err)
+      if (err instanceof ApiError && err.status === 404) {
+        console.warn('[TelegramOnboarding] Stale link attempt during manual check, clearing local attempt', {
+          attemptId: telegramLinkAttemptId,
+        })
+        clearTelegramLinkState()
+      }
+      await refreshTelegramReadiness()
+    }
+  }, [
+    clearTelegramLinkState,
+    ensureResolvedDeviceId,
+    refreshTelegramReadiness,
+    telegramLinkAttemptId,
+  ])
+
+  const handleStop = async () => {
+    const resolvedSessionId = sessionIdRef.current ?? sessionId
+    if (!resolvedSessionId) return
+
+    setError(null)
+    stopCapture()
+    setSessionStatus('stopped')
+    endLogSession()
+
+    try {
+      await stopSession(resolvedSessionId)
+      setEvents(await listEvents(resolvedSessionId))
+    } catch (err) {
+      console.error(err)
+      setError('Stopped locally, but unable to stop session on server')
     }
   }
 
@@ -399,6 +757,33 @@ function App() {
     clipUrlRef.current = url
     setSelectedClipUrl(url)
     setSelectedClipId(clipId)
+  }
+
+  const handleForceStop = async () => {
+    const resolvedSessionId = sessionIdRef.current ?? sessionId
+    if (!resolvedSessionId) return
+
+    setIsForceStopping(true)
+    setError(null)
+    dropQueuedProcessingRef.current = true
+    clipQueueRef.current?.clear()
+    stopCapture()
+    setSessionStatus('stopped')
+    setSessionId(null)
+    sessionIdRef.current = null
+    endLogSession()
+    setEvents([])
+
+    try {
+      await deleteClipsBySession(resolvedSessionId)
+      await refreshClips()
+      await forceStopSession(resolvedSessionId)
+    } catch (err) {
+      console.error(err)
+      setError('Force stop failed to cancel server processing')
+    } finally {
+      setIsForceStopping(false)
+    }
   }
 
   const handleUploadClips = async () => {
@@ -436,7 +821,7 @@ function App() {
 
   // Poll for events
   useEffect(() => {
-    if (sessionStatus !== 'active' || !sessionId) return
+    if (!sessionId || (sessionStatus !== 'active' && !hasProcessingEvents)) return
 
     let cancelled = false
     const refresh = async () => {
@@ -448,12 +833,13 @@ function App() {
       }
     }
 
+    void refresh()
     const interval = setInterval(refresh, getPollIntervalMs())
     return () => {
       cancelled = true
       clearInterval(interval)
     }
-  }, [sessionId, sessionStatus])
+  }, [hasProcessingEvents, sessionId, sessionStatus])
 
   // Upload clips periodically
   useEffect(() => {
@@ -501,6 +887,75 @@ function App() {
   }, [copiedEventId])
 
   // Initial clip load and cleanup
+  useEffect(() => {
+    void refreshTelegramReadiness()
+  }, [refreshTelegramReadiness])
+
+  useEffect(() => {
+    if (!isWaitingForTelegramConnect) return
+
+    let cancelled = false
+    const poll = async () => {
+      if (cancelled) return
+      try {
+        const resolvedDeviceId = await ensureResolvedDeviceId()
+        if (telegramLinkAttemptId) {
+          console.info('[TelegramOnboarding] Polling link status', {
+            deviceId: resolvedDeviceId,
+            attemptId: telegramLinkAttemptId,
+          })
+          const status = await getTelegramLinkStatus(resolvedDeviceId, telegramLinkAttemptId)
+          console.info('[TelegramOnboarding] Poll result', {
+            deviceId: resolvedDeviceId,
+            attemptId: telegramLinkAttemptId,
+            ready: status.ready,
+            status: status.status,
+          })
+          if (status.ready) {
+            await refreshTelegramReadiness()
+            return
+          }
+          if (isTerminalTelegramLinkStatus(status.status)) {
+            console.warn('[TelegramOnboarding] Link attempt is terminal during poll, clearing local attempt', {
+              attemptId: telegramLinkAttemptId,
+              status: status.status,
+            })
+            clearTelegramLinkState()
+            setError(status.reason)
+            await refreshTelegramReadiness()
+            return
+          }
+        }
+        await refreshTelegramReadiness()
+      } catch (err) {
+        if (!cancelled) {
+          console.error(err)
+          if (err instanceof ApiError && err.status === 404) {
+            console.warn('[TelegramOnboarding] Stale link attempt during poll, clearing local attempt', {
+              attemptId: telegramLinkAttemptId,
+            })
+            clearTelegramLinkState()
+            await refreshTelegramReadiness()
+            return
+          }
+        }
+      }
+    }
+
+    void poll()
+    const interval = window.setInterval(poll, 2000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [
+    clearTelegramLinkState,
+    ensureResolvedDeviceId,
+    isWaitingForTelegramConnect,
+    refreshTelegramReadiness,
+    telegramLinkAttemptId,
+  ])
+
   useEffect(() => {
     void refreshClips()
     return () => {
@@ -557,6 +1012,20 @@ function App() {
             </span>
           </div>
           <div className="status-row">
+            <span className="status-label">Queued clips</span>
+            <span className="status-value status-queue">
+              {queuedClipsRemaining} remaining
+              <button
+                className="secondary status-inline-action"
+                type="button"
+                onClick={handleForceStop}
+                disabled={!sessionId || isForceStopping}
+              >
+                Force stop
+              </button>
+            </span>
+          </div>
+          <div className="status-row">
             <span className="status-label">Motion / Audio</span>
             <span className="status-value">
               {motionDetection.currentScore.toFixed(3)} / {audioDetection.currentScore.toFixed(3)}
@@ -568,12 +1037,76 @@ function App() {
           </div>
         </section>
 
+        <section className="analysis-prompt-section" aria-label="Alert instructions">
+          <label className="analysis-prompt-label">
+            <span>Alert instructions</span>
+            <textarea
+              className="analysis-prompt-input"
+              placeholder="Example: Alert me if a person enters through the front door between 10 PM and 6 AM. Ignore TV motion."
+              value={analysisPrompt}
+              onChange={(e) => setAnalysisPrompt(e.target.value)}
+              disabled={sessionStatus === 'active'}
+              rows={3}
+            />
+          </label>
+        </section>
+
+        {(checkingTelegramReadiness || telegramReadiness?.enabled) && (
+          <section className="telegram-onboarding" aria-label="Telegram onboarding">
+            <p className="telegram-onboarding-copy">
+              {checkingTelegramReadiness
+                ? 'Checking Telegram readiness...'
+                : telegramReadiness?.ready
+                ? 'Telegram alerts are connected.'
+                : isWaitingForTelegramConnect
+                ? 'Waiting for Telegram confirmation. Keep this page open and we will detect the link automatically.'
+                : 'Connect Telegram and send /start to your bot before monitoring.'}
+            </p>
+            {telegramReadiness?.reason && !telegramReadiness.ready && (
+              <p className="telegram-onboarding-copy">{telegramReadiness.reason}</p>
+            )}
+            <button
+              className="secondary"
+              type="button"
+              onClick={handleConnectTelegram}
+              disabled={checkingTelegramReadiness}
+            >
+              Connect Telegram alerts
+            </button>
+            {telegramPopupFallbackUrl && (
+              <a
+                className="secondary"
+                href={telegramPopupFallbackUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Open Telegram link again
+              </a>
+            )}
+            {isWaitingForTelegramConnect && telegramFallbackCommand && (
+              <p className="telegram-onboarding-copy telegram-onboarding-command">
+                If Telegram opens without payload, send <code>{telegramFallbackCommand}</code> in the bot chat.
+              </p>
+            )}
+            {telegramReadiness && !telegramReadiness.ready && (
+              <button
+                className="secondary"
+                type="button"
+                onClick={handleCheckTelegramReadiness}
+                disabled={checkingTelegramReadiness}
+              >
+                {checkingTelegramReadiness ? 'Checking...' : 'Check Telegram status'}
+              </button>
+            )}
+          </section>
+        )}
+
         <div className="controls">
           <button
             className="primary"
             type="button"
             onClick={handleStart}
-            disabled={sessionStatus === 'active' || isBusy}
+            disabled={sessionStatus === 'active' || isBusy || requiresTelegramOnboarding}
           >
             Start monitoring
           </button>
@@ -709,6 +1242,11 @@ function App() {
             <ul className="events-list">
               {events.map((event) => {
                 const confidence = formatConfidence(event.confidence)
+                const inferenceSource = formatInferenceSource(
+                  event.inference_provider,
+                  event.inference_model
+                )
+                const notifyStatus = event.should_notify === true ? 'alert' : 'no alert'
                 const isCopied = copiedEventId === event.event_id
                 return (
                   <li key={event.event_id} className="event-item">
@@ -727,10 +1265,19 @@ function App() {
                         <span className="event-trigger">{event.trigger_type}</span>
                       </div>
                       {event.summary && <p className="event-summary">{event.summary}</p>}
-                      {(event.label || confidence) && (
+                      {(event.label || confidence || inferenceSource || event.alert_reason) && (
                         <div className="event-meta">
+                          <span className={`event-notify-status status-${notifyStatus.replace(' ', '-')}`}>
+                            {notifyStatus}
+                          </span>
                           {event.label && <span className="event-label">{event.label}</span>}
                           {confidence && <span className="event-confidence">{confidence}</span>}
+                          {event.alert_reason && (
+                            <span className="event-alert-reason">{event.alert_reason}</span>
+                          )}
+                          {inferenceSource && (
+                            <span className="event-inference-source">{inferenceSource}</span>
+                          )}
                         </div>
                       )}
                     </div>
@@ -754,44 +1301,70 @@ function App() {
             <p className="events-empty">No stored clips yet.</p>
           ) : (
             <ul className="clip-list">
-              {clips.map((clip) => (
-                <li key={clip.id} className="clip-item">
-                  <div>
-                    <div className="clip-id">
-                      {clip.id}
-                      {clip.isBenchmark && <span className="clip-badge benchmark">Benchmark</span>}
+              {clips.map((clip) => {
+                const relatedEvent = eventsById.get(clip.id)
+                const relatedConfidence = formatConfidence(relatedEvent?.confidence)
+                const relatedInferenceSource = formatInferenceSource(
+                  relatedEvent?.inference_provider,
+                  relatedEvent?.inference_model
+                )
+                const relatedNotifyStatus = relatedEvent?.should_notify === true ? 'alert' : 'no alert'
+                return (
+                  <li key={clip.id} className="clip-item">
+                    <div>
+                      <div className="clip-id">
+                        {clip.id}
+                        {clip.isBenchmark && <span className="clip-badge benchmark">Benchmark</span>}
+                      </div>
+                      <div className="clip-meta">
+                        <span>{formatDuration(clip.durationSeconds)}</span>
+                        <span>{formatBytes(clip.sizeBytes)}</span>
+                        <span>{clip.triggerType}</span>
+                        <span>{clip.uploaded ? 'uploaded' : 'pending'}</span>
+                        {relatedEvent && (
+                          <span className={`clip-inference-status status-${relatedEvent.status}`}>
+                            inference: {relatedEvent.status}
+                          </span>
+                        )}
+                        {clip.peakMotionScore !== undefined && (
+                          <span>peak motion: {clip.peakMotionScore.toFixed(3)}</span>
+                        )}
+                        {clip.peakAudioScore !== undefined && (
+                          <span>peak audio: {clip.peakAudioScore.toFixed(3)}</span>
+                        )}
+                        {clip.triggeredBy && clip.triggeredBy.length > 0 && (
+                          <span className="clip-triggers">
+                            triggered: {formatTriggers(clip.triggeredBy)}
+                          </span>
+                        )}
+                        {!clip.uploaded && clip.lastUploadError && (
+                          <span className="clip-error">{clip.lastUploadError}</span>
+                        )}
+                      </div>
+                      {relatedEvent?.summary && (
+                        <p className="clip-inference-summary">{relatedEvent.summary}</p>
+                      )}
+                      {(relatedEvent?.label || relatedConfidence || relatedInferenceSource || relatedEvent?.alert_reason) && (
+                        <div className="clip-inference-meta">
+                          <span>{relatedNotifyStatus}</span>
+                          {relatedEvent?.label && <span>{relatedEvent.label}</span>}
+                          {relatedConfidence && <span>{relatedConfidence}</span>}
+                          {relatedEvent?.alert_reason && <span>{relatedEvent.alert_reason}</span>}
+                          {relatedInferenceSource && <span>{relatedInferenceSource}</span>}
+                        </div>
+                      )}
                     </div>
-                    <div className="clip-meta">
-                      <span>{formatDuration(clip.durationSeconds)}</span>
-                      <span>{formatBytes(clip.sizeBytes)}</span>
-                      <span>{clip.triggerType}</span>
-                      <span>{clip.uploaded ? 'uploaded' : 'pending'}</span>
-                      {clip.peakMotionScore !== undefined && (
-                        <span>peak motion: {clip.peakMotionScore.toFixed(3)}</span>
-                      )}
-                      {clip.peakAudioScore !== undefined && (
-                        <span>peak audio: {clip.peakAudioScore.toFixed(3)}</span>
-                      )}
-                      {clip.triggeredBy && clip.triggeredBy.length > 0 && (
-                        <span className="clip-triggers">
-                          triggered: {formatTriggers(clip.triggeredBy)}
-                        </span>
-                      )}
-                      {!clip.uploaded && clip.lastUploadError && (
-                        <span className="clip-error">{clip.lastUploadError}</span>
-                      )}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => handlePreviewClip(clip.id)}
-                    aria-label={`Preview ${clip.id}`}
-                  >
-                    Preview
-                  </button>
-                </li>
-              ))}
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => handlePreviewClip(clip.id)}
+                      aria-label={`Preview ${clip.id}`}
+                    >
+                      Preview
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
           )}
           {selectedClipUrl && (

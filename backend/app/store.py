@@ -5,7 +5,7 @@ from uuid import uuid4
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.models import DeviceModel, EventModel, SessionModel
+from app.models import DeviceModel, EventModel, SessionModel, TelegramLinkAttemptModel
 
 
 def _now() -> datetime:
@@ -13,18 +13,22 @@ def _now() -> datetime:
 
 
 def reset_store(db: Session) -> None:
+    db.execute(delete(TelegramLinkAttemptModel))
     db.execute(delete(EventModel))
     db.execute(delete(SessionModel))
     db.execute(delete(DeviceModel))
     db.commit()
 
 
-def create_session(db: Session, device_id: str) -> SessionModel:
+def create_session(
+    db: Session, device_id: str, analysis_prompt: Optional[str] = None
+) -> SessionModel:
     record = SessionModel(
         session_id=str(uuid4()),
         device_id=device_id,
         status="active",
         started_at=_now(),
+        analysis_prompt=analysis_prompt,
     )
     db.add(record)
     db.commit()
@@ -56,8 +60,102 @@ def device_to_dict(record: DeviceModel) -> dict:
     return {
         "device_id": record.device_id,
         "label": record.label,
+        "telegram_chat_id": record.telegram_chat_id,
+        "telegram_username": record.telegram_username,
+        "telegram_linked_at": _format_dt(record.telegram_linked_at),
         "created_at": _format_dt(record.created_at),
     }
+
+
+def get_device(db: Session, device_id: str) -> Optional[DeviceModel]:
+    return db.get(DeviceModel, device_id)
+
+
+def link_device_telegram_chat(
+    db: Session,
+    device_id: str,
+    chat_id: str,
+    username: Optional[str] = None,
+) -> DeviceModel:
+    record = db.get(DeviceModel, device_id)
+    if record is None:
+        record = DeviceModel(
+            device_id=device_id,
+            label=None,
+            created_at=_now(),
+        )
+        db.add(record)
+
+    record.telegram_chat_id = chat_id
+    record.telegram_username = username
+    record.telegram_linked_at = _now()
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def create_telegram_link_attempt(
+    db: Session,
+    *,
+    device_id: str,
+    token_hash: str,
+    expires_at: datetime,
+) -> TelegramLinkAttemptModel:
+    record = TelegramLinkAttemptModel(
+        attempt_id=str(uuid4()),
+        device_id=device_id,
+        token_hash=token_hash,
+        status="pending",
+        created_at=_now(),
+        expires_at=expires_at,
+        linked_at=None,
+        chat_id=None,
+        telegram_username=None,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def get_telegram_link_attempt(
+    db: Session, attempt_id: str
+) -> Optional[TelegramLinkAttemptModel]:
+    return db.get(TelegramLinkAttemptModel, attempt_id)
+
+
+def get_telegram_link_attempt_by_token_hash(
+    db: Session, token_hash: str
+) -> Optional[TelegramLinkAttemptModel]:
+    stmt = select(TelegramLinkAttemptModel).where(
+        TelegramLinkAttemptModel.token_hash == token_hash
+    )
+    return db.scalar(stmt)
+
+
+def mark_telegram_link_attempt_expired(
+    db: Session, attempt: TelegramLinkAttemptModel
+) -> TelegramLinkAttemptModel:
+    attempt.status = "expired"
+    db.commit()
+    db.refresh(attempt)
+    return attempt
+
+
+def mark_telegram_link_attempt_linked(
+    db: Session,
+    attempt: TelegramLinkAttemptModel,
+    *,
+    chat_id: str,
+    username: Optional[str] = None,
+) -> TelegramLinkAttemptModel:
+    attempt.status = "linked"
+    attempt.linked_at = _now()
+    attempt.chat_id = chat_id
+    attempt.telegram_username = username
+    db.commit()
+    db.refresh(attempt)
+    return attempt
 
 
 def stop_session(db: Session, session_id: str) -> Optional[SessionModel]:
@@ -134,6 +232,13 @@ def update_event_summary(
     summary: str,
     label: Optional[str],
     confidence: Optional[float],
+    inference_provider: Optional[str],
+    inference_model: Optional[str],
+    should_notify: Optional[bool],
+    alert_reason: Optional[str],
+    matched_rules: Optional[list[str]],
+    detected_entities: Optional[list[str]],
+    detected_actions: Optional[list[str]],
 ) -> Optional[EventModel]:
     record = db.get(EventModel, event_id)
     if record is None:
@@ -141,6 +246,13 @@ def update_event_summary(
     record.summary = summary
     record.label = label
     record.confidence = confidence
+    record.inference_provider = inference_provider
+    record.inference_model = inference_model
+    record.should_notify = should_notify
+    record.alert_reason = alert_reason
+    record.matched_rules = matched_rules
+    record.detected_entities = detected_entities
+    record.detected_actions = detected_actions
     record.status = "done"
     db.commit()
     db.refresh(record)
@@ -162,11 +274,47 @@ def mark_event_clip_uploaded(
     return record
 
 
+def mark_event_clip_uploaded_via_local_api(
+    db: Session,
+    event_id: str,
+    clip_blob_name: str,
+) -> Optional[EventModel]:
+    record = db.get(EventModel, event_id)
+    if record is None:
+        return None
+
+    changed = False
+    if record.clip_container != "local":
+        record.clip_container = "local"
+        changed = True
+
+    local_uri = f"local://{clip_blob_name}"
+    if record.clip_uri != local_uri:
+        record.clip_uri = local_uri
+        changed = True
+
+    if changed:
+        db.commit()
+        db.refresh(record)
+    return record
+
+
 def list_events(db: Session, session_id: Optional[str] = None) -> list[EventModel]:
     stmt = select(EventModel).order_by(EventModel.created_at)
     if session_id:
         stmt = stmt.where(EventModel.session_id == session_id)
     return list(db.scalars(stmt))
+
+
+def delete_processing_events_for_session(db: Session, session_id: str) -> int:
+    result = db.execute(
+        delete(EventModel).where(
+            EventModel.session_id == session_id,
+            EventModel.status == "processing",
+        )
+    )
+    db.commit()
+    return int(result.rowcount or 0)
 
 
 def _format_dt(value: Optional[datetime]) -> Optional[str]:
@@ -182,6 +330,7 @@ def session_to_dict(record: SessionModel) -> dict:
         "status": record.status,
         "started_at": _format_dt(record.started_at),
         "stopped_at": _format_dt(record.stopped_at),
+        "analysis_prompt": record.analysis_prompt,
     }
 
 
@@ -204,4 +353,11 @@ def event_to_dict(record: EventModel) -> dict:
         "summary": record.summary,
         "label": record.label,
         "confidence": record.confidence,
+        "inference_provider": record.inference_provider,
+        "inference_model": record.inference_model,
+        "should_notify": record.should_notify,
+        "alert_reason": record.alert_reason,
+        "matched_rules": record.matched_rules,
+        "detected_entities": record.detected_entities,
+        "detected_actions": record.detected_actions,
     }

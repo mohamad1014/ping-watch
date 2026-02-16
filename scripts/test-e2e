@@ -6,5 +6,5 @@ repo_root=$(cd "$scripts_dir/.." && pwd)
 
 (
   cd "$repo_root/e2e"
-  npm test
+  PING_WATCH_E2E_BACKEND_URL=http://127.0.0.1:8002 npm test
 )

@@ -5,14 +5,17 @@ const buildRegister = (deviceId: string) =>
   vi.fn().mockResolvedValue({ device_id: deviceId, label: null, created_at: 'now' })
 
 describe('ensureDeviceId', () => {
-  it('returns stored device id without registering', async () => {
+  it('re-registers stored device id to recover from stale backend state', async () => {
     localStorage.setItem('ping-watch:device-id', 'device-123')
-    const registerDevice = buildRegister('device-999')
+    const registerDevice = buildRegister('device-123')
 
     const result = await ensureDeviceId({ deps: { registerDevice } })
 
     expect(result).toBe('device-123')
-    expect(registerDevice).not.toHaveBeenCalled()
+    expect(registerDevice).toHaveBeenCalledWith({
+      deviceId: 'device-123',
+      label: undefined,
+    })
   })
 
   it('registers and stores a device id when missing', async () => {

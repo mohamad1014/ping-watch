@@ -1,3 +1,6 @@
 redis
 rq
 httpx
+azure-storage-blob
+opencv-python-headless
+python-dotenv

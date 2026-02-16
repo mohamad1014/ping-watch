@@ -1,8 +1,13 @@
 import argparse
+import logging
+import os
 from typing import Sequence
 
+from app.logging import setup_worker_logging
 from app import tasks
 from app.worker import run_worker
+
+logger = logging.getLogger(__name__)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -36,6 +41,16 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     if args.command in (None, "run"):
+        level = setup_worker_logging()
+        telegram_configured = bool((os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip())
+        webhook_configured = bool((os.environ.get("NOTIFY_WEBHOOK_URL") or "").strip())
+        logger.info(
+            "Worker startup: queue=%s level=%s telegram_configured=%s webhook_configured=%s",
+            args.queue,
+            logging.getLevelName(level),
+            telegram_configured,
+            webhook_configured,
+        )
         run_worker(queue_name=args.queue)
         return
 

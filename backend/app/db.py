@@ -23,6 +23,18 @@ _REQUIRED_EVENTS_COLUMNS = {
     "clip_blob_name",
     "clip_uploaded_at",
     "clip_etag",
+    "inference_provider",
+    "inference_model",
+    "should_notify",
+    "alert_reason",
+    "matched_rules",
+    "detected_entities",
+    "detected_actions",
+}
+_REQUIRED_DEVICES_COLUMNS = {
+    "telegram_chat_id",
+    "telegram_username",
+    "telegram_linked_at",
 }
 
 
@@ -37,6 +49,15 @@ def ensure_schema_compatible(engine: Engine) -> None:
             "Database schema is out of date; run `cd backend && .venv/bin/alembic upgrade head` "
             f"(missing columns on `events`: {', '.join(missing)})"
         )
+
+    if "devices" in inspector.get_table_names():
+        device_columns = {col["name"] for col in inspector.get_columns("devices")}
+        missing = sorted(_REQUIRED_DEVICES_COLUMNS - device_columns)
+        if missing:
+            raise RuntimeError(
+                "Database schema is out of date; run `cd backend && .venv/bin/alembic upgrade head` "
+                f"(missing columns on `devices`: {', '.join(missing)})"
+            )
 
 
 def init_db() -> None:
