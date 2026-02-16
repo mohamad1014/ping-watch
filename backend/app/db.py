@@ -19,6 +19,7 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, futu
 Base = declarative_base()
 
 _REQUIRED_EVENTS_COLUMNS = {
+    "user_id",
     "clip_container",
     "clip_blob_name",
     "clip_uploaded_at",
@@ -32,9 +33,13 @@ _REQUIRED_EVENTS_COLUMNS = {
     "detected_actions",
 }
 _REQUIRED_DEVICES_COLUMNS = {
+    "user_id",
     "telegram_chat_id",
     "telegram_username",
     "telegram_linked_at",
+}
+_REQUIRED_SESSIONS_COLUMNS = {
+    "user_id",
 }
 
 
@@ -57,6 +62,15 @@ def ensure_schema_compatible(engine: Engine) -> None:
             raise RuntimeError(
                 "Database schema is out of date; run `cd backend && .venv/bin/alembic upgrade head` "
                 f"(missing columns on `devices`: {', '.join(missing)})"
+            )
+
+    if "sessions" in inspector.get_table_names():
+        session_columns = {col["name"] for col in inspector.get_columns("sessions")}
+        missing = sorted(_REQUIRED_SESSIONS_COLUMNS - session_columns)
+        if missing:
+            raise RuntimeError(
+                "Database schema is out of date; run `cd backend && .venv/bin/alembic upgrade head` "
+                f"(missing columns on `sessions`: {', '.join(missing)})"
             )
 
 

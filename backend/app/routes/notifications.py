@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.auth import get_request_user_id
 from app.db import get_db
 from app.store import (
     create_telegram_link_attempt,
@@ -308,6 +309,7 @@ def _process_start_token(
         device_id=attempt.device_id,
         chat_id=chat_id_text,
         username=username,
+        user_id=attempt.user_id,
     )
     mark_telegram_link_attempt_linked(
         db,
@@ -482,9 +484,10 @@ def _readiness_for_device(
     db: Session,
     device_id: str,
     token: str,
+    user_id: str | None = None,
 ) -> TelegramReadinessResponse:
     device = get_device(db, device_id)
-    if device is None:
+    if device is None or (user_id is not None and device.user_id != user_id):
         logger.info("Telegram readiness: unknown device %s", device_id)
         return TelegramReadinessResponse(
             enabled=True,
@@ -563,14 +566,21 @@ def _readiness_for_device(
 @router.get("/telegram/readiness")
 def telegram_readiness(
     device_id: str,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> TelegramReadinessResponse:
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
     logger.info("Telegram readiness requested for device %s", device_id)
     token = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
     if not token:
         logger.info("Telegram readiness requested but TELEGRAM_BOT_TOKEN is missing")
         return _build_not_configured_response()
-    response = _readiness_for_device(db=db, device_id=device_id, token=token)
+    response = _readiness_for_device(
+        db=db,
+        device_id=device_id,
+        token=token,
+        user_id=user_id,
+    )
     logger.info(
         "Telegram readiness result device=%s enabled=%s ready=%s status=%s",
         device_id,
@@ -584,8 +594,10 @@ def telegram_readiness(
 @router.post("/telegram/link/start")
 def telegram_link_start(
     payload: TelegramLinkStartRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> TelegramLinkStartResponse:
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
     logger.info("Telegram link start requested for device %s", payload.device_id)
     token = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
     if not token:
@@ -598,7 +610,7 @@ def telegram_link_start(
         )
 
     device = get_device(db, payload.device_id)
-    if device is None:
+    if device is None or (user_id is not None and device.user_id != user_id):
         logger.info("Telegram link start requested for unknown device %s", payload.device_id)
         return TelegramLinkStartResponse(
             enabled=True,
@@ -622,6 +634,7 @@ def telegram_link_start(
     attempt = create_telegram_link_attempt(
         db,
         device_id=payload.device_id,
+        user_id=user_id,
         token_hash=_hash_token(link_token),
         expires_at=expires_at,
     )
@@ -656,8 +669,10 @@ def telegram_link_start(
 def telegram_link_status(
     device_id: str,
     attempt_id: str,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> TelegramLinkStatusResponse:
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
     logger.info(
         "Telegram link status requested for device=%s attempt_id=%s",
         device_id,
@@ -675,7 +690,7 @@ def telegram_link_status(
         )
 
     device = get_device(db, device_id)
-    if device is None:
+    if device is None or (user_id is not None and device.user_id != user_id):
         return TelegramLinkStatusResponse(
             enabled=True,
             ready=False,
@@ -685,7 +700,7 @@ def telegram_link_status(
             attempt_id=attempt_id,
         )
 
-    attempt = get_telegram_link_attempt(db, attempt_id)
+    attempt = get_telegram_link_attempt(db, attempt_id, user_id=user_id)
     if attempt is None or attempt.device_id != device_id:
         logger.info(
             "Telegram link status stale attempt for device=%s attempt_id=%s",
@@ -703,7 +718,7 @@ def telegram_link_status(
 
     if attempt.status == "pending":
         _sync_telegram_link_updates(db, token)
-        refreshed_attempt = get_telegram_link_attempt(db, attempt_id)
+        refreshed_attempt = get_telegram_link_attempt(db, attempt_id, user_id=user_id)
         if refreshed_attempt is not None:
             attempt = refreshed_attempt
 
@@ -817,8 +832,10 @@ async def telegram_webhook(
 @router.get("/telegram/target")
 def telegram_target(
     device_id: str,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> TelegramTargetResponse:
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
     token = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
     if not token:
         return TelegramTargetResponse(
@@ -829,6 +846,8 @@ def telegram_target(
         )
 
     device = get_device(db, device_id)
+    if device is not None and user_id is not None and device.user_id != user_id:
+        device = None
     if device is None or not device.telegram_chat_id:
         return TelegramTargetResponse(
             enabled=True,

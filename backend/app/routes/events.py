@@ -16,6 +16,7 @@ from app.azurite_sas import (
     generate_blob_upload_sas,
     load_config,
 )
+from app.auth import get_request_user_id
 from app.db import get_db
 from app.queue import enqueue_inference_job
 from app.store import (
@@ -102,8 +103,11 @@ def _build_local_upload_info(request: Request, event_id: str, blob_name: str) ->
 
 @router.post("")
 async def create_event_endpoint(
-    payload: CreateEventRequest, db: Session = Depends(get_db)
+    payload: CreateEventRequest,
+    request: Request,
+    db: Session = Depends(get_db),
 ):
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
     record = create_event(
         db,
         payload.session_id,
@@ -113,6 +117,7 @@ async def create_event_endpoint(
         payload.clip_uri,
         payload.clip_mime,
         payload.clip_size_bytes,
+        user_id=user_id,
     )
     if record is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -125,6 +130,7 @@ async def initiate_upload_endpoint(
     request: Request,
     db: Session = Depends(get_db),
 ):
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
     event_id = payload.event_id or str(uuid4())
     blob_name = build_blob_name(payload.session_id, event_id, payload.clip_mime)
     expiry = _utc_now() + timedelta(seconds=900)
@@ -171,6 +177,7 @@ async def initiate_upload_endpoint(
             event_id=event_id,
             clip_container=upload_info["clip_container"],
             clip_blob_name=upload_info["clip_blob_name"],
+            user_id=user_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -190,7 +197,8 @@ async def initiate_upload_endpoint(
 async def upload_clip_endpoint(
     event_id: str, request: Request, db: Session = Depends(get_db)
 ):
-    record = get_event(db, event_id)
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
+    record = get_event(db, event_id, user_id=user_id)
     if record is None:
         raise HTTPException(status_code=404, detail="event not found")
 
@@ -209,7 +217,12 @@ async def upload_clip_endpoint(
     body = await request.body()
     target_path.write_bytes(body)
 
-    updated = mark_event_clip_uploaded_via_local_api(db, event_id, blob_name)
+    updated = mark_event_clip_uploaded_via_local_api(
+        db,
+        event_id,
+        blob_name,
+        user_id=user_id,
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="event not found")
     logger.info(
@@ -223,9 +236,13 @@ async def upload_clip_endpoint(
 
 @router.post("/{event_id}/upload/finalize")
 async def finalize_upload_endpoint(
-    event_id: str, payload: FinalizeUploadRequest, db: Session = Depends(get_db)
+    event_id: str,
+    payload: FinalizeUploadRequest,
+    request: Request,
+    db: Session = Depends(get_db),
 ):
-    record = mark_event_clip_uploaded(db, event_id, payload.etag)
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
+    record = mark_event_clip_uploaded(db, event_id, payload.etag, user_id=user_id)
     if record is None:
         raise HTTPException(status_code=404, detail="event not found")
 
@@ -249,9 +266,16 @@ async def finalize_upload_endpoint(
 
 @router.get("")
 async def list_events_endpoint(
-    session_id: str | None = Query(default=None), db: Session = Depends(get_db)
+    request: Request,
+    session_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
 ):
-    events = list_events(db, session_id=session_id)
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
+    if session_id:
+        session = get_session(db, session_id)
+        if session is None or (user_id is not None and session.user_id != user_id):
+            raise HTTPException(status_code=404, detail="session not found")
+    events = list_events(db, session_id=session_id, user_id=user_id)
     return [event_to_dict(event) for event in events]
 
 
@@ -280,9 +304,12 @@ async def update_event_summary_endpoint(
 
 @router.get("/{event_id}/summary")
 async def get_event_summary_endpoint(
-    event_id: str, db: Session = Depends(get_db)
+    event_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
 ):
-    record = get_event(db, event_id)
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
+    record = get_event(db, event_id, user_id=user_id)
     if record is None or record.summary is None:
         raise HTTPException(status_code=404, detail="event summary not found")
     return {

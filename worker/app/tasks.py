@@ -18,6 +18,13 @@ def _api_base_url() -> str:
     return os.environ.get("API_BASE_URL", "http://localhost:8000")
 
 
+def _api_auth_headers() -> dict[str, str]:
+    token = (os.environ.get("WORKER_API_TOKEN") or "").strip()
+    if not token:
+        return {}
+    return {"Authorization": f"Bearer {token}"}
+
+
 def _is_test_mode() -> bool:
     return os.environ.get("PING_WATCH_TEST_MODE", "").strip().lower() in {
         "1",
@@ -65,6 +72,7 @@ def post_event_summary(
     response = httpx.post(
         f"{_api_base_url()}/events/{event_id}/summary",
         json=payload,
+        headers=_api_auth_headers() or None,
         timeout=10,
     )
     response.raise_for_status()

@@ -25,6 +25,7 @@ def test_ensure_schema_compatible_raises_when_events_missing_inference_columns(t
         metadata,
         sa.Column("event_id", sa.String(), primary_key=True),
         sa.Column("session_id", sa.String(), nullable=False),
+        sa.Column("user_id", sa.String(), nullable=True),
         sa.Column("device_id", sa.String(), nullable=False),
         sa.Column("status", sa.String(), nullable=False),
         sa.Column("trigger_type", sa.String(), nullable=False),
@@ -63,6 +64,7 @@ def test_ensure_schema_compatible_raises_when_devices_missing_telegram_columns(t
         metadata,
         sa.Column("event_id", sa.String(), primary_key=True),
         sa.Column("session_id", sa.String(), nullable=False),
+        sa.Column("user_id", sa.String(), nullable=True),
         sa.Column("device_id", sa.String(), nullable=False),
         sa.Column("status", sa.String(), nullable=False),
         sa.Column("trigger_type", sa.String(), nullable=False),
@@ -85,6 +87,16 @@ def test_ensure_schema_compatible_raises_when_devices_missing_telegram_columns(t
         sa.Column("matched_rules", sa.JSON(), nullable=True),
         sa.Column("detected_entities", sa.JSON(), nullable=True),
         sa.Column("detected_actions", sa.JSON(), nullable=True),
+    )
+    sa.Table(
+        "sessions",
+        metadata,
+        sa.Column("session_id", sa.String(), primary_key=True),
+        sa.Column("device_id", sa.String(), nullable=False),
+        sa.Column("user_id", sa.String(), nullable=True),
+        sa.Column("status", sa.String(), nullable=False),
+        sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("stopped_at", sa.DateTime(timezone=True), nullable=True),
     )
     sa.Table(
         "devices",
