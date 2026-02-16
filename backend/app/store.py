@@ -9,6 +9,7 @@ from app.models import (
     AuthSessionModel,
     DeviceModel,
     EventModel,
+    NotificationEndpointModel,
     SessionModel,
     TelegramLinkAttemptModel,
     UserModel,
@@ -25,6 +26,7 @@ def reset_store(db: Session) -> None:
     db.execute(delete(EventModel))
     db.execute(delete(SessionModel))
     db.execute(delete(DeviceModel))
+    db.execute(delete(NotificationEndpointModel))
     db.execute(delete(UserModel))
     db.commit()
 
@@ -146,6 +148,7 @@ def device_to_dict(record: DeviceModel) -> dict:
     return {
         "device_id": record.device_id,
         "user_id": record.user_id,
+        "telegram_endpoint_id": record.telegram_endpoint_id,
         "label": record.label,
         "telegram_chat_id": record.telegram_chat_id,
         "telegram_username": record.telegram_username,
@@ -177,12 +180,53 @@ def link_device_telegram_chat(
     elif user_id is not None and record.user_id is None:
         record.user_id = user_id
 
+    endpoint_stmt = select(NotificationEndpointModel).where(
+        NotificationEndpointModel.provider == "telegram",
+        NotificationEndpointModel.chat_id == chat_id,
+    )
+    endpoint = db.scalar(endpoint_stmt)
+    now = _now()
+    if endpoint is None:
+        endpoint = NotificationEndpointModel(
+            endpoint_id=str(uuid4()),
+            user_id=user_id,
+            provider="telegram",
+            chat_id=chat_id,
+            telegram_username=username,
+            created_at=now,
+            linked_at=now,
+        )
+        db.add(endpoint)
+        db.flush()
+    else:
+        if endpoint.user_id is None and user_id is not None:
+            endpoint.user_id = user_id
+        endpoint.telegram_username = username
+        endpoint.linked_at = now
+
+    record.telegram_endpoint_id = endpoint.endpoint_id
     record.telegram_chat_id = chat_id
     record.telegram_username = username
-    record.telegram_linked_at = _now()
+    record.telegram_linked_at = now
     db.commit()
     db.refresh(record)
     return record
+
+
+def get_notification_endpoint(
+    db: Session, endpoint_id: str
+) -> Optional[NotificationEndpointModel]:
+    return db.get(NotificationEndpointModel, endpoint_id)
+
+
+def get_telegram_target_for_device(
+    db: Session, device: DeviceModel
+) -> tuple[Optional[str], Optional[str]]:
+    if device.telegram_endpoint_id:
+        endpoint = get_notification_endpoint(db, device.telegram_endpoint_id)
+        if endpoint is not None and endpoint.provider == "telegram":
+            return endpoint.chat_id, endpoint.telegram_username
+    return device.telegram_chat_id, device.telegram_username
 
 
 def create_telegram_link_attempt(

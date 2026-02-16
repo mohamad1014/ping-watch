@@ -34,6 +34,7 @@ _REQUIRED_EVENTS_COLUMNS = {
 }
 _REQUIRED_DEVICES_COLUMNS = {
     "user_id",
+    "telegram_endpoint_id",
     "telegram_chat_id",
     "telegram_username",
     "telegram_linked_at",

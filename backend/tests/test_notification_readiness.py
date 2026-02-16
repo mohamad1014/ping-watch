@@ -8,6 +8,7 @@ from httpx import ASGITransport, AsyncClient
 import app.routes.notifications as notifications_route
 from app.db import SessionLocal
 from app.main import app
+from app.models import DeviceModel, NotificationEndpointModel
 from app.store import get_telegram_link_attempt
 
 
@@ -198,6 +199,123 @@ async def test_telegram_webhook_links_device_and_status_becomes_ready(monkeypatc
     }
     assert sent_messages
     assert sent_messages[-1]["url"].endswith("/bottoken/sendMessage")
+
+
+@pytest.mark.anyio
+async def test_telegram_webhook_creates_endpoint_record_and_attaches_device(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setenv("TELEGRAM_BOT_ONBOARDING_URL", "https://t.me/pingwatch_bot")
+
+    def mock_post(url: str, *, json: dict, timeout: float):
+        assert timeout > 0
+        return type(
+            "_Resp",
+            (),
+            {
+                "status_code": 200,
+                "text": "{}",
+                "raise_for_status": staticmethod(lambda: None),
+            },
+        )()
+
+    monkeypatch.setattr(httpx, "post", mock_post)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post("/devices/register", json={"device_id": "dev-1"})
+        start_response = await client.post(
+            "/notifications/telegram/link/start", json={"device_id": "dev-1"}
+        )
+        token = parse_qs(urlparse(start_response.json()["connect_url"]).query)["start"][0]
+
+        webhook_response = await client.post(
+            "/notifications/telegram/webhook",
+            json={
+                "update_id": 11,
+                "message": {
+                    "text": f"/start {token}",
+                    "chat": {"id": 987654321},
+                    "from": {"username": "alice"},
+                },
+            },
+        )
+
+    assert webhook_response.status_code == 200
+
+    with SessionLocal() as db:
+        device = db.get(DeviceModel, "dev-1")
+        assert device is not None
+        assert device.telegram_endpoint_id is not None
+
+        endpoint = db.get(NotificationEndpointModel, device.telegram_endpoint_id)
+        assert endpoint is not None
+        assert endpoint.provider == "telegram"
+        assert endpoint.chat_id == "987654321"
+        assert endpoint.telegram_username == "alice"
+
+
+@pytest.mark.anyio
+async def test_telegram_target_uses_endpoint_mapping_when_legacy_fields_missing(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setenv("TELEGRAM_BOT_ONBOARDING_URL", "https://t.me/pingwatch_bot")
+
+    def mock_post(url: str, *, json: dict, timeout: float):
+        assert timeout > 0
+        return type(
+            "_Resp",
+            (),
+            {
+                "status_code": 200,
+                "text": "{}",
+                "raise_for_status": staticmethod(lambda: None),
+            },
+        )()
+
+    monkeypatch.setattr(httpx, "post", mock_post)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post("/devices/register", json={"device_id": "dev-1"})
+        start_response = await client.post(
+            "/notifications/telegram/link/start", json={"device_id": "dev-1"}
+        )
+        token = parse_qs(urlparse(start_response.json()["connect_url"]).query)["start"][0]
+        await client.post(
+            "/notifications/telegram/webhook",
+            json={
+                "update_id": 12,
+                "message": {
+                    "text": f"/start {token}",
+                    "chat": {"id": 987654321},
+                    "from": {"username": "alice"},
+                },
+            },
+        )
+
+    with SessionLocal() as db:
+        device = db.get(DeviceModel, "dev-1")
+        assert device is not None
+        device.telegram_chat_id = None
+        device.telegram_username = None
+        device.telegram_linked_at = None
+        db.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        target_response = await client.get(
+            "/notifications/telegram/target", params={"device_id": "dev-1"}
+        )
+
+    assert target_response.status_code == 200
+    assert target_response.json() == {
+        "enabled": True,
+        "linked": True,
+        "device_id": "dev-1",
+        "chat_id": "987654321",
+    }
 
 
 @pytest.mark.anyio
