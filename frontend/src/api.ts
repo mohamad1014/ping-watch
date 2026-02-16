@@ -11,6 +11,144 @@ const API_BASE_URL = normalizeApiBaseUrl(
   import.meta.env.VITE_API_URL?.trim() || getDefaultApiBaseUrl()
 )
 
+const AUTH_TOKEN_KEY = 'ping-watch:auth-token'
+const AUTH_USER_ID_KEY = 'ping-watch:auth-user-id'
+const AUTH_EXPIRES_AT_KEY = 'ping-watch:auth-expires-at'
+const AUTH_LOCAL_USER_ID_KEY = 'ping-watch:auth-local-user-id'
+const AUTH_REQUIRED_OVERRIDE_KEY = '__PING_WATCH_AUTH_REQUIRED__'
+
+let authLoginPromise: Promise<string> | null = null
+
+const parseBoolean = (value: string | undefined): boolean =>
+  (value ?? '').trim().toLowerCase() === 'true'
+
+const isAuthRequired = (): boolean => {
+  const override = (globalThis as Record<string, unknown>)[AUTH_REQUIRED_OVERRIDE_KEY]
+  if (typeof override === 'boolean') {
+    return override
+  }
+  return parseBoolean(import.meta.env.VITE_AUTH_REQUIRED)
+}
+
+const getStorageValue = (key: string): string | null => {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+const setStorageValue = (key: string, value: string | null) => {
+  try {
+    if (value === null) {
+      localStorage.removeItem(key)
+      return
+    }
+    localStorage.setItem(key, value)
+  } catch {
+    // Ignore localStorage failures and continue without persistence.
+  }
+}
+
+const nowMs = () => Date.now()
+
+const getStoredToken = (): string | null => getStorageValue(AUTH_TOKEN_KEY)
+
+const tokenExpired = (expiresAt: string | null): boolean => {
+  if (!expiresAt) return false
+  const expiresAtMs = Date.parse(expiresAt)
+  if (Number.isNaN(expiresAtMs)) return true
+  return expiresAtMs <= nowMs() + 10_000
+}
+
+const generateClientId = (): string => {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID()
+  }
+  return `user_${nowMs()}_${Math.random().toString(16).slice(2)}`
+}
+
+const getOrCreateLocalUserId = (): string => {
+  const existing = getStorageValue(AUTH_LOCAL_USER_ID_KEY)
+  if (existing) return existing
+  const generated = generateClientId()
+  setStorageValue(AUTH_LOCAL_USER_ID_KEY, generated)
+  return generated
+}
+
+const setStoredAuthSession = (payload: {
+  token: string
+  userId: string | null
+  expiresAt: string | null
+}) => {
+  setStorageValue(AUTH_TOKEN_KEY, payload.token)
+  setStorageValue(AUTH_USER_ID_KEY, payload.userId)
+  setStorageValue(AUTH_EXPIRES_AT_KEY, payload.expiresAt)
+}
+
+const clearStoredAuthSession = () => {
+  setStorageValue(AUTH_TOKEN_KEY, null)
+  setStorageValue(AUTH_USER_ID_KEY, null)
+  setStorageValue(AUTH_EXPIRES_AT_KEY, null)
+}
+
+type DevLoginResponse = {
+  access_token: string
+  token_type: string
+  user_id?: string | null
+  expires_at?: string | null
+}
+
+const loginForToken = async (): Promise<string> => {
+  if (authLoginPromise) return authLoginPromise
+
+  authLoginPromise = (async () => {
+    const localUserId = getOrCreateLocalUserId()
+    const response = await fetch(`${API_BASE_URL}/auth/dev/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ user_id: localUserId }),
+    })
+
+    if (!response.ok) {
+      throw new ApiError(response.status)
+    }
+
+    const payload = (await response.json()) as DevLoginResponse
+    const token = (payload.access_token ?? '').trim()
+    if (!token) {
+      throw new ApiError(500, 'missing access token from auth response')
+    }
+
+    setStoredAuthSession({
+      token,
+      userId: payload.user_id ?? null,
+      expiresAt: payload.expires_at ?? null,
+    })
+    return token
+  })()
+
+  try {
+    return await authLoginPromise
+  } finally {
+    authLoginPromise = null
+  }
+}
+
+const resolveAuthToken = async (forceRefresh: boolean): Promise<string | null> => {
+  if (!isAuthRequired()) return null
+  if (!forceRefresh) {
+    const token = getStoredToken()
+    const expiresAt = getStorageValue(AUTH_EXPIRES_AT_KEY)
+    if (token && !tokenExpired(expiresAt)) {
+      return token
+    }
+  }
+  return loginForToken()
+}
+
 export class ApiError extends Error {
   status: number
 
@@ -27,13 +165,29 @@ type RequestOptions = {
 }
 
 const request = async <T>(path: string, options: RequestOptions = {}) => {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: options.method ?? 'GET',
-    headers: {
+  const method = (options.method ?? 'GET').toUpperCase()
+
+  const execute = async (forceRefreshToken: boolean) => {
+    const token = await resolveAuthToken(forceRefreshToken)
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-    },
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  })
+    }
+    if (token) {
+      headers.Authorization = `Bearer ${token}`
+    }
+
+    return fetch(`${API_BASE_URL}${path}`, {
+      method,
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    })
+  }
+
+  let response = await execute(false)
+  if (response.status === 401 && isAuthRequired()) {
+    clearStoredAuthSession()
+    response = await execute(true)
+  }
 
   if (!response.ok) {
     throw new ApiError(response.status)
@@ -45,6 +199,7 @@ const request = async <T>(path: string, options: RequestOptions = {}) => {
 export type SessionResponse = {
   session_id: string
   device_id: string
+  user_id?: string | null
   status: string
   started_at?: string
   stopped_at?: string | null
@@ -53,6 +208,7 @@ export type SessionResponse = {
 
 export type DeviceResponse = {
   device_id: string
+  user_id?: string | null
   label?: string | null
   created_at?: string
 }
@@ -60,6 +216,7 @@ export type DeviceResponse = {
 export type EventResponse = {
   event_id: string
   session_id?: string
+  user_id?: string | null
   device_id?: string
   status: string
   trigger_type: string
@@ -330,16 +487,27 @@ export const uploadClipViaApi = async (
   blob: Blob,
   options: { contentType: string }
 ): Promise<{ etag: string | null }> => {
-  const response = await fetch(
-    `${API_BASE_URL}/events/${encodeURIComponent(eventId)}/upload`,
-    {
+  const execute = async (forceRefreshToken: boolean) => {
+    const token = await resolveAuthToken(forceRefreshToken)
+    const headers: Record<string, string> = {
+      'Content-Type': options.contentType,
+    }
+    if (token) {
+      headers.Authorization = `Bearer ${token}`
+    }
+
+    return fetch(`${API_BASE_URL}/events/${encodeURIComponent(eventId)}/upload`, {
       method: 'PUT',
       body: blob,
-      headers: {
-        'Content-Type': options.contentType,
-      },
-    }
-  )
+      headers,
+    })
+  }
+
+  let response = await execute(false)
+  if (response.status === 401 && isAuthRequired()) {
+    clearStoredAuthSession()
+    response = await execute(true)
+  }
 
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status}`)

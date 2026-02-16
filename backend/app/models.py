@@ -23,6 +23,9 @@ class SessionModel(Base):
 
     session_id: Mapped[str] = mapped_column(String, primary_key=True)
     device_id: Mapped[str] = mapped_column(String, index=True)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.user_id"), index=True, nullable=True
+    )
     status: Mapped[str] = mapped_column(String, index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     stopped_at: Mapped[datetime | None] = mapped_column(
@@ -39,6 +42,9 @@ class DeviceModel(Base):
     __tablename__ = "devices"
 
     device_id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.user_id"), index=True, nullable=True
+    )
     label: Mapped[str | None] = mapped_column(String, nullable=True)
     telegram_chat_id: Mapped[str | None] = mapped_column(String, nullable=True)
     telegram_username: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -46,6 +52,31 @@ class DeviceModel(Base):
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class UserModel(Base):
+    __tablename__ = "users"
+
+    user_id: Mapped[str] = mapped_column(String, primary_key=True)
+    email: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AuthSessionModel(Base):
+    __tablename__ = "auth_sessions"
+
+    auth_session_id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    user: Mapped[UserModel] = relationship()
 
 
 class EventModel(Base):
@@ -58,6 +89,9 @@ class EventModel(Base):
     event_id: Mapped[str] = mapped_column(String, primary_key=True)
     session_id: Mapped[str] = mapped_column(
         ForeignKey("sessions.session_id"), index=True
+    )
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.user_id"), index=True, nullable=True
     )
     device_id: Mapped[str] = mapped_column(String, index=True)
     status: Mapped[str] = mapped_column(String, index=True)
@@ -98,6 +132,9 @@ class TelegramLinkAttemptModel(Base):
 
     attempt_id: Mapped[str] = mapped_column(String, primary_key=True)
     device_id: Mapped[str] = mapped_column(String, index=True)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.user_id"), index=True, nullable=True
+    )
     token_hash: Mapped[str] = mapped_column(String, unique=True, index=True)
     status: Mapped[str] = mapped_column(String, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

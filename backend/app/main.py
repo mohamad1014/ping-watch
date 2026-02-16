@@ -1,11 +1,14 @@
 import time
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.auth import authenticate_request, should_authenticate_request
 from app.db import init_db
 from app.logging import setup_logging
+from app.routes.auth import router as auth_router
 from app.routes.devices import router as devices_router
 from app.routes.events import router as events_router
 from app.routes.notifications import router as notifications_router
@@ -31,6 +34,7 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["etag"],
 )
+app.include_router(auth_router)
 app.include_router(sessions_router)
 app.include_router(devices_router)
 app.include_router(events_router)
@@ -40,6 +44,19 @@ app.include_router(notifications_router)
 @app.on_event("startup")
 async def startup():
     init_db()
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    try:
+        if should_authenticate_request(request):
+            user_id, auth_session_id = authenticate_request(request)
+            request.state.auth_user_id = user_id
+            request.state.auth_session_id = auth_session_id
+    except HTTPException as exc:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    return await call_next(request)
 
 
 @app.middleware("http")

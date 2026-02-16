@@ -422,7 +422,7 @@ async def test_telegram_link_status_tolerates_naive_attempt_expiry(monkeypatch):
     monkeypatch.setattr(
         notifications_route,
         "get_telegram_link_attempt",
-        lambda db, attempt_id: attempt,
+        lambda db, attempt_id, user_id=None: attempt,
     )
     monkeypatch.setattr(
         notifications_route,

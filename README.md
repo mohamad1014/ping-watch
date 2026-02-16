@@ -127,11 +127,15 @@ Note: E2E/Playwright runs use a temp SQLite database for the backend; if you ove
 ## Environment
 
 - `VITE_API_URL` — optional backend base URL override for the frontend. If unset, frontend uses `<current-host>:8000` (better for phone/LAN testing). Set explicitly when backend is on a different host/port.
+- `VITE_AUTH_REQUIRED` — when `true`, frontend obtains/stores a bearer token via `POST /auth/dev/login` and sends `Authorization: Bearer ...` on API requests.
 - `VITE_ALLOWED_HOSTS` — optional comma-separated extra hostnames allowed by the Vite dev server (useful for tunnel domains).
 - `VITE_POLL_INTERVAL_MS` — polling interval for event refresh (default 5000).
 - `VITE_UPLOAD_INTERVAL_MS` — polling interval for retrying pending uploads (default 10000).
 - `VITE_DISABLE_MEDIA` — set to `true` to skip `getUserMedia`/`MediaRecorder` capture (useful for tests/E2E).
 - `DATABASE_URL` — backend DB URL (default Postgres in local dev).
+- `AUTH_REQUIRED` — when `true`, backend write endpoints (`POST`/`PUT`/`PATCH`/`DELETE`) require a bearer token.
+- `AUTH_DEV_LOGIN_ENABLED` — when `true` (default), enables `POST /auth/dev/login` to mint development bearer tokens.
+- `AUTH_TOKEN_TTL_SECONDS` — bearer token TTL for `POST /auth/dev/login` (default `86400`, clamped to 300..2592000).
 - `AZURITE_BLOB_ENDPOINT` / `AZURITE_ACCOUNT_NAME` / `AZURITE_ACCOUNT_KEY` — Azurite config for issuing SAS upload URLs.
 - `AZURITE_CLIPS_CONTAINER` — container name for clips (default `clips`).
 - `AZURITE_AUTO_CREATE_CONTAINER` — auto-create the clips container on first upload (recommended in local dev).
@@ -146,6 +150,7 @@ Note: E2E/Playwright runs use a temp SQLite database for the backend; if you ove
 - `NOTIFY_WEBHOOK_SECRET` — optional static secret sent as `X-Ping-Watch-Webhook-Secret` header on webhook requests.
 - `NOTIFICATION_TIMEOUT_SECONDS` — outbound notification request timeout (default 10 seconds).
 - `WORKER_LOG_LEVEL` — worker log level (`DEBUG`, `INFO`, `WARNING`, ...). Set to `INFO` to see notification dispatch logs.
+- `WORKER_API_TOKEN` — optional bearer token used by worker callbacks (for example `POST /events/{event_id}/summary`) when `AUTH_REQUIRED=true`.
 
 Frontend tests can also override poll/upload intervals via runtime globals; see `frontend/README.md`.
 
@@ -169,6 +174,26 @@ curl -X POST http://localhost:8000/devices/register \
   "device_id": "device-123",
   "label": "Pixel 8",
   "created_at": "2026-02-14T20:00:00+00:00"
+}
+```
+
+### Auth (dev bootstrap)
+
+`POST /auth/dev/login`
+- What it does: creates (or reuses) a development user and returns a bearer token for protected write endpoints.
+- Example:
+```bash
+curl -X POST http://localhost:8000/auth/dev/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"owner@example.com"}'
+```
+- Example response:
+```json
+{
+  "access_token": "<token>",
+  "token_type": "bearer",
+  "user_id": "9a1f5c3e-5db8-4cc5-8f57-8a1f7d6e42e4",
+  "expires_at": "2026-02-17T20:00:00+00:00"
 }
 ```
 
