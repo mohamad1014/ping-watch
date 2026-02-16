@@ -1,6 +1,6 @@
 # Ping Watch Plan
 
-Updated: **February 15, 2026**
+Updated: **Current branch state**
 
 ## 1) Goal
 
@@ -22,7 +22,7 @@ Out of scope for now:
 - Advanced motion science (ROI editor, heavy filtering, preview-frame triage).
 - Billing UX and full paid-tier monetization implementation.
 
-## 3) Current Product Snapshot (as of February 15, 2026)
+## 3) Current Product Snapshot
 
 ### Completed
 
@@ -56,7 +56,7 @@ Out of scope for now:
 - Security baseline (rate limits, secret rotation process, scan gates).
 - Performance SLO validation and soak/load testing.
 
-## 4) Production Readiness Comparison (as of February 15, 2026)
+## 4) Production Readiness Comparison
 
 | Area | Current state | Production target | Gap |
 |---|---|---|---|
@@ -69,46 +69,44 @@ Out of scope for now:
 | Delivery process | Local scripts and manual workflows | Automated CI/CD, migrations, rollback drills | High |
 | Performance/SLO | Functional correctness validated | Measured SLOs and soak-test pass | High |
 
-## 5) 12-Week Milestone Plan (week-by-week)
+## 5) Epic Roadmap (feature-based)
 
-Planning start: **Monday, February 16, 2026**.
+| Epic | Scope | Exit criteria |
+|---|---|---|
+| E1: Scope + SLO Baseline | Lock private beta scope, reliability targets, and out-of-scope cuts | Scope document and SLO targets are approved; implementation backlog is prioritized |
+| E2: Identity Foundation | Add user auth/session model and backend auth middleware | Protected write endpoints require auth; auth tests pass |
+| E3: Ownership + Authorization | Enforce user-to-device/session/event ownership across API paths | Cross-user access is blocked in API/integration tests |
+| E4: Frontend Account Flows | Add frontend auth/session lifecycle and ownership-scoped fetching | Users only see their own devices/events in E2E |
+| E5: Queue + Worker Reliability | Add idempotency keys, retry model, and explicit failed states | No silent drops; failed states are persisted and test-covered |
+| E6: Notification Reliability | Track notification attempts and delivery outcomes | Delivery attempts/success/failure reasons are queryable |
+| E7: Observability + Runbooks | Add metrics dashboards, alerting, and failure playbooks | Queue depth/failure/latency and notification health are visible and actionable |
+| E8: Delivery Automation | Build CI/CD with migrations and rollback automation | Repeatable deploy/migrate/rollback is validated in staging |
+| E9: Security Hardening | Add rate limits, secret lifecycle process, and scan gates | No unresolved critical/high security findings at release gate |
+| E10: Performance + Retention | Validate SLO under load and implement retention cleanup jobs | Soak/load targets met and retention cleanup verified |
+| E11: Beta Operations | Prepare onboarding and incident response workflows | Beta users can onboard; top incidents have documented response paths |
+| E12: Launch Readiness | Final release gate and go/no-go checklist | Launch checklist is complete and signed off |
 
-| Week | Dates | Focus | Exit criteria |
-|---|---|---|---|
-| 1 | Feb 16-22 | Finalize production scope + SLOs + backlog cuts | Signed scope doc and prioritized implementation queue |
-| 2 | Feb 23-Mar 1 | Auth foundation (users/sessions, backend middleware) | Protected write endpoints and auth tests passing |
-| 3 | Mar 2-8 | Device ownership and authorization rules | Cross-user access blocked in API/integration tests |
-| 4 | Mar 9-15 | Frontend auth + ownership-aware UX | Users only see own devices/events in E2E |
-| 5 | Mar 16-22 | Queue hardening (retry model + idempotency + failure states) | No silent drops; failed states visible and tested |
-| 6 | Mar 23-29 | Notification reliability + delivery status model | Delivery outcomes persisted and queryable |
-| 7 | Mar 30-Apr 5 | Observability baseline (metrics + dashboards + alerting) | Queue depth/failure/latency visible and actionable |
-| 8 | Apr 6-12 | Staging parity + CI/CD + rollback path | Repeatable deploy/migrate/rollback in staging |
-| 9 | Apr 13-19 | Security hardening | Rate limits, scan gates, no unresolved critical/high issues |
-| 10 | Apr 20-26 | Performance + retention jobs | Soak/load targets met; retention cleanup verified |
-| 11 | Apr 27-May 3 | Private beta rollout + incident runbooks | Beta users onboarded; top incidents documented |
-| 12 | May 4-10 | Launch-readiness review | Go/no-go checklist completed |
+### Capability gates
 
-### Milestone gates
+- **Gate A (after E4):** Multi-user isolation is complete end-to-end.
+- **Gate B (after E8):** Deployment + rollback process is reliable.
+- **Gate C (after E12):** Launch readiness is validated.
 
-- **Gate A (end of Week 4):** Multi-user isolation is complete.
-- **Gate B (end of Week 8):** Deployment + rollback process is reliable.
-- **Gate C (end of Week 12):** Launch readiness is validated.
+## 6) Execution Queue (current)
 
-## 6) Immediate Work Queue (next 2 weeks)
-
-### Priority 0 (must start now)
+### Now
 
 1. Lock v1 scope and SLO targets.
 2. Implement backend auth middleware + protected endpoint policy.
 3. Add device ownership schema and migration plan.
 
-### Priority 1 (immediately after)
+### Next
 
 1. Frontend auth/session handling and ownership-aware data fetching.
 2. Queue idempotency keys and failure-state visibility.
 3. Notification delivery status model (attempts, success/fail reason, retryable flag).
 
-### Priority 2
+### After
 
 1. Baseline dashboards for API latency, worker failures, queue backlog.
 2. Draft rollback + incident runbook skeletons.
@@ -127,7 +125,7 @@ Private beta is considered ready when all are true:
 
 - Keep this file short and execution-focused.
 - If a section is not tied to an action, milestone, or exit criterion, remove it.
-- Update status with explicit dates (avoid vague “recently”).
+- Update status with explicit shipped capabilities (avoid vague “recently”).
 - Reflect shipped behavior only after tests pass in repo scripts:
   - `./scripts/test-unit`
   - `./scripts/test-integration`
