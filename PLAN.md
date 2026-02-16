@@ -1,378 +1,134 @@
-## Updated plan (simple-first MVP, optimize later)
+# Ping Watch Plan
 
-You’ll build a **phone-as-sensor PWA** that:
+Updated: **February 15, 2026**
 
-1. Records continuously (in a foreground session).
-2. Uses **basic triggers** (motion as default, optional audio energy spike) to decide when to cut a clip.
-3. Uploads **event clips only** to the cloud for inference + summaries + storage.
-4. Notifies users (Telegram + second device monitoring).
-5. Provides a timeline + later retrieval/search.
+## 1) Goal
 
-Two tiers:
+Ship a reliable private beta for **phone-as-sensor monitoring**:
+- Foreground PWA captures clips from motion/audio triggers.
+- Event clips upload to cloud and get summarized.
+- Alerts are delivered (Telegram first).
+- System is stable enough for real users, not just local demo flows.
 
-* **Free:** limited cloud inference credits (e.g., seconds/minutes analyzed)
-* **Paid:** more credits + better limits/retention
+## 2) Scope for This Plan
 
----
+In scope:
+- Device-centric monitoring flow (capture -> upload -> process -> alert).
+- Reliability, observability, and rollout readiness.
+- Multi-user auth/ownership needed for production.
 
-## Current status (2026-02-02)
+Out of scope for now:
+- Native background capture (Capacitor wrapper remains later work).
+- Advanced motion science (ROI editor, heavy filtering, preview-frame triage).
+- Billing UX and full paid-tier monetization implementation.
 
-### What is done
+## 3) Current Product Snapshot (as of February 15, 2026)
 
-- Project scaffold with `frontend/`, `backend/`, `worker/`, `e2e/`, `infra/`, `scripts/`.
-- Frontend app shell with session start/stop and **Create event** UI.
-- Frontend polling of events and rendering of status + summary fields.
-- On-device clip metadata capture (duration + size) via MediaRecorder where available; opt-out flag for tests.
-- Event ID copy actions for manual worker testing.
-- Clip ring buffer + clip selection helpers (frontend utilities, not yet wired to capture).
-- Clip ring buffer wired to MediaRecorder chunking + pre/post clip assembly.
-- IndexedDB clip persistence (local clip storage).
-- Basic motion trigger (frame differencing) that fires clip creation.
-- Motion controls UI (threshold/cooldown/ROI inset sliders).
-- Clip timeline UI with preview playback from IndexedDB.
-- Upload pipeline that initiates/finalizes clips with retries + offline queue.
-- Background upload retry loop while a session is active.
-- PWA install metadata (manifest + service worker) for production builds.
-- Backend API:
-  - Sessions: start/stop/list.
-  - Events: create/list.
-  - Event summaries: post/get (status transitions to `done`).
-- Worker stub posts event summaries to backend (HTTP).
-- DB persistence via SQLAlchemy (Postgres default) and Alembic migrations scaffolding.
-- Local infra compose (Postgres/Redis/Azurite) and automation scripts.
-- Tests:
-  - Frontend unit tests (Vitest).
-  - Backend unit + integration tests (ASGI + live server).
-  - Worker unit tests.
-  - Playwright E2E tests (webServer and live-spawn modes).
+### Completed
 
-### What is not done yet
+- Frontend PWA capture loop with motion trigger and optional audio trigger.
+- Local clip persistence and timeline playback.
+- Upload pipeline with retries/offline queue and finalize flow.
+- Backend sessions/events APIs and DB persistence with Alembic.
+- Worker pipeline skeleton with summary persistence and outbound notification hooks.
+- Telegram device-linking flow upgraded to token-based onboarding:
+  - `POST /notifications/telegram/link/start`
+  - `GET /notifications/telegram/link/status`
+  - `POST /notifications/telegram/webhook`
+- Telegram linking hardening:
+  - one-time token fingerprint logging (no raw token logging)
+  - webhook JSON shape validation and safe ignore path
+- Worker Telegram routing now uses per-device chat lookup (legacy fallback removed).
+- CORS and frontend host support expanded for LAN and ngrok workflows.
+- Unit/integration/E2E suites are passing in the current branch.
 
-- Auth, credits, and tier limits.
-- Queueing via Service Bus, GPU inference pipeline, and model integration.
-- Notifications (Telegram) and WebSocket monitoring.
-- Cost controls beyond basic guardrails.
-- Background-safe capture (native wrapper) and advanced trigger refinements.
+### Partially complete
 
-### Roadmap position
+- Inference pipeline is operational as a scaffold, but not production-grade GPU queueing.
+- Notification delivery works, but delivery tracking/retry policy needs hardening.
+- Observability exists in logs, but dashboards/alerts/runbooks are incomplete.
 
-- **Phase 0 (Project skeleton):** complete.
-- **Phase 1 (Local capture + trigger):** complete (MVP‑1 done).
-- **Phase 2 (Upload + event sync):** complete for upload/event sync (upload initiate/finalize + retries/offline queue + UI polling + upload retry loop); auth deferred.
-- **Phase 3 (Inference pipeline):** partial stub (summary endpoints + worker posting); no queue/VLM.
-- **Phase 4 (Notifications + monitoring):** not started.
-- **Phase 5 (Refinement + cost control):** not started.
+### Not started / missing for production
 
-### Testing readiness
+- User authentication and device ownership enforcement.
+- Multi-user access controls in API + frontend.
+- CI/CD deployment pipeline with staged rollout + rollback automation.
+- Security baseline (rate limits, secret rotation process, scan gates).
+- Performance SLO validation and soak/load testing.
 
-You can test **now**:
+## 4) Production Readiness Comparison (as of February 15, 2026)
 
-- Frontend unit tests (UI state + API calls).
-- Backend API tests (unit + integration live server; defaults to Postgres).
-- Worker summary posting (unit).
-- E2E flows:
-  - App shell + backend health.
-  - Start session → create event → worker posts summary → UI updates.
-
-See `README.md` for commands.
-
----
-
-## Production readiness comparison (as of 2026-02-14)
-
-Assumed planning start date: **Monday, February 16, 2026**.
-
-| Area | Current state | Production target | Gap summary |
+| Area | Current state | Production target | Gap |
 |---|---|---|---|
-| Identity & access | Device-centric, no user auth/ownership enforcement | Authenticated users, device ownership, access control | High |
-| Data & storage | Postgres + blob upload working; local fallback paths still present | Managed cloud storage + strict prod-only storage paths + retention jobs | Medium |
-| Queue/worker reliability | RQ/Redis flow working, retries and force stop in place | Durable retries, dead-letter handling, idempotency guarantees, backlog alerts | Medium |
-| Notifications | Telegram/webhook working, now device-linked chat mapping | Webhook-based Telegram onboarding + delivery tracking + retry policies | Medium |
-| Observability | Structured API logs + worker logs; troubleshooting doc exists | Metrics dashboards, alerting thresholds, tracing, runbooks | Medium |
-| Security | Basic env-based secrets and CORS handling | Hardened authz, rate limits, key rotation, vulnerability gates | High |
-| Delivery process | Local scripts + tests passing | CI/CD with migration gating, staged rollout, rollback drills | High |
-| Performance/SLO | Functional behavior validated by tests | Explicit SLOs (latency, availability), load/soak-tested and monitored | High |
+| Identity & access | Device-centric, unauthenticated flows | User auth + strict ownership checks | High |
+| Data/storage path | Upload + persistence working | Managed env parity, retention + cleanup policies | Medium |
+| Queue/worker reliability | Basic queue flow and retries | Idempotency guarantees, dead-letter handling, backlog controls | Medium |
+| Notifications | Telegram link + delivery path works | Delivery tracking, retry policy, operator visibility | Medium |
+| Observability | Structured logs and test coverage | Metrics dashboards, alerting, runbooks | Medium |
+| Security | Basic env/config protections | Rate limiting, secret lifecycle, CI security gates | High |
+| Delivery process | Local scripts and manual workflows | Automated CI/CD, migrations, rollback drills | High |
+| Performance/SLO | Functional correctness validated | Measured SLOs and soak-test pass | High |
 
-### Target production definition (v1)
+## 5) 12-Week Milestone Plan (week-by-week)
 
-- Private beta: limited users/devices, monitored rollout.
-- Initial production: authenticated multi-user system with reliable event processing and outbound alerting.
-- Suggested launch window if milestones hold: **week of May 11, 2026**.
+Planning start: **Monday, February 16, 2026**.
 
----
-
-## 12-week milestone plan (week-by-week)
-
-| Week | Dates | Deliverables | Acceptance criteria |
+| Week | Dates | Focus | Exit criteria |
 |---|---|---|---|
-| 1 | Feb 16-22, 2026 | Production scope doc, SLOs, prioritized backlog | Written targets for uptime, alert latency, retention, cost; team sign-off |
-| 2 | Feb 23-Mar 1, 2026 | Auth foundation + user/session model + ownership schema | Non-dev write APIs require auth; unauthorized access tests pass |
-| 3 | Mar 2-8, 2026 | Device ownership enforcement and auth middleware hardening | Cross-user data access blocked in API tests; migrations verified |
-| 4 | Mar 9-15, 2026 | Frontend auth/device binding UX and ownership-aware views | Users only see own devices/events; multi-user E2E isolation test passes |
-| 5 | Mar 16-22, 2026 | Queue hardening (retry/backoff/idempotency/failed state model) | No dropped jobs under normal retry paths; failed state visible and test-covered |
-| 6 | Mar 23-29, 2026 | Notification reliability (delivery status + retry policy) | Alert delivery outcomes persisted and queryable; retry behavior validated |
-| 7 | Mar 30-Apr 5, 2026 | Observability baseline (metrics + dashboards + alert rules) | Event traceability end-to-end via IDs; queue depth/failure/latency visible |
-| 8 | Apr 6-12, 2026 | Staging parity + CI/CD + rollback workflow | Staging deploy/migrate/rollback is automated and repeatable |
-| 9 | Apr 13-19, 2026 | Security hardening (rate limits, secrets handling, scans) | No unresolved critical/high findings; security checks in CI |
-| 10 | Apr 20-26, 2026 | Performance/soak testing + retention/cleanup jobs | Meets target load and latency for sustained run; cleanup jobs verified |
-| 11 | Apr 27-May 3, 2026 | Private beta rollout + incident runbooks | Beta users onboarded; top operational incidents documented with runbooks |
-| 12 | May 4-10, 2026 | Launch readiness review + go-live checklist | Launch gate passed: SLO, security, observability, rollback, on-call readiness |
+| 1 | Feb 16-22 | Finalize production scope + SLOs + backlog cuts | Signed scope doc and prioritized implementation queue |
+| 2 | Feb 23-Mar 1 | Auth foundation (users/sessions, backend middleware) | Protected write endpoints and auth tests passing |
+| 3 | Mar 2-8 | Device ownership and authorization rules | Cross-user access blocked in API/integration tests |
+| 4 | Mar 9-15 | Frontend auth + ownership-aware UX | Users only see own devices/events in E2E |
+| 5 | Mar 16-22 | Queue hardening (retry model + idempotency + failure states) | No silent drops; failed states visible and tested |
+| 6 | Mar 23-29 | Notification reliability + delivery status model | Delivery outcomes persisted and queryable |
+| 7 | Mar 30-Apr 5 | Observability baseline (metrics + dashboards + alerting) | Queue depth/failure/latency visible and actionable |
+| 8 | Apr 6-12 | Staging parity + CI/CD + rollback path | Repeatable deploy/migrate/rollback in staging |
+| 9 | Apr 13-19 | Security hardening | Rate limits, scan gates, no unresolved critical/high issues |
+| 10 | Apr 20-26 | Performance + retention jobs | Soak/load targets met; retention cleanup verified |
+| 11 | Apr 27-May 3 | Private beta rollout + incident runbooks | Beta users onboarded; top incidents documented |
+| 12 | May 4-10 | Launch-readiness review | Go/no-go checklist completed |
 
 ### Milestone gates
 
-- **Gate A (end Week 4):** Multi-user isolation complete.
-- **Gate B (end Week 8):** Deployment and rollback pipeline stable.
-- **Gate C (end Week 12):** Launch readiness complete.
+- **Gate A (end of Week 4):** Multi-user isolation is complete.
+- **Gate B (end of Week 8):** Deployment + rollback process is reliable.
+- **Gate C (end of Week 12):** Launch readiness is validated.
 
----
+## 6) Immediate Work Queue (next 2 weeks)
 
-## Constraints (kept)
+### Priority 0 (must start now)
 
-* **MVP = PWA foreground** (screen on; best with plugged-in old phone)
-* **V1 reliability = native wrapper** (Capacitor) for better long-running behavior + native push later
+1. Lock v1 scope and SLO targets.
+2. Implement backend auth middleware + protected endpoint policy.
+3. Add device ownership schema and migration plan.
 
----
+### Priority 1 (immediately after)
 
-## Core architecture (MVP-first, no early optimization)
+1. Frontend auth/session handling and ownership-aware data fetching.
+2. Queue idempotency keys and failure-state visibility.
+3. Notification delivery status model (attempts, success/fail reason, retryable flag).
 
-### On-device pipeline (PWA)
+### Priority 2
 
-**1) Capture**
+1. Baseline dashboards for API latency, worker failures, queue backlog.
+2. Draft rollback + incident runbook skeletons.
 
-* WebRTC `getUserMedia`
-* `MediaRecorder` chunking (e.g., 2–4s chunks)
-* **Ring buffer** in memory/IndexedDB to keep last *PRE* seconds (e.g., 10–20s) so clips include “what led up to it”
+## 7) Definition of Done for Private Beta
 
-**2) Triggering (simple v0)**
+Private beta is considered ready when all are true:
 
-* **Motion trigger (default)**
+1. Authenticated multi-user access is enforced end-to-end.
+2. Event processing has no silent drop path and has observable failure states.
+3. Telegram delivery is linkable per device and delivery outcomes are recorded.
+4. CI validates unit/integration/E2E and migration checks on every merge.
+5. On-call runbooks exist for top failure modes (upload, queue stall, notification failure).
 
-  * Downscale frames (e.g., 160×90 or 320×180)
-  * Simple frame differencing to compute a “motion score”
-  * Trigger when motion score > threshold for N consecutive checks (debounce)
-  * Noise guards (MVP-friendly, pick minimal set):
-    * Cooldown after trigger (e.g., 20–60s)
-    * Minimum motion duration (N consecutive frames)
-    * Adaptive background frame (slow update to ignore lighting drift)
-    * Global brightness change gate (suppress auto-exposure shifts)
-    * Min changed-pixel percentage (avoid tiny flicker)
-    * Optional ROI mask to ignore known noisy zones (window/fan)
-* **Optional audio energy spike trigger**
+## 8) Operating Rules for This Plan
 
-  * Compute short-window audio energy (RMS) from mic stream
-  * Trigger when energy rises above a threshold (with debounce + cooldown)
-* Combined behavior:
-
-  * Trigger if **motion fires** OR **audio spike fires** (if enabled)
-
-**3) Clip builder**
-
-* On trigger:
-
-  * build clip = PRE seconds (from ring buffer) + POST seconds (recorded after trigger)
-  * generate basic metadata: timestamp, trigger type (motion/audio), clip length
-
-**4) Upload**
-
-* Upload clip to cloud (Azure Blob) using a secure upload URL
-* Create an “event record” in DB with status = `processing`
-* Simple upload flow improvements (MVP-friendly):
-  * Idempotent event ID per clip (reuse on retries)
-  * Retry with backoff; persist pending uploads in IndexedDB
-  * Upload + finalize call (mark uploaded); backend can reconcile blobs
-  * Include clip duration/size for basic integrity checks
-  * Pause/resume on offline/online changes
-
-**5) Local timeline**
-
-* Immediately show “Event detected (processing…)”
-* Update later when cloud results arrive
-
-> Note: In this MVP phase, you do **not** do ROI calibration, fancy motion filtering, or preview-frame prechecks. Keep it working end-to-end first.
-
----
-
-## Cloud pipeline (Azure, FastAPI)
-
-**API (FastAPI)**
-
-* Auth, device registration
-* Start/stop session, list events, fetch event results
-* Issue **SAS upload URL** for direct-to-Blob uploads
-* Enforce credits (free vs paid)
-
-**Storage**
-
-* **Azure Blob Storage**: event clips, thumbnails (optional later), derived JSON
-* **Azure Database for PostgreSQL**: users, devices, sessions, events, credits
-
-**Queue**
-
-* **Azure Service Bus** job: `clip_uploaded`
-
-**GPU worker**
-
-* Pull job → download clip → run VLM/multimodal inference:
-
-  * label(s) + confidence
-  * short natural-language summary
-  * structured tags (optional)
-* Write results to Postgres + derived artifacts to Blob
-* Mark event as `done`
-
-**Notifications**
-
-* Telegram bot (primary)
-* Second signed-in device: WebSocket subscription (near-real-time updates)
-
----
-
-## Credits + pricing model (keep simple)
-
-* Credits are measured in **seconds analyzed** (recommended).
-
-  * Example: 1 credit = 10 seconds of inference
-* Clip length determines credit burn.
-* Free tier: monthly allowance
-* Paid: higher allowance + longer retention + higher max clip length
-
----
-
-## MVP milestones (re-ordered to match “get it working first”)
-
-### MVP-1: PWA monitoring session + clip creation (local only)
-
-* Media capture, chunking
-* Ring buffer
-* Motion trigger (simple)
-* Optional audio energy spike trigger
-* Clip builder + local event list
-
-### MVP-2: Cloud upload + event timeline sync
-
-* FastAPI: auth + sessions + event records
-* SAS uploads to Azure Blob
-* Event list API in the frontend (“processing” state)
-
-### MVP-3: Cloud inference worker + results
-
-* Service Bus queue
-* GPU worker runs HF VLM
-* Store label/summary/confidence
-* Frontend updates event cards from “processing” → “classified”
-
-### MVP-4: Notifications + second device monitoring
-
-* Telegram bot on “classified” events
-* WebSocket fan-out for monitors watching the same session
-
-### MVP-5 (later): Optimize to reduce spam and cost (your requested shift)
-
-**This is where you add:**
-
-1. Motion “smarts” (ROI, better debounce/cooldown, background subtraction)
-2. Low-bandwidth preview-frame pipeline (send 1–3 frames first, cloud decides whether to request full clip)
-
----
-
-## What you *will* likely need even in MVP (minimal safeguards)
-
-Even without “optimization”, you should still include:
-
-* **Cooldown** after a trigger (e.g., 30s) so you don’t upload 20 clips in a minute
-* **Max uploads per hour** per plan (hard limit)
-* **Max clip length** per plan (e.g., 20–30s MVP)
-
-These aren’t “fancy optimizations”—they’re basic guardrails to prevent runaway costs.
-
----
-
-## Development phases (build order)
-
-### Phase 0: Project skeleton
-
-* PWA scaffold + minimal UI
-  * App shell with start/stop session control
-  * Basic event list placeholder
-* FastAPI skeleton + Postgres schema draft
-  * Users, devices, sessions, events tables (minimal fields)
-  * Auth stub (JWT or session token placeholder)
-* Cloud placeholders
-  * Azure Blob container(s) defined
-  * Service Bus queue name(s) reserved
-* Local dev scaffolding
-  * Env config files and secrets strategy
-  * Basic logging setup (frontend + backend)
-
-### Phase 1: Local capture + trigger
-
-* Media capture, chunking
-  * `getUserMedia` setup, constraints, and permission flow
-  * `MediaRecorder` chunking cadence (2–4s)
-* Ring buffer (30s in memory)
-  * Store last N chunks and a few decoded frames for motion checks
-* Motion trigger with debounce + cooldown
-  * Downscale frames + frame differencing
-  * Motion score threshold + consecutive-frame requirement
-  * Cooldown timer after a trigger
-  * Optional brightness gate and min changed-pixel percentage
-* Optional audio spike trigger
-  * Web Audio RMS energy window
-  * Threshold + debounce
-* Clip builder
-  * Assemble PRE + POST seconds into a clip
-  * Create local metadata (timestamp, trigger type, length)
-* Local event list + playback
-  * Save clips locally (temporary URL)
-  * Basic event cards with playback
-
-### Phase 2: Upload + event sync
-
-* Auth + device registration
-  * Device ID provisioning
-  * Session start/stop endpoint
-* SAS upload URLs
-  * Generate SAS for event upload
-  * Include container + path conventions
-* Upload retries + finalize call
-  * Idempotent event ID
-  * Retry with exponential backoff
-  * Finalize endpoint to mark uploaded
-* Event list API and “processing” state
-  * Create event record on upload start
-  * Frontend polling or lightweight refresh
-* Offline/online handling
-  * Queue pending uploads in IndexedDB
-  * Resume on reconnect
-
-### Phase 3: Inference pipeline
-
-* Service Bus queue `clip_uploaded`
-  * Enqueue on finalize
-* GPU worker inference + results
-  * Download clip
-  * Run VLM, produce labels + summary + confidence
-  * Persist results to Postgres
-* Update event state to `done`
-  * Store derived artifacts in Blob (optional thumbnails)
-  * Frontend shows classification results
-
-### Phase 4: Notifications + monitoring
-
-* Telegram bot alerts
-  * On `done`, send summary + link
-* Second-device WebSocket updates
-  * Subscribe to session events
-  * Live updates for new events and status changes
-
-### Phase 5: Refinement + cost control
-
-* Motion trigger tuning (ROI, better background model)
-  * ROI editor + saved masks
-  * Background model improvements
-* Preview-frame pipeline for selective full-clip upload
-  * Send 1–3 frames first
-  * Cloud decides to request full clip
-* Credit enforcement + tier limits
-  * Per-user/month caps
-  * Max clip length and max uploads/hour
+- Keep this file short and execution-focused.
+- If a section is not tied to an action, milestone, or exit criterion, remove it.
+- Update status with explicit dates (avoid vague “recently”).
+- Reflect shipped behavior only after tests pass in repo scripts:
+  - `./scripts/test-unit`
+  - `./scripts/test-integration`
+  - `./scripts/test-e2e`
