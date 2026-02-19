@@ -2,17 +2,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import {
   ApiError,
+  type AuthSession,
   type EventResponse,
   forceStopSession,
+  getAuthSession,
   getTelegramLinkStatus,
   getTelegramReadiness,
+  loginWithEmail,
   listEvents,
+  logout,
   startTelegramLink,
   startSession,
   stopSession,
   type TelegramReadinessResponse,
 } from './api'
 import {
+  deleteAllClips,
   deleteClipsBySession,
   getClip,
   listClips,
@@ -180,6 +185,10 @@ const isTerminalTelegramLinkStatus = (status: string) =>
   || status === 'not_configured'
 
 function App() {
+  const [authSession, setAuthSession] = useState<AuthSession>(() => getAuthSession())
+  const [accountEmail, setAccountEmail] = useState(() => getAuthSession().email ?? '')
+  const [isAuthenticating, setIsAuthenticating] = useState(false)
+
   // Session state
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('idle')
   const [sessionId, setSessionId] = useState<string | null>(null)
@@ -261,21 +270,33 @@ function App() {
     const failed = clips.filter((clip) => !clip.uploaded && clip.lastUploadError).length
     return { pending, failed }
   }, [clips])
+  const requiresAccountSignIn =
+    authSession.authRequired && !authSession.authenticated && !authSession.autoLogin
   const requiresTelegramOnboarding = checkingTelegramReadiness
+    || requiresAccountSignIn
     || (telegramReadiness?.enabled === true && telegramReadiness.ready === false)
 
-  const refreshClips = async () => {
+  const refreshClips = useCallback(async () => {
+    if (requiresAccountSignIn) {
+      setClips([])
+      return
+    }
     const nextClips = await listClips()
     nextClips.sort((a, b) => b.createdAt - a.createdAt)
     setClips(nextClips)
-  }
+  }, [requiresAccountSignIn])
 
   const ensureResolvedDeviceId = useCallback(async () => {
+    if (requiresAccountSignIn) {
+      throw new ApiError(401, 'Sign in required')
+    }
     if (deviceIdRef.current) return deviceIdRef.current
-    const resolved = await ensureDeviceId()
+    const resolved = await ensureDeviceId({
+      userScopeKey: authSession.userId,
+    })
     deviceIdRef.current = resolved
     return resolved
-  }, [])
+  }, [authSession.userId, requiresAccountSignIn])
 
   const clearTelegramLinkState = useCallback(() => {
     setIsWaitingForTelegramConnect(false)
@@ -521,7 +542,77 @@ function App() {
     setCaptureStatus('idle')
   }
 
+  const resetForAccountChange = useCallback(async () => {
+    stopCapture()
+    dropQueuedProcessingRef.current = true
+    clipQueueRef.current?.clear()
+    setSessionStatus('idle')
+    setSessionId(null)
+    sessionIdRef.current = null
+    deviceIdRef.current = null
+    endLogSession()
+    clearBenchmark()
+    setBenchmarkClipId(null)
+    setCurrentClipIndex(0)
+    setSessionCounts({ stored: 0, discarded: 0 })
+    setEvents([])
+    clearTelegramLinkState()
+    setTelegramReadiness(null)
+    await deleteAllClips()
+    setClips([])
+    if (clipUrlRef.current) {
+      URL.revokeObjectURL(clipUrlRef.current)
+      clipUrlRef.current = null
+    }
+    setSelectedClipId(null)
+    setSelectedClipUrl(null)
+    dropQueuedProcessingRef.current = false
+  }, [clearTelegramLinkState, motionDetection, audioDetection])
+
+  const handleAccountSignIn = useCallback(async () => {
+    const normalizedEmail = accountEmail.trim().toLowerCase()
+    if (!normalizedEmail) {
+      setError('Enter an account email before signing in.')
+      return
+    }
+
+    setIsAuthenticating(true)
+    setError(null)
+
+    try {
+      await resetForAccountChange()
+      const nextSession = await loginWithEmail(normalizedEmail)
+      setAuthSession(nextSession)
+      setAccountEmail(nextSession.email ?? normalizedEmail)
+    } catch (err) {
+      console.error(err)
+      setError('Unable to sign in with that account.')
+    } finally {
+      setIsAuthenticating(false)
+    }
+  }, [accountEmail, resetForAccountChange])
+
+  const handleAccountSignOut = useCallback(async () => {
+    setIsAuthenticating(true)
+    setError(null)
+
+    try {
+      await resetForAccountChange()
+      logout()
+      setAuthSession(getAuthSession())
+    } catch (err) {
+      console.error(err)
+      setError('Unable to sign out cleanly.')
+    } finally {
+      setIsAuthenticating(false)
+    }
+  }, [resetForAccountChange])
+
   const handleStart = async () => {
+    if (requiresAccountSignIn) {
+      setError('Sign in before starting monitoring.')
+      return
+    }
     setIsBusy(true)
     setError(null)
 
@@ -546,6 +637,11 @@ function App() {
       await refreshClips()
     } catch (err) {
       console.error(err)
+      if (err instanceof ApiError && err.status === 401) {
+        setAuthSession(getAuthSession())
+        setError('Sign in before starting monitoring.')
+        return
+      }
       setError('Unable to start session')
     } finally {
       setIsBusy(false)
@@ -553,6 +649,11 @@ function App() {
   }
 
   const refreshTelegramReadiness = useCallback(async () => {
+    if (requiresAccountSignIn) {
+      setCheckingTelegramReadiness(false)
+      setTelegramReadiness(null)
+      return
+    }
     setCheckingTelegramReadiness(true)
     try {
       const resolvedDeviceId = await ensureResolvedDeviceId()
@@ -573,6 +674,11 @@ function App() {
       }
     } catch (err) {
       console.error(err)
+      if (err instanceof ApiError && err.status === 401) {
+        setAuthSession(getAuthSession())
+        setTelegramReadiness(null)
+        return
+      }
       setTelegramReadiness({
         enabled: true,
         ready: false,
@@ -582,7 +688,11 @@ function App() {
     } finally {
       setCheckingTelegramReadiness(false)
     }
-  }, [clearTelegramLinkState, ensureResolvedDeviceId])
+  }, [
+    clearTelegramLinkState,
+    ensureResolvedDeviceId,
+    requiresAccountSignIn,
+  ])
 
   const handleConnectTelegram = async () => {
     setError(null)
@@ -799,6 +909,11 @@ function App() {
       setEvents(await listEvents(sessionId))
     } catch (err) {
       console.error(err)
+      if (err instanceof ApiError && err.status === 401) {
+        setAuthSession(getAuthSession())
+        setError('Sign in before uploading clips.')
+        return
+      }
       setError('Unable to upload clips')
     } finally {
       setIsBusy(false)
@@ -886,13 +1001,18 @@ function App() {
     return () => window.clearTimeout(timeout)
   }, [copiedEventId])
 
+  useEffect(() => {
+    if (!authSession.email) return
+    setAccountEmail(authSession.email)
+  }, [authSession.email])
+
   // Initial clip load and cleanup
   useEffect(() => {
     void refreshTelegramReadiness()
   }, [refreshTelegramReadiness])
 
   useEffect(() => {
-    if (!isWaitingForTelegramConnect) return
+    if (requiresAccountSignIn || !isWaitingForTelegramConnect) return
 
     let cancelled = false
     const poll = async () => {
@@ -952,6 +1072,7 @@ function App() {
     clearTelegramLinkState,
     ensureResolvedDeviceId,
     isWaitingForTelegramConnect,
+    requiresAccountSignIn,
     refreshTelegramReadiness,
     telegramLinkAttemptId,
   ])
@@ -961,7 +1082,7 @@ function App() {
     return () => {
       if (clipUrlRef.current) URL.revokeObjectURL(clipUrlRef.current)
     }
-  }, [])
+  }, [refreshClips])
 
   // Update recorder when settings change
   useEffect(() => {
@@ -988,6 +1109,50 @@ function App() {
       </header>
 
       <main className="app-main">
+        {authSession.authRequired && (
+          <section className="account-card" aria-label="Account access">
+            <div className="account-header">
+              <h2>Account</h2>
+              <p>
+                {authSession.authenticated
+                  ? `Signed in as ${authSession.email ?? authSession.userId ?? 'current user'}`
+                  : 'Sign in to load your devices and events.'}
+              </p>
+            </div>
+            <div className="account-controls">
+              <label className="account-field">
+                <span>Account email</span>
+                <input
+                  type="email"
+                  value={accountEmail}
+                  onChange={(event) => setAccountEmail(event.target.value)}
+                  placeholder="owner@example.com"
+                  aria-label="Account email"
+                  disabled={isAuthenticating}
+                />
+              </label>
+              <button
+                type="button"
+                className="primary"
+                onClick={handleAccountSignIn}
+                disabled={isAuthenticating}
+              >
+                {authSession.authenticated ? 'Switch account' : 'Sign in'}
+              </button>
+              {authSession.authenticated && (
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={handleAccountSignOut}
+                  disabled={isAuthenticating}
+                >
+                  Sign out
+                </button>
+              )}
+            </div>
+          </section>
+        )}
+
         <section className="status-card" aria-label="Session status">
           <div className="status-row">
             <span className="status-label">Session</span>
@@ -1106,7 +1271,12 @@ function App() {
             className="primary"
             type="button"
             onClick={handleStart}
-            disabled={sessionStatus === 'active' || isBusy || requiresTelegramOnboarding}
+            disabled={
+              sessionStatus === 'active'
+              || isBusy
+              || isAuthenticating
+              || requiresTelegramOnboarding
+            }
           >
             Start monitoring
           </button>
@@ -1114,7 +1284,7 @@ function App() {
             className="secondary"
             type="button"
             onClick={handleStop}
-            disabled={sessionStatus !== 'active' || isBusy}
+            disabled={sessionStatus !== 'active' || isBusy || isAuthenticating}
           >
             Stop
           </button>
@@ -1122,7 +1292,7 @@ function App() {
             className="secondary"
             type="button"
             onClick={handleUploadClips}
-            disabled={!sessionId || isBusy}
+            disabled={!sessionId || isBusy || isAuthenticating}
           >
             Upload stored clips
           </button>

@@ -26,6 +26,8 @@ export default defineConfig({
         VITE_API_URL: backendUrl,
         VITE_POLL_INTERVAL_MS: '1000',
         VITE_DISABLE_MEDIA: 'true',
+        VITE_AUTH_REQUIRED: 'true',
+        VITE_AUTH_AUTO_LOGIN: 'false',
       },
     },
     {
@@ -41,6 +43,8 @@ export default defineConfig({
         AZURITE_ACCOUNT_NAME: '',
         AZURITE_ACCOUNT_KEY: '',
         AZURITE_AUTO_CREATE_CONTAINER: 'false',
+        AUTH_REQUIRED: 'true',
+        AUTH_DEV_LOGIN_ENABLED: 'true',
       },
     },
   ],

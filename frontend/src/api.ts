@@ -14,8 +14,10 @@ const API_BASE_URL = normalizeApiBaseUrl(
 const AUTH_TOKEN_KEY = 'ping-watch:auth-token'
 const AUTH_USER_ID_KEY = 'ping-watch:auth-user-id'
 const AUTH_EXPIRES_AT_KEY = 'ping-watch:auth-expires-at'
+const AUTH_EMAIL_KEY = 'ping-watch:auth-email'
 const AUTH_LOCAL_USER_ID_KEY = 'ping-watch:auth-local-user-id'
 const AUTH_REQUIRED_OVERRIDE_KEY = '__PING_WATCH_AUTH_REQUIRED__'
+const AUTH_AUTO_LOGIN_OVERRIDE_KEY = '__PING_WATCH_AUTH_AUTO_LOGIN__'
 
 let authLoginPromise: Promise<string> | null = null
 
@@ -28,6 +30,14 @@ const isAuthRequired = (): boolean => {
     return override
   }
   return parseBoolean(import.meta.env.VITE_AUTH_REQUIRED)
+}
+
+const isAuthAutoLoginEnabled = (): boolean => {
+  const override = (globalThis as Record<string, unknown>)[AUTH_AUTO_LOGIN_OVERRIDE_KEY]
+  if (typeof override === 'boolean') {
+    return override
+  }
+  return parseBoolean(import.meta.env.VITE_AUTH_AUTO_LOGIN)
 }
 
 const getStorageValue = (key: string): string | null => {
@@ -80,16 +90,21 @@ const setStoredAuthSession = (payload: {
   token: string
   userId: string | null
   expiresAt: string | null
+  email?: string | null
 }) => {
   setStorageValue(AUTH_TOKEN_KEY, payload.token)
   setStorageValue(AUTH_USER_ID_KEY, payload.userId)
   setStorageValue(AUTH_EXPIRES_AT_KEY, payload.expiresAt)
+  if (payload.email !== undefined) {
+    setStorageValue(AUTH_EMAIL_KEY, payload.email)
+  }
 }
 
 const clearStoredAuthSession = () => {
   setStorageValue(AUTH_TOKEN_KEY, null)
   setStorageValue(AUTH_USER_ID_KEY, null)
   setStorageValue(AUTH_EXPIRES_AT_KEY, null)
+  setStorageValue(AUTH_EMAIL_KEY, null)
 }
 
 type DevLoginResponse = {
@@ -99,35 +114,46 @@ type DevLoginResponse = {
   expires_at?: string | null
 }
 
+const runDevLogin = async (payload: {
+  userId?: string
+  email?: string | null
+}): Promise<string> => {
+  const response = await fetch(`${API_BASE_URL}/auth/dev/login`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      user_id: payload.userId,
+      email: payload.email,
+    }),
+  })
+
+  if (!response.ok) {
+    throw new ApiError(response.status)
+  }
+
+  const data = (await response.json()) as DevLoginResponse
+  const token = (data.access_token ?? '').trim()
+  if (!token) {
+    throw new ApiError(500, 'missing access token from auth response')
+  }
+
+  setStoredAuthSession({
+    token,
+    userId: data.user_id ?? null,
+    expiresAt: data.expires_at ?? null,
+    email: payload.email ?? null,
+  })
+  return token
+}
+
 const loginForToken = async (): Promise<string> => {
   if (authLoginPromise) return authLoginPromise
 
   authLoginPromise = (async () => {
     const localUserId = getOrCreateLocalUserId()
-    const response = await fetch(`${API_BASE_URL}/auth/dev/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ user_id: localUserId }),
-    })
-
-    if (!response.ok) {
-      throw new ApiError(response.status)
-    }
-
-    const payload = (await response.json()) as DevLoginResponse
-    const token = (payload.access_token ?? '').trim()
-    if (!token) {
-      throw new ApiError(500, 'missing access token from auth response')
-    }
-
-    setStoredAuthSession({
-      token,
-      userId: payload.user_id ?? null,
-      expiresAt: payload.expires_at ?? null,
-    })
-    return token
+    return runDevLogin({ userId: localUserId })
   })()
 
   try {
@@ -146,7 +172,47 @@ const resolveAuthToken = async (forceRefresh: boolean): Promise<string | null> =
       return token
     }
   }
+  if (!isAuthAutoLoginEnabled()) {
+    return null
+  }
   return loginForToken()
+}
+
+export type AuthSession = {
+  authRequired: boolean
+  autoLogin: boolean
+  authenticated: boolean
+  userId: string | null
+  email: string | null
+  expiresAt: string | null
+}
+
+export const getAuthSession = (): AuthSession => {
+  const token = getStoredToken()
+  const expiresAt = getStorageValue(AUTH_EXPIRES_AT_KEY)
+  const expired = tokenExpired(expiresAt)
+  const authenticated = Boolean(token) && !expired
+  return {
+    authRequired: isAuthRequired(),
+    autoLogin: isAuthAutoLoginEnabled(),
+    authenticated,
+    userId: authenticated ? getStorageValue(AUTH_USER_ID_KEY) : null,
+    email: authenticated ? getStorageValue(AUTH_EMAIL_KEY) : null,
+    expiresAt: authenticated ? expiresAt : null,
+  }
+}
+
+export const loginWithEmail = async (email: string): Promise<AuthSession> => {
+  const normalizedEmail = email.trim().toLowerCase()
+  if (!normalizedEmail) {
+    throw new ApiError(400, 'email is required')
+  }
+  await runDevLogin({ email: normalizedEmail })
+  return getAuthSession()
+}
+
+export const logout = () => {
+  clearStoredAuthSession()
 }
 
 export class ApiError extends Error {
@@ -186,7 +252,9 @@ const request = async <T>(path: string, options: RequestOptions = {}) => {
   let response = await execute(false)
   if (response.status === 401 && isAuthRequired()) {
     clearStoredAuthSession()
-    response = await execute(true)
+    if (isAuthAutoLoginEnabled()) {
+      response = await execute(true)
+    }
   }
 
   if (!response.ok) {

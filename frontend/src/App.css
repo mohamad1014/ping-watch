@@ -31,6 +31,47 @@
   gap: 2rem;
 }
 
+.account-card {
+  padding: 1.25rem;
+  border-radius: 18px;
+  background: #eef6ff;
+  border: 1px solid #cfe3f8;
+  display: grid;
+  gap: 0.9rem;
+}
+
+.account-header h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.account-header p {
+  margin: 0.35rem 0 0;
+  color: #24415f;
+  font-size: 0.9rem;
+}
+
+.account-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.75rem;
+}
+
+.account-field {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+}
+
+.account-field input {
+  width: min(360px, 78vw);
+  border: 1px solid #bfd5ec;
+  border-radius: 10px;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.9rem;
+}
+
 .status-card {
   display: grid;
   gap: 0.75rem;
@@ -489,6 +530,14 @@ button:not(:disabled):hover {
 }
 
 @media (max-width: 640px) {
+  .account-controls {
+    align-items: stretch;
+  }
+
+  .account-field input {
+    width: 100%;
+  }
+
   .status-row {
     flex-direction: column;
     align-items: flex-start;

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  deleteAllClips,
   deleteClip,
   getClip,
   listClips,
@@ -123,5 +124,14 @@ describe('clipStore', () => {
     expect(readyLater.map((clip) => clip.id).sort()).toEqual(
       [clipA.id, clipB.id].sort()
     )
+  })
+
+  it('deletes all clips in a single operation', async () => {
+    await saveClip(makeClip('a'))
+    await saveClip(makeClip('b'))
+
+    await deleteAllClips()
+
+    expect(await listClips()).toEqual([])
   })
 })

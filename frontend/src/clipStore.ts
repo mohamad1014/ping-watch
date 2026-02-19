@@ -199,6 +199,13 @@ export const deleteClipsBySession = async (sessionId: string) => {
   await waitForTransaction(tx)
 }
 
+export const deleteAllClips = async () => {
+  const db = await openDb()
+  const tx = db.transaction(STORE_NAME, 'readwrite')
+  tx.objectStore(STORE_NAME).clear()
+  await waitForTransaction(tx)
+}
+
 export const markClipUploaded = async (id: string) => {
   const db = await openDb()
   const tx = db.transaction(STORE_NAME, 'readwrite')

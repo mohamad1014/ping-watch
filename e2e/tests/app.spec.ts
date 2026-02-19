@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { processUploadedEventWithWorker } from './helpers/worker'
 
-const backendBaseUrl = process.env.PING_WATCH_E2E_BACKEND_URL ?? 'http://localhost:8000'
+const backendBaseUrl = process.env.PING_WATCH_E2E_BACKEND_URL ?? 'http://127.0.0.1:8002'
 
 type SessionResponse = {
   session_id: string
@@ -21,6 +21,11 @@ type EventResponse = {
   label: string | null
 }
 
+type AuthResponse = {
+  access_token: string
+  user_id: string
+}
+
 const pollFor = async <T>(
   fn: () => Promise<T | undefined>,
   timeoutMs = 5000
@@ -34,6 +39,58 @@ const pollFor = async <T>(
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
   throw new Error('Timed out waiting for value')
+}
+
+const signInWithEmail = async (page, email: string) => {
+  await page.getByLabel('Account email').fill(email)
+  await page.getByRole('button', { name: /sign in/i }).click()
+  await expect(page.getByText(new RegExp(`Signed in as ${email}`, 'i'))).toBeVisible()
+}
+
+const loginViaApi = async (request, email: string): Promise<AuthResponse> => {
+  const response = await request.post(`${backendBaseUrl}/auth/dev/login`, {
+    data: { email },
+  })
+  expect(response.ok()).toBeTruthy()
+  return response.json() as Promise<AuthResponse>
+}
+
+const getLatestActiveSession = async (
+  request,
+  token: string
+): Promise<SessionResponse | undefined> => {
+  const response = await request.get(`${backendBaseUrl}/sessions`, {
+    headers: {
+      authorization: `Bearer ${token}`,
+    },
+  })
+  expect(response.ok()).toBeTruthy()
+  const sessions = (await response.json()) as SessionResponse[]
+  return sessions.find((session) => session.status === 'active')
+}
+
+const createEventForSession = async (
+  request,
+  token: string,
+  payload: { sessionId: string; deviceId: string }
+): Promise<string> => {
+  const response = await request.post(`${backendBaseUrl}/events`, {
+    headers: {
+      authorization: `Bearer ${token}`,
+    },
+    data: {
+      session_id: payload.sessionId,
+      device_id: payload.deviceId,
+      trigger_type: 'motion',
+      duration_seconds: 3,
+      clip_uri: 'https://example.test/clip.webm',
+      clip_mime: 'video/webm',
+      clip_size_bytes: 512,
+    },
+  })
+  expect(response.ok()).toBeTruthy()
+  const created = await response.json() as EventResponse
+  return created.event_id
 }
 
 test('shows the app shell and backend health', async ({ page, request }) => {
@@ -123,15 +180,15 @@ test('critical flow: start session, upload clip, worker summary, event done', as
   })
 
   await page.goto('/')
+  await signInWithEmail(page, 'owner@example.com')
 
   await page.getByRole('button', { name: 'Start monitoring' }).click()
   await expect(page.getByText('Active')).toBeVisible()
   await expect(page.getByText('Capture disabled')).toBeVisible()
 
+  const auth = await loginViaApi(request, 'owner@example.com')
   const session = await pollFor(async () => {
-    const response = await request.get(`${backendBaseUrl}/sessions`)
-    const sessions = await response.json() as SessionResponse[]
-    const latest = sessions.at(-1)
+    const latest = await getLatestActiveSession(request, auth.access_token)
     if (!latest || latest.status !== 'active') return undefined
     return latest
   })
@@ -144,7 +201,12 @@ test('critical flow: start session, upload clip, worker summary, event done', as
 
   const uploadedEvent = await pollFor(async () => {
     const response = await request.get(
-      `${backendBaseUrl}/events?session_id=${session.session_id}`
+      `${backendBaseUrl}/events?session_id=${session.session_id}`,
+      {
+        headers: {
+          authorization: `Bearer ${auth.access_token}`,
+        },
+      }
     )
     const events = await response.json() as EventResponse[]
     return events.find(
@@ -159,11 +221,18 @@ test('critical flow: start session, upload clip, worker summary, event done', as
     session_id: uploadedEvent.session_id,
     clip_container: uploadedEvent.clip_container ?? '',
     clip_blob_name: uploadedEvent.clip_blob_name ?? '',
+  }, {
+    apiToken: auth.access_token,
   })
 
   const completedEvent = await pollFor(async () => {
     const response = await request.get(
-      `${backendBaseUrl}/events?session_id=${session.session_id}`
+      `${backendBaseUrl}/events?session_id=${session.session_id}`,
+      {
+        headers: {
+          authorization: `Bearer ${auth.access_token}`,
+        },
+      }
     )
     const events = await response.json() as EventResponse[]
     const event = events.find((entry) => entry.event_id === clipId)
@@ -174,4 +243,57 @@ test('critical flow: start session, upload clip, worker summary, event done', as
   expect(completedEvent.label).toBe('test')
   await expect(page.locator('.event-status.status-done').first()).toBeVisible()
   await expect(page.locator('.event-summary').filter({ hasText: /Critical flow test summary/ }).first()).toBeVisible()
+})
+
+test('account switching keeps event fetching scoped to the signed-in owner', async ({
+  page,
+  request,
+}) => {
+  await page.addInitScript(() => {
+    ;(globalThis as { __PING_WATCH_DISABLE_MEDIA__?: boolean })
+      .__PING_WATCH_DISABLE_MEDIA__ = true
+  })
+
+  await page.goto('/')
+
+  await signInWithEmail(page, 'owner-a@example.com')
+  await page.getByRole('button', { name: 'Start monitoring' }).click()
+  await expect(page.getByText('Active')).toBeVisible()
+
+  const userA = await loginViaApi(request, 'owner-a@example.com')
+  const sessionA = await pollFor(async () => {
+    const latest = await getLatestActiveSession(request, userA.access_token)
+    if (!latest) return undefined
+    return latest
+  })
+
+  const eventA = await createEventForSession(request, userA.access_token, {
+    sessionId: sessionA.session_id,
+    deviceId: sessionA.device_id,
+  })
+
+  await expect.poll(async () => await page.getByText(eventA).count()).toBeGreaterThan(0)
+
+  await page.getByRole('button', { name: /sign out/i }).click()
+  await signInWithEmail(page, 'owner-b@example.com')
+
+  await expect(page.getByText(eventA)).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Start monitoring' }).click()
+  await expect(page.getByText('Active')).toBeVisible()
+
+  const userB = await loginViaApi(request, 'owner-b@example.com')
+  const sessionB = await pollFor(async () => {
+    const latest = await getLatestActiveSession(request, userB.access_token)
+    if (!latest) return undefined
+    return latest
+  })
+
+  const eventB = await createEventForSession(request, userB.access_token, {
+    sessionId: sessionB.session_id,
+    deviceId: sessionB.device_id,
+  })
+
+  await expect.poll(async () => await page.getByText(eventB).count()).toBeGreaterThan(0)
+  await expect(page.getByText(eventA)).toHaveCount(0)
 })

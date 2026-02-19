@@ -20,7 +20,8 @@ type WorkerPayload = {
 
 export const processUploadedEventWithWorker = async (
   backendUrl: string,
-  payload: WorkerPayload
+  payload: WorkerPayload,
+  options: { apiToken?: string } = {}
 ) => {
   const workerDir = resolveWorkerDir()
   const pythonPath = path.join(workerDir, '.venv', 'bin', 'python')
@@ -45,6 +46,7 @@ export const processUploadedEventWithWorker = async (
         API_BASE_URL: backendUrl,
         PING_WATCH_TEST_MODE: 'true',
         PING_WATCH_WORKER_PAYLOAD: payloadJson,
+        WORKER_API_TOKEN: options.apiToken ?? process.env.WORKER_API_TOKEN,
       },
     }
   )
