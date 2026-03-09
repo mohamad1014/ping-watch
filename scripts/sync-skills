@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$scripts_dir/.." && pwd)
+
+source_dir="$repo_root/.codex/skills/"
+target_dir="$repo_root/.claude/skills/"
+
+if [[ ! -d "$source_dir" ]]; then
+  echo "missing source skills directory: .codex/skills"
+  exit 1
+fi
+
+mkdir -p "$target_dir"
+rsync -a --delete "$source_dir" "$target_dir"
+
+echo "synced skills from .codex/skills to .claude/skills"

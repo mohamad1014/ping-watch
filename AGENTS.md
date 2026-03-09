@@ -18,15 +18,19 @@ Primary scripts:
 
 - `./scripts/dev-up` — start all local dependencies (db, blob emulator, queue).
 - `./scripts/dev` — run frontend + backend + worker concurrently.
-- `./scripts/test-unit` — run unit tests for frontend + backend.
+- `./scripts/test-unit` — run unit tests for frontend + backend + worker.
 - `./scripts/test-integration` — run API + DB integration tests.
 - `./scripts/test-e2e` — run full-stack E2E tests (Playwright).
 - `./scripts/test-all` — one command to run everything locally.
+- `./scripts/check-docs-consistency` — verify docs/script consistency for key commands.
+- `./scripts/clean-local` — remove local-only test/runtime artifacts.
+- `./scripts/sync-skills` — mirror `.codex/skills` to `.claude/skills`.
 - `./scripts/logs` — tail structured backend logs with timestamps.
 
 ## Coding Style & Naming Conventions
 
-No formatter or linter is configured yet. If you introduce one, document it and standardize:
+Frontend ESLint is configured (`frontend/eslint.config.js` and `npm run lint`).
+No shared formatter is enforced across the full monorepo yet. If you introduce one, document it and standardize:
 
 - Indentation: 2 spaces for frontend, 4 for Python (if applicable).
 - Filenames: `kebab-case` for directories, `snake_case.py` for Python modules.
@@ -53,7 +57,7 @@ No formatter or linter is configured yet. If you introduce one, document it and 
 
 ## Commit & Pull Request Guidelines
 
-- Git history contains only the initial commit; there is no established commit convention yet.
+- No strict commit convention is enforced yet.
 - Use concise, imperative commit messages (e.g., “Add motion trigger prototype”).
 - Pull requests should include: a short summary, links to relevant issues, and screenshots or short clips for UI changes.
 
