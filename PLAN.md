@@ -1,6 +1,6 @@
 # Ping Watch Plan
 
-Updated: **2026-02-16 (feature-005/telegram-recipient-subscriptions)**
+Updated: **2026-03-10 (concrete implementation backlog)**
 
 ## 1) Goal
 
@@ -122,7 +122,50 @@ Out of scope for now:
 1. Draft rollback + incident runbook skeletons.
 2. Automate CI deploy/migrate/rollback validation in staging.
 
-## 7) Definition of Done for Private Beta
+## 7) Concrete Implementation Backlog
+
+### P0: Notification sharing
+
+- `PW-01` Device recipient subscription schema:
+  replace single-recipient device mapping with a join model that supports many recipients per device. Files: `backend/app/models.py`, `backend/app/store.py`, new Alembic migration in `backend/alembic/versions/`. Tests: add `backend/tests/test_notification_subscriptions.py`.
+- `PW-02` Recipient-management API:
+  owner can list recipients for a device, add an already-linked endpoint, remove one, and inspect subscription state. Files: `backend/app/routes/notifications.py`, `backend/app/store.py`, `backend/app/auth.py`. Tests: extend `backend/tests/test_notification_readiness.py`, add `backend/tests/test_notification_recipients_api.py`.
+- `PW-03` Worker recipient fanout:
+  one alert fans out to all subscribed Telegram recipients for a device. Files: `worker/app/notifications.py`, `worker/app/tasks.py`, `backend/app/routes/notifications.py`. Tests: extend `worker/tests/test_notifications.py` and `worker/tests/test_tasks.py`.
+- `PW-04` Frontend recipient controls:
+  device owner can view linked recipients, add/remove recipients, and rerun Telegram onboarding from the UI. Files: `frontend/src/App.tsx`, `frontend/src/api.ts`, `frontend/src/App.css`. Tests: extend `frontend/src/App.test.tsx`.
+- `PW-05` Invite/share flow:
+  owner can generate an invite, recipient can accept it via Telegram linking, and owner can revoke access. Files: `backend/app/routes/notifications.py`, `backend/app/models.py`, `backend/app/store.py`, `frontend/src/App.tsx`. Tests: add `backend/tests/test_notification_invites.py`, extend `frontend/src/App.test.tsx`.
+
+### P1: Reliability
+
+- `PW-06` Event lifecycle expansion:
+  event states become `queued`, `processing`, `done`, `failed`, `canceled`. Files: `backend/app/models.py`, `backend/app/store.py`, `backend/app/routes/events.py`, `backend/app/routes/sessions.py`. Tests: extend `backend/tests/test_clip_upload.py` and `backend/tests/test_sessions.py`.
+- `PW-07` Queue idempotency and persisted job metadata:
+  repeated finalize/enqueue does not create duplicate processing; backend stores queue job id, enqueue timestamp, and attempt count. Files: `backend/app/queue.py`, `backend/app/routes/events.py`, `backend/app/store.py`. Tests: add `backend/tests/test_queue_idempotency.py`.
+- `PW-08` Worker failure-state visibility:
+  worker failures persist a terminal state and error metadata instead of relying on logs or fallback summaries only. Files: `worker/app/tasks.py`, `backend/app/routes/events.py`, `backend/app/store.py`. Tests: extend `worker/tests/test_tasks.py`, add `backend/tests/test_event_failure_states.py`.
+- `PW-09` Notification attempt tracking and retries:
+  every Telegram/webhook send attempt is queryable with provider, recipient, status, failure reason, retryable flag, and timestamps. Files: `worker/app/notifications.py`, `worker/app/tasks.py`, `backend/app/models.py`, `backend/app/store.py`. Tests: add `worker/tests/test_notification_attempts.py`, extend `worker/tests/test_notifications.py`.
+
+### P2: Observability and release readiness
+
+- `PW-10` Worker structured logs and queue visibility:
+  worker logs match backend structure and expose queue/job/event identifiers consistently. Files: `worker/app/logging.py`, `worker/app/worker.py`, `scripts/logs`. Tests: extend `worker/tests/test_logging.py`.
+- `PW-11` Runbooks and dashboard baseline:
+  document queue stall, notification failure, and backlog-response procedures; define first dashboard panels. Files: `docs/worker-notification-logging.md`, new runbooks in `docs/`, `README.md`. Verification: `./scripts/check-docs-consistency`.
+- `PW-12` CI/CD and rollback automation:
+  CI runs unit/integration/E2E plus migration checks; staging deploy supports rollback drills. Files: `scripts/`, `infra/`, `README.md`. Verification: wire `./scripts/test-unit`, `./scripts/test-integration`, `./scripts/test-e2e`, or `./scripts/test-all`.
+- `PW-13` Security baseline:
+  add API rate limiting, secret rotation guidance, and CI security checks. Files: `backend/app/main.py`, `backend/app/routes/auth.py`, `.env.example`, `README.md`. Tests: add backend coverage for rate-limited routes.
+
+### Recommended delivery slices
+
+1. Milestone A: `PW-01` through `PW-04`.
+2. Milestone B: `PW-05` plus `PW-06` through `PW-09`.
+3. Milestone C: `PW-10` through `PW-13`.
+
+## 8) Definition of Done for Private Beta
 
 Private beta is considered ready when all are true:
 
@@ -132,7 +175,7 @@ Private beta is considered ready when all are true:
 4. CI validates unit/integration/E2E and migration checks on every merge.
 5. On-call runbooks exist for top failure modes (upload, queue stall, notification failure).
 
-## 8) Verification Snapshot
+## 9) Verification Snapshot
 
 Verified on **2026-02-16** in this branch:
 
@@ -141,7 +184,7 @@ Verified on **2026-02-16** in this branch:
 3. `cd worker && PYTHONPATH=. .venv/bin/pytest -q` passed (`61 passed`).
 4. `./scripts/test-all` passed (frontend unit, backend tests, integration, and Playwright E2E).
 
-## 9) Operating Rules for This Plan
+## 10) Operating Rules for This Plan
 
 - Keep this file short and execution-focused.
 - If a section is not tied to an action, milestone, or exit criterion, remove it.
