@@ -93,7 +93,7 @@ const shouldUseApiUploadFallback = (uploadUrl: string): boolean =>
   isLocalAzuriteUploadUrl(uploadUrl) || isLocalApiUploadUrl(uploadUrl)
 
 export const uploadPendingClips = async ({
-  sessionId: _sessionId,
+  sessionId,
   deps,
 }: UploadOptions): Promise<number> => {
   const {
@@ -125,12 +125,17 @@ export const uploadPendingClips = async ({
     readyToUpload: true,
     now: getNow(),
   })
-  if (pending.length === 0) {
+  const scopedPending =
+    sessionId != null
+      ? pending.filter((clip) => !clip.sessionId || clip.sessionId === sessionId)
+      : pending
+
+  if (scopedPending.length === 0) {
     return 0
   }
 
   let uploadedCount = 0
-  for (const clip of pending) {
+  for (const clip of scopedPending) {
     const uploaded = await uploadClip(clip, {
       initiateUpload: initiateUploadFn,
       finalizeUpload: finalizeUploadFn,

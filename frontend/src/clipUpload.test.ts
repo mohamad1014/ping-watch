@@ -268,7 +268,7 @@ describe('uploadPendingClips', () => {
     expect(scheduleClipRetry).not.toHaveBeenCalled()
   })
 
-  it('uploads pending clips across sessions when a sessionId is provided', async () => {
+  it('uploads only pending clips for the provided sessionId', async () => {
     const initiateUpload = vi.fn().mockResolvedValue({
       event: { event_id: 'clip-1', status: 'processing', trigger_type: 'motion' },
       uploadUrl: 'http://upload',
@@ -323,8 +323,14 @@ describe('uploadPendingClips', () => {
       },
     })
 
-    expect(uploaded).toBe(2)
-    expect(initiateUpload).toHaveBeenCalledTimes(2)
+    expect(uploaded).toBe(1)
+    expect(initiateUpload).toHaveBeenCalledTimes(1)
+    expect(initiateUpload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventId: 'clip-1',
+        sessionId: 'sess-1',
+      })
+    )
   })
 
   it('schedules retry when clip metadata is missing', async () => {
