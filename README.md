@@ -94,14 +94,20 @@ Production planning is tracked in `PLAN.md` under:
 - `./scripts/test-integration` — API + DB integration tests.
 - `./scripts/test-e2e` — Playwright E2E suite.
 - `./scripts/test-all` — run all tests.
+- `./scripts/check-migrations` — verify Alembic can upgrade an isolated database to the current head revision.
+- `./scripts/staging-rollback-drill` — validate upgrade, rollback, and re-apply against an isolated database or a provided `DATABASE_URL`.
 - `./scripts/check-docs-consistency` — verify docs/script consistency for key commands.
 - `./scripts/clean-local` — remove local-only test/runtime artifacts.
 - `./scripts/create-wave1-worktrees` — create Wave 1 Git worktrees for parallel Codex execution.
+- `./scripts/run-wave1-codex` — launch one Codex terminal per Wave 1 worktree with task prompts.
 - `./scripts/sync-skills` — mirror `.codex/skills` to `.claude/skills`.
 - `./scripts/test-clip-flow` — rerun clip flow verification (worker decode fallback + critical E2E flow).
 - `./scripts/logs` — tail backend logs.
 - `docs/codex-parallel-workflow.md` — branch/worktree workflow for parallel Codex implementation.
 - `docs/worker-notification-logging.md` — notification/worker logging troubleshooting checklist.
+- `docs/queue-stall-runbook.md` — queue backlog, stalled worker, and backlog response runbook.
+- `docs/notification-failure-runbook.md` — Telegram/webhook notification failure triage.
+- `docs/observability-dashboard-baseline.md` — first dashboard panels for queue stalls and notification failures.
 
 ## Getting Started (local)
 
@@ -123,12 +129,20 @@ Run:
 - `./scripts/dev`
 
 Test:
+- `./scripts/check-migrations`
+- `./scripts/staging-rollback-drill`
 - `./scripts/test-unit`
 - `./scripts/test-e2e` (requires Playwright system deps; see output of `npx playwright install` if missing)
 - `./scripts/test-integration` (runs backend live-server test + Playwright integration test)
 
 Note: backend tests default to Postgres. Run `./scripts/dev-up` first, or set `DATABASE_URL=sqlite:///./test.db` to use SQLite locally.
 Note: E2E/Playwright runs use a temp SQLite database for the backend; if you override `DATABASE_URL`, ensure it points to a writable, disposable path.
+
+## CI And Rollback Validation
+
+- CI runs `./scripts/check-docs-consistency`, `./scripts/check-migrations`, `./scripts/staging-rollback-drill`, `./scripts/test-unit`, `./scripts/test-integration`, and `./scripts/test-e2e`.
+- `./scripts/check-migrations` defaults to a temporary SQLite database, but you can point it at another target with `DATABASE_URL=<db-url> ./scripts/check-migrations`.
+- `./scripts/staging-rollback-drill` performs `alembic upgrade head`, `alembic downgrade -1`, and `alembic upgrade head` again. Use `DATABASE_URL=<staging-db-url> ./scripts/staging-rollback-drill` for a staging rollback drill.
 
 ## Environment
 
@@ -141,8 +155,10 @@ Note: E2E/Playwright runs use a temp SQLite database for the backend; if you ove
 - `VITE_DISABLE_MEDIA` — set to `true` to skip `getUserMedia`/`MediaRecorder` capture (useful for tests/E2E).
 - `DATABASE_URL` — backend DB URL (default Postgres in local dev).
 - `AUTH_REQUIRED` — when `true`, backend write endpoints (`POST`/`PUT`/`PATCH`/`DELETE`) require a bearer token.
-- `AUTH_DEV_LOGIN_ENABLED` — when `true` (default), enables `POST /auth/dev/login` to mint development bearer tokens.
+- `AUTH_DEV_LOGIN_ENABLED` — when `true` (default), enables `POST /auth/dev/login` to mint development bearer tokens. Keep this `false` outside local/dev unless you explicitly need the bootstrap route.
 - `AUTH_TOKEN_TTL_SECONDS` — bearer token TTL for `POST /auth/dev/login` (default `86400`, clamped to 300..2592000).
+- `AUTH_DEV_LOGIN_RATE_LIMIT_MAX_REQUESTS` — max `POST /auth/dev/login` requests allowed per client IP within the active window (default `10`).
+- `AUTH_DEV_LOGIN_RATE_LIMIT_WINDOW_SECONDS` — sliding window for the dev-login rate limit (default `60`, clamped to 1..3600).
 - `AZURITE_BLOB_ENDPOINT` / `AZURITE_ACCOUNT_NAME` / `AZURITE_ACCOUNT_KEY` — Azurite config for issuing SAS upload URLs.
 - `AZURITE_CLIPS_CONTAINER` — container name for clips (default `clips`).
 - `AZURITE_AUTO_CREATE_CONTAINER` — auto-create the clips container on first upload (recommended in local dev).
@@ -162,6 +178,14 @@ Note: E2E/Playwright runs use a temp SQLite database for the backend; if you ove
 - `WORKER_API_TOKEN` — optional bearer token used by worker callbacks (for example `POST /events/{event_id}/summary`) when `AUTH_REQUIRED=true`.
 
 Frontend tests can also override poll/upload intervals via runtime globals; see `frontend/README.md`.
+
+## Security Baseline
+
+- `POST /auth/dev/login` now has a per-client sliding-window rate limit. This is a baseline protection for exposed dev/staging environments, not a substitute for disabling dev login where it is not needed.
+- Keep `TELEGRAM_WEBHOOK_SECRET`, `NOTIFY_WEBHOOK_SECRET`, and `WORKER_API_TOKEN` out of Git. Store them in an untracked `.env` for local work and in your deployment secret manager elsewhere.
+- Generate secrets with `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+- Rotate secrets by updating the stored value, restarting the affected service, and validating the dependent integration immediately after the rollout. `TELEGRAM_WEBHOOK_SECRET` also requires updating the Telegram webhook configuration to match the new token.
+- This repo's CI baseline now includes secret scanning and pull-request dependency review in addition to the existing docs and test gates.
 
 ## API quick reference
 

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.models import (
     AuthSessionModel,
     DeviceModel,
+    DeviceNotificationSubscriptionModel,
     EventModel,
     NotificationEndpointModel,
     SessionModel,
@@ -25,6 +26,7 @@ def reset_store(db: Session) -> None:
     db.execute(delete(TelegramLinkAttemptModel))
     db.execute(delete(EventModel))
     db.execute(delete(SessionModel))
+    db.execute(delete(DeviceNotificationSubscriptionModel))
     db.execute(delete(DeviceModel))
     db.execute(delete(NotificationEndpointModel))
     db.execute(delete(UserModel))
@@ -148,7 +150,6 @@ def device_to_dict(record: DeviceModel) -> dict:
     return {
         "device_id": record.device_id,
         "user_id": record.user_id,
-        "telegram_endpoint_id": record.telegram_endpoint_id,
         "label": record.label,
         "telegram_chat_id": record.telegram_chat_id,
         "telegram_username": record.telegram_username,
@@ -159,6 +160,45 @@ def device_to_dict(record: DeviceModel) -> dict:
 
 def get_device(db: Session, device_id: str) -> Optional[DeviceModel]:
     return db.get(DeviceModel, device_id)
+
+
+def _get_device_notification_subscription(
+    db: Session,
+    *,
+    device_id: str,
+    endpoint_id: str,
+) -> Optional[DeviceNotificationSubscriptionModel]:
+    stmt = select(DeviceNotificationSubscriptionModel).where(
+        DeviceNotificationSubscriptionModel.device_id == device_id,
+        DeviceNotificationSubscriptionModel.endpoint_id == endpoint_id,
+    )
+    return db.scalar(stmt)
+
+
+def _subscribe_device_to_notification_endpoint(
+    db: Session,
+    *,
+    device_id: str,
+    endpoint_id: str,
+    created_at: datetime,
+) -> DeviceNotificationSubscriptionModel:
+    subscription = _get_device_notification_subscription(
+        db,
+        device_id=device_id,
+        endpoint_id=endpoint_id,
+    )
+    if subscription is not None:
+        return subscription
+
+    subscription = DeviceNotificationSubscriptionModel(
+        subscription_id=str(uuid4()),
+        device_id=device_id,
+        endpoint_id=endpoint_id,
+        created_at=created_at,
+    )
+    db.add(subscription)
+    db.flush()
+    return subscription
 
 
 def link_device_telegram_chat(
@@ -204,7 +244,12 @@ def link_device_telegram_chat(
         endpoint.telegram_username = username
         endpoint.linked_at = now
 
-    record.telegram_endpoint_id = endpoint.endpoint_id
+    _subscribe_device_to_notification_endpoint(
+        db,
+        device_id=record.device_id,
+        endpoint_id=endpoint.endpoint_id,
+        created_at=now,
+    )
     record.telegram_chat_id = chat_id
     record.telegram_username = username
     record.telegram_linked_at = now
@@ -219,13 +264,36 @@ def get_notification_endpoint(
     return db.get(NotificationEndpointModel, endpoint_id)
 
 
+def get_notification_endpoints_for_device(
+    db: Session, device: DeviceModel
+) -> list[NotificationEndpointModel]:
+    stmt = (
+        select(NotificationEndpointModel)
+        .join(
+            DeviceNotificationSubscriptionModel,
+            DeviceNotificationSubscriptionModel.endpoint_id
+            == NotificationEndpointModel.endpoint_id,
+        )
+        .where(
+            DeviceNotificationSubscriptionModel.device_id == device.device_id,
+            NotificationEndpointModel.provider == "telegram",
+        )
+        .order_by(
+            DeviceNotificationSubscriptionModel.created_at.desc(),
+            NotificationEndpointModel.linked_at.desc(),
+            NotificationEndpointModel.endpoint_id.desc(),
+        )
+    )
+    return list(db.scalars(stmt))
+
+
 def get_telegram_target_for_device(
     db: Session, device: DeviceModel
 ) -> tuple[Optional[str], Optional[str]]:
-    if device.telegram_endpoint_id:
-        endpoint = get_notification_endpoint(db, device.telegram_endpoint_id)
-        if endpoint is not None and endpoint.provider == "telegram":
-            return endpoint.chat_id, endpoint.telegram_username
+    endpoints = get_notification_endpoints_for_device(db, device)
+    if endpoints:
+        endpoint = endpoints[0]
+        return endpoint.chat_id, endpoint.telegram_username
     return device.telegram_chat_id, device.telegram_username
 
 
@@ -345,6 +413,7 @@ def create_event(
     clip_container: Optional[str] = None,
     clip_blob_name: Optional[str] = None,
     user_id: Optional[str] = None,
+    initial_status: str = "processing",
 ) -> Optional[EventModel]:
     session = db.get(SessionModel, session_id)
     if session is None:
@@ -364,7 +433,7 @@ def create_event(
         session_id=session_id,
         user_id=session.user_id,
         device_id=device_id,
-        status="processing",
+        status=initial_status,
         trigger_type=trigger_type,
         created_at=_now(),
         duration_seconds=duration_seconds,
@@ -408,6 +477,8 @@ def update_event_summary(
     record = db.get(EventModel, event_id)
     if record is None:
         return None
+    if record.status == "canceled":
+        return record
     record.summary = summary
     record.label = label
     record.confidence = confidence
@@ -437,6 +508,8 @@ def mark_event_clip_uploaded(
         record.clip_uploaded_at = _now()
     if etag is not None:
         record.clip_etag = etag
+    if record.status == "queued":
+        record.status = "processing"
     db.commit()
     db.refresh(record)
     return record
@@ -481,21 +554,21 @@ def list_events(
     return list(db.scalars(stmt))
 
 
-def delete_processing_events_for_session(
+def cancel_inflight_events_for_session(
     db: Session, session_id: str, user_id: Optional[str] = None
 ) -> int:
-    predicates = [
+    stmt = select(EventModel).where(
         EventModel.session_id == session_id,
-        EventModel.status == "processing",
-    ]
-    if user_id is not None:
-        predicates.append(EventModel.user_id == user_id)
-
-    result = db.execute(
-        delete(EventModel).where(*predicates)
+        EventModel.status.in_(("queued", "processing")),
     )
+    if user_id is not None:
+        stmt = stmt.where(EventModel.user_id == user_id)
+
+    records = list(db.scalars(stmt))
+    for record in records:
+        record.status = "canceled"
     db.commit()
-    return int(result.rowcount or 0)
+    return len(records)
 
 
 def _format_dt(value: Optional[datetime]) -> Optional[str]:

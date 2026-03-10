@@ -6,8 +6,8 @@ from app.auth import get_request_user_id
 from app.db import get_db
 from app.queue import cancel_session_jobs
 from app.store import (
+    cancel_inflight_events_for_session,
     create_session,
-    delete_processing_events_for_session,
     list_sessions,
     session_to_dict,
     stop_session,
@@ -68,7 +68,7 @@ async def force_stop_session_endpoint(
         raise HTTPException(status_code=404, detail="session not found")
 
     dropped_queued_jobs = cancel_session_jobs(payload.session_id)
-    dropped_processing_events = delete_processing_events_for_session(
+    dropped_processing_events = cancel_inflight_events_for_session(
         db, payload.session_id, user_id=user_id
     )
 

@@ -178,6 +178,7 @@ async def initiate_upload_endpoint(
             clip_container=upload_info["clip_container"],
             clip_blob_name=upload_info["clip_blob_name"],
             user_id=user_id,
+            initial_status="queued",
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

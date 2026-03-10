@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "Backend logs are emitted to stdout when running ./scripts/dev."
+echo "Backend and worker logs are emitted as JSON to stdout when running ./scripts/dev."
+echo "Worker log records include queue_name/job_id and, when available, device_id/session_id/event_id."
 echo "Infra logs (Postgres/Redis/Azurite): docker compose -f infra/docker-compose.yml logs -f"

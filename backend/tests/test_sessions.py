@@ -83,7 +83,7 @@ async def test_start_session_without_analysis_prompt():
 
 
 @pytest.mark.anyio
-async def test_force_stop_session_drops_processing_events():
+async def test_force_stop_session_cancels_inflight_events():
     with patch("app.routes.sessions.cancel_session_jobs", return_value=2):
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
@@ -91,7 +91,16 @@ async def test_force_stop_session_drops_processing_events():
             start = await client.post("/sessions/start", json={"device_id": "dev_1"})
             session_id = start.json()["session_id"]
 
-            create_payload = {
+            queued_payload = {
+                "event_id": "evt-queued",
+                "session_id": session_id,
+                "device_id": "dev_1",
+                "trigger_type": "motion",
+                "duration_seconds": 8.0,
+                "clip_mime": "video/mp4",
+                "clip_size_bytes": 2048,
+            }
+            processing_payload = {
                 "session_id": session_id,
                 "device_id": "dev_1",
                 "trigger_type": "motion",
@@ -100,8 +109,9 @@ async def test_force_stop_session_drops_processing_events():
                 "clip_mime": "video/mp4",
                 "clip_size_bytes": 2048,
             }
-            await client.post("/events", json=create_payload)
-            await client.post("/events", json=create_payload)
+            initiated = await client.post("/events/upload/initiate", json=queued_payload)
+            assert initiated.status_code == 200
+            await client.post("/events", json=processing_payload)
 
             response = await client.post(
                 "/sessions/force-stop", json={"session_id": session_id}
@@ -114,7 +124,7 @@ async def test_force_stop_session_drops_processing_events():
     assert payload["dropped_processing_events"] == 2
     assert payload["dropped_queued_jobs"] == 2
     assert events.status_code == 200
-    assert events.json() == []
+    assert [event["status"] for event in events.json()] == ["canceled", "canceled"]
 
 
 @pytest.mark.anyio

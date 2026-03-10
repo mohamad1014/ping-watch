@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -11,11 +13,39 @@ from app.db import SessionLocal
 from app.store import create_auth_session, create_user, get_user, get_user_by_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+DEV_LOGIN_ROUTE_PATH = "/auth/dev/login"
 
 
 class DevLoginRequest(BaseModel):
     user_id: str | None = None
     email: str | None = None
+
+
+def _clamped_int_env(name: str, *, default: int, minimum: int, maximum: int) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(minimum, min(maximum, value))
+
+
+def dev_login_rate_limit_max_requests() -> int:
+    return _clamped_int_env(
+        "AUTH_DEV_LOGIN_RATE_LIMIT_MAX_REQUESTS",
+        default=10,
+        minimum=1,
+        maximum=100,
+    )
+
+
+def dev_login_rate_limit_window_seconds() -> int:
+    return _clamped_int_env(
+        "AUTH_DEV_LOGIN_RATE_LIMIT_WINDOW_SECONDS",
+        default=60,
+        minimum=1,
+        maximum=3600,
+    )
 
 
 @router.post("/dev/login")

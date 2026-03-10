@@ -3,10 +3,11 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+import sqlalchemy as sa
 from httpx import ASGITransport, AsyncClient
 
 import app.routes.notifications as notifications_route
-from app.db import SessionLocal
+from app.db import SessionLocal, engine
 from app.main import app
 from app.models import DeviceModel, NotificationEndpointModel
 from app.store import get_telegram_link_attempt
@@ -243,12 +244,23 @@ async def test_telegram_webhook_creates_endpoint_record_and_attaches_device(monk
 
     assert webhook_response.status_code == 200
 
+    subscriptions = sa.Table(
+        "device_notification_subscriptions",
+        sa.MetaData(),
+        autoload_with=engine,
+    )
+
     with SessionLocal() as db:
         device = db.get(DeviceModel, "dev-1")
         assert device is not None
-        assert device.telegram_endpoint_id is not None
+        endpoint_ids = db.execute(
+            sa.select(subscriptions.c.endpoint_id).where(
+                subscriptions.c.device_id == "dev-1"
+            )
+        ).scalars().all()
+        assert len(endpoint_ids) == 1
 
-        endpoint = db.get(NotificationEndpointModel, device.telegram_endpoint_id)
+        endpoint = db.get(NotificationEndpointModel, endpoint_ids[0])
         assert endpoint is not None
         assert endpoint.provider == "telegram"
         assert endpoint.chat_id == "987654321"

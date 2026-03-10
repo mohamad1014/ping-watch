@@ -1,4 +1,7 @@
+import math
 import time
+from collections import defaultdict, deque
+from threading import Lock
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
@@ -8,7 +11,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.auth import authenticate_request, should_authenticate_request
 from app.db import init_db
 from app.logging import setup_logging
-from app.routes.auth import router as auth_router
+from app.routes.auth import (
+    DEV_LOGIN_ROUTE_PATH,
+    dev_login_rate_limit_max_requests,
+    dev_login_rate_limit_window_seconds,
+    router as auth_router,
+)
 from app.routes.devices import router as devices_router
 from app.routes.events import router as events_router
 from app.routes.notifications import router as notifications_router
@@ -41,6 +49,78 @@ app.include_router(events_router)
 app.include_router(notifications_router)
 
 
+class SlidingWindowRateLimiter:
+    def __init__(self) -> None:
+        self._events: dict[str, deque[float]] = defaultdict(deque)
+        self._lock = Lock()
+
+    def reset(self) -> None:
+        with self._lock:
+            self._events.clear()
+
+    def check(self, key: str, *, limit: int, window_seconds: int) -> int | None:
+        now = time.monotonic()
+        cutoff = now - window_seconds
+        with self._lock:
+            bucket = self._events[key]
+            while bucket and bucket[0] <= cutoff:
+                bucket.popleft()
+
+            if len(bucket) >= limit:
+                oldest_event = bucket[0]
+                retry_after = max(1, math.ceil(window_seconds - (now - oldest_event)))
+                return retry_after
+
+            bucket.append(now)
+            return None
+
+
+dev_login_rate_limiter = SlidingWindowRateLimiter()
+
+
+def reset_rate_limiters() -> None:
+    dev_login_rate_limiter.reset()
+
+
+def _normalized_path(path: str) -> str:
+    if path == "/":
+        return path
+    return path.rstrip("/")
+
+
+def _request_client_identifier(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        client_ip = forwarded_for.split(",")[0].strip()
+        if client_ip:
+            return client_ip
+
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _rate_limit_response(request: Request) -> JSONResponse | None:
+    if request.method.upper() != "POST":
+        return None
+    if _normalized_path(request.url.path) != DEV_LOGIN_ROUTE_PATH:
+        return None
+
+    retry_after = dev_login_rate_limiter.check(
+        _request_client_identifier(request),
+        limit=dev_login_rate_limit_max_requests(),
+        window_seconds=dev_login_rate_limit_window_seconds(),
+    )
+    if retry_after is None:
+        return None
+
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "rate limit exceeded"},
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
 @app.on_event("startup")
 async def startup():
     init_db()
@@ -67,7 +147,9 @@ async def request_logger(request: Request, call_next):
     session_id = request.headers.get("x-session-id")
     event_id = request.headers.get("x-event-id")
 
-    response = await call_next(request)
+    response = _rate_limit_response(request)
+    if response is None:
+        response = await call_next(request)
 
     duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
     response.headers["x-request-id"] = request_id

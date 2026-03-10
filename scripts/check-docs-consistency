@@ -36,6 +36,9 @@ require_text() {
 # Key docs must exist
 require_file "$repo_root/README.md"
 require_file "$repo_root/AGENTS.md"
+require_file "$repo_root/docs/queue-stall-runbook.md"
+require_file "$repo_root/docs/notification-failure-runbook.md"
+require_file "$repo_root/docs/observability-dashboard-baseline.md"
 
 # Key scripts must exist
 for name in dev-up dev test-unit test-integration test-e2e test-all logs; do
@@ -47,6 +50,11 @@ for name in dev-up dev test-unit test-integration test-e2e test-all logs; do
   require_text "$repo_root/AGENTS.md" "\\./scripts/$name" "AGENTS.md missing ./scripts/$name"
   require_text "$repo_root/README.md" "\\./scripts/$name" "README.md missing ./scripts/$name"
 done
+
+# README should link the current operations docs
+require_text "$repo_root/README.md" "docs/queue-stall-runbook.md" "README.md missing docs/queue-stall-runbook.md"
+require_text "$repo_root/README.md" "docs/notification-failure-runbook.md" "README.md missing docs/notification-failure-runbook.md"
+require_text "$repo_root/README.md" "docs/observability-dashboard-baseline.md" "README.md missing docs/observability-dashboard-baseline.md"
 
 # Keep docs aligned to current test-unit behavior
 require_text "$repo_root/scripts/test-unit" "worker" "scripts/test-unit no longer runs worker tests"

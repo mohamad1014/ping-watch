@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$scripts_dir/.." && pwd)
+
+extract_revision() {
+  local command_output="$1"
+
+  printf '%s\n' "$command_output" | awk '/^[0-9][[:alnum:]_]*( \(|$)/ {print $1; exit}'
+}
+
+extract_revisions() {
+  local command_output="$1"
+
+  printf '%s\n' "$command_output" | awk '/^[0-9][[:alnum:]_]*( \(|$)/ {print $1}'
+}
+
+resolve_downgrade_target() {
+  local head_revision="$1"
+
+  python3 - "$repo_root" "$head_revision" <<'PY'
+from pathlib import Path
+import ast
+import sys
+
+repo_root = Path(sys.argv[1])
+head_revision = sys.argv[2]
+versions_dir = repo_root / "backend" / "alembic" / "versions"
+
+for path in versions_dir.glob("*.py"):
+    module = ast.parse(path.read_text(), filename=str(path))
+    values = {}
+    for node in module.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id in {"revision", "down_revision"}:
+                values[target.id] = ast.literal_eval(node.value)
+    if values.get("revision") != head_revision:
+        continue
+
+    down_revision = values.get("down_revision")
+    if isinstance(down_revision, tuple):
+        print(down_revision[-1])
+    elif isinstance(down_revision, str):
+        print(down_revision)
+    break
+PY
+}
+
+tmp_db_path=""
+cleanup() {
+  if [[ -n "$tmp_db_path" && -f "$tmp_db_path" ]]; then
+    rm -f "$tmp_db_path"
+  fi
+}
+trap cleanup EXIT
+
+if [[ -z "${DATABASE_URL:-}" ]]; then
+  tmp_db_path=$(mktemp "${TMPDIR:-/tmp}/ping-watch-rollback.XXXXXX.db")
+fi
+
+DATABASE_URL="${DATABASE_URL:-sqlite:///$tmp_db_path}"
+export DATABASE_URL
+
+(
+  cd "$repo_root/backend"
+
+  head_revision=$(extract_revision "$(.venv/bin/alembic heads)")
+  if [[ -z "$head_revision" ]]; then
+    echo "unable to determine alembic head revision" >&2
+    exit 1
+  fi
+  rollback_target=$(resolve_downgrade_target "$head_revision")
+  if [[ -z "$rollback_target" ]]; then
+    echo "unable to determine rollback target for head revision $head_revision" >&2
+    exit 1
+  fi
+
+  echo "Rollback drill: upgrade to head on $DATABASE_URL"
+  .venv/bin/alembic upgrade head >/dev/null
+
+  current_revision=$(extract_revision "$(.venv/bin/alembic current)")
+  if [[ "$current_revision" != "$head_revision" ]]; then
+    echo "rollback drill failed: expected head revision $head_revision after upgrade, got $current_revision" >&2
+    exit 1
+  fi
+
+  .venv/bin/alembic downgrade "$rollback_target" >/dev/null
+  rolled_back_revisions=$(extract_revisions "$(.venv/bin/alembic current)")
+  if [[ -z "$rolled_back_revisions" || "$rolled_back_revisions" == *"$head_revision"* ]]; then
+    echo "rollback drill failed: downgrade did not move away from head $head_revision" >&2
+    exit 1
+  fi
+  if [[ "$rolled_back_revisions" != *"$rollback_target"* ]]; then
+    echo "rollback drill failed: expected rollback target $rollback_target after downgrade, got $rolled_back_revisions" >&2
+    exit 1
+  fi
+
+  .venv/bin/alembic upgrade head >/dev/null
+  restored_revision=$(extract_revision "$(.venv/bin/alembic current)")
+  if [[ "$restored_revision" != "$head_revision" ]]; then
+    echo "rollback drill failed: expected head revision $head_revision after re-upgrade, got $restored_revision" >&2
+    exit 1
+  fi
+)
+
+echo "rollback drill passed for $DATABASE_URL"

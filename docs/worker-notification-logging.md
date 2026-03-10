@@ -58,6 +58,10 @@ ps -eo pid,lstart,cmd | rg "app\\.cli run --queue clip_uploaded"
 
 If timestamp predates your latest changes/restart, you are running stale worker code.
 
+## Escalate When Logging Exists
+
+If the expected notification logs are present but the alert still does not arrive, continue with the `Notification Failure Runbook` in `docs/notification-failure-runbook.md`.
+
 ## Notes
 
 - API request logs (`/events/.../summary`) confirm backend writes, not notification delivery.

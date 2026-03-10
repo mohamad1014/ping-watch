@@ -10,3 +10,9 @@ Services:
 Run:
 - `../scripts/dev-up`
 - `../scripts/dev-down`
+- `../scripts/check-migrations`
+- `../scripts/staging-rollback-drill`
+
+Rollback validation:
+- `../scripts/check-migrations` and `../scripts/staging-rollback-drill` default to temporary SQLite databases in CI-friendly environments.
+- To exercise the local Postgres service from this compose stack, start `../scripts/dev-up` and run `DATABASE_URL=postgresql+psycopg://pingwatch:pingwatch@localhost:5432/pingwatch ../scripts/staging-rollback-drill`.

@@ -78,9 +78,23 @@ It creates sibling worktrees next to the current repo:
 
 The script expects the current checkout to be on `main` and pulls `main` fast-forward before creating branches.
 
+## Launch Wave 1 Codex sessions
+
+After the worktrees exist, use:
+
+```bash
+./scripts/run-wave1-codex
+```
+
+This launches one terminal per worktree and starts one Codex session per worktree with a branch-specific prompt.
+The launcher starts Codex without approval prompts by passing `--ask-for-approval never --sandbox danger-full-access`.
+The launcher expects a desktop terminal emulator and currently supports `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, and `kitty`.
+
 ## Running Codex
 
 Open one terminal per worktree and start one Codex session per worktree.
+
+If you want the repo to open them for you, `./scripts/run-wave1-codex` launches one terminal per worktree automatically.
 
 Use a narrow prompt per session. Example:
 

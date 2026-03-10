@@ -46,11 +46,6 @@ class DeviceModel(Base):
     user_id: Mapped[str | None] = mapped_column(
         ForeignKey("users.user_id"), index=True, nullable=True
     )
-    telegram_endpoint_id: Mapped[str | None] = mapped_column(
-        ForeignKey("notification_endpoints.endpoint_id"),
-        index=True,
-        nullable=True,
-    )
     label: Mapped[str | None] = mapped_column(String, nullable=True)
     telegram_chat_id: Mapped[str | None] = mapped_column(String, nullable=True)
     telegram_username: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -58,6 +53,9 @@ class DeviceModel(Base):
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    notification_subscriptions: Mapped[list["DeviceNotificationSubscriptionModel"]] = (
+        relationship(back_populates="device", cascade="all, delete-orphan")
+    )
 
 
 class UserModel(Base):
@@ -84,6 +82,33 @@ class NotificationEndpointModel(Base):
     telegram_username: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    device_subscriptions: Mapped[list["DeviceNotificationSubscriptionModel"]] = (
+        relationship(back_populates="endpoint", cascade="all, delete-orphan")
+    )
+
+
+class DeviceNotificationSubscriptionModel(Base):
+    __tablename__ = "device_notification_subscriptions"
+    __table_args__ = (
+        UniqueConstraint(
+            "device_id",
+            "endpoint_id",
+            name="uq_device_notification_subscriptions_device_endpoint",
+        ),
+    )
+
+    subscription_id: Mapped[str] = mapped_column(String, primary_key=True)
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"), index=True)
+    endpoint_id: Mapped[str] = mapped_column(
+        ForeignKey("notification_endpoints.endpoint_id"),
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    device: Mapped[DeviceModel] = relationship(back_populates="notification_subscriptions")
+    endpoint: Mapped[NotificationEndpointModel] = relationship(
+        back_populates="device_subscriptions"
+    )
 
 
 class AuthSessionModel(Base):
@@ -106,7 +131,10 @@ class AuthSessionModel(Base):
 class EventModel(Base):
     __tablename__ = "events"
     __table_args__ = (
-        CheckConstraint("status IN ('processing', 'done')", name="ck_events_status"),
+        CheckConstraint(
+            "status IN ('queued', 'processing', 'done', 'failed', 'canceled')",
+            name="ck_events_status",
+        ),
         CheckConstraint("duration_seconds >= 0", name="ck_events_duration"),
     )
 

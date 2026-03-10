@@ -34,10 +34,15 @@ _REQUIRED_EVENTS_COLUMNS = {
 }
 _REQUIRED_DEVICES_COLUMNS = {
     "user_id",
-    "telegram_endpoint_id",
     "telegram_chat_id",
     "telegram_username",
     "telegram_linked_at",
+}
+_REQUIRED_DEVICE_NOTIFICATION_SUBSCRIPTIONS_COLUMNS = {
+    "subscription_id",
+    "device_id",
+    "endpoint_id",
+    "created_at",
 }
 _REQUIRED_SESSIONS_COLUMNS = {
     "user_id",
@@ -46,7 +51,8 @@ _REQUIRED_SESSIONS_COLUMNS = {
 
 def ensure_schema_compatible(engine: Engine) -> None:
     inspector = inspect(engine)
-    if "events" not in inspector.get_table_names():
+    table_names = set(inspector.get_table_names())
+    if "events" not in table_names:
         return
     columns = {col["name"] for col in inspector.get_columns("events")}
     missing = sorted(_REQUIRED_EVENTS_COLUMNS - columns)
@@ -56,7 +62,7 @@ def ensure_schema_compatible(engine: Engine) -> None:
             f"(missing columns on `events`: {', '.join(missing)})"
         )
 
-    if "devices" in inspector.get_table_names():
+    if "devices" in table_names:
         device_columns = {col["name"] for col in inspector.get_columns("devices")}
         missing = sorted(_REQUIRED_DEVICES_COLUMNS - device_columns)
         if missing:
@@ -65,7 +71,26 @@ def ensure_schema_compatible(engine: Engine) -> None:
                 f"(missing columns on `devices`: {', '.join(missing)})"
             )
 
-    if "sessions" in inspector.get_table_names():
+    if "device_notification_subscriptions" not in table_names:
+        raise RuntimeError(
+            "Database schema is out of date; run `cd backend && .venv/bin/alembic upgrade head` "
+            "(missing tables: device_notification_subscriptions)"
+        )
+
+    subscription_columns = {
+        col["name"]
+        for col in inspector.get_columns("device_notification_subscriptions")
+    }
+    missing = sorted(
+        _REQUIRED_DEVICE_NOTIFICATION_SUBSCRIPTIONS_COLUMNS - subscription_columns
+    )
+    if missing:
+        raise RuntimeError(
+            "Database schema is out of date; run `cd backend && .venv/bin/alembic upgrade head` "
+            f"(missing columns on `device_notification_subscriptions`: {', '.join(missing)})"
+        )
+
+    if "sessions" in table_names:
         session_columns = {col["name"] for col in inspector.get_columns("sessions")}
         missing = sorted(_REQUIRED_SESSIONS_COLUMNS - session_columns)
         if missing:

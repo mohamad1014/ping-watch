@@ -50,6 +50,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             logging.getLevelName(level),
             telegram_configured,
             webhook_configured,
+            extra={"queue_name": args.queue},
         )
         run_worker(queue_name=args.queue)
         return

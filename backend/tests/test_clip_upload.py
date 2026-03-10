@@ -10,7 +10,7 @@ from app.main import app
 
 
 @pytest.mark.anyio
-async def test_initiate_upload_returns_sas_and_creates_event():
+async def test_initiate_upload_returns_sas_and_creates_queued_event():
     os.environ.setdefault(
         "AZURITE_BLOB_ENDPOINT", "http://127.0.0.1:10000/devstoreaccount1"
     )
@@ -41,7 +41,7 @@ async def test_initiate_upload_returns_sas_and_creates_event():
     assert response.status_code == 200
     payload = response.json()
     assert payload["event"]["event_id"] == "clip-123"
-    assert payload["event"]["status"] == "processing"
+    assert payload["event"]["status"] == "queued"
     assert payload["event"]["clip_uri"].startswith(
         "http://127.0.0.1:10000/devstoreaccount1/"
     )
@@ -92,6 +92,7 @@ async def test_finalize_upload_sets_uploaded_fields_and_is_idempotent():
     assert finalize.status_code == 200
     assert finalize_again.status_code == 200
     event = finalize.json()
+    assert event["status"] == "processing"
     assert event["clip_etag"] == '"0x8DAF1234"'
     assert event["clip_uploaded_at"]
 

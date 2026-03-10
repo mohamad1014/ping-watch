@@ -8,11 +8,13 @@ os.environ.setdefault(
 
 from app.db import SessionLocal, init_db  # noqa: E402
 from app.db import Base, engine  # noqa: E402
+from app.main import reset_rate_limiters  # noqa: E402
 from app.store import reset_store  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
 def _reset_database():
+    reset_rate_limiters()
     init_db()
     if engine.url.drivername.startswith("sqlite"):
         Base.metadata.drop_all(bind=engine)
@@ -22,3 +24,4 @@ def _reset_database():
     yield
     with SessionLocal() as db:
         reset_store(db)
+    reset_rate_limiters()

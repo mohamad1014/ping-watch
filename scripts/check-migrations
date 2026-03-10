@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$scripts_dir/.." && pwd)
+
+extract_revision() {
+  local command_output="$1"
+
+  printf '%s\n' "$command_output" | awk '/^[0-9][[:alnum:]_]*( \(|$)/ {print $1; exit}'
+}
+
+tmp_db_path=""
+cleanup() {
+  if [[ -n "$tmp_db_path" && -f "$tmp_db_path" ]]; then
+    rm -f "$tmp_db_path"
+  fi
+}
+trap cleanup EXIT
+
+if [[ -z "${DATABASE_URL:-}" ]]; then
+  tmp_db_path=$(mktemp "${TMPDIR:-/tmp}/ping-watch-migrations.XXXXXX.db")
+fi
+
+DATABASE_URL="${DATABASE_URL:-sqlite:///$tmp_db_path}"
+export DATABASE_URL
+
+(
+  cd "$repo_root/backend"
+
+  .venv/bin/alembic upgrade head >/dev/null
+
+  current_revision=$(extract_revision "$(.venv/bin/alembic current)")
+  head_revision=$(extract_revision "$(.venv/bin/alembic heads)")
+
+  if [[ -z "$current_revision" || -z "$head_revision" ]]; then
+    echo "unable to determine alembic revisions for $DATABASE_URL" >&2
+    exit 1
+  fi
+
+  if [[ "$current_revision" != "$head_revision" ]]; then
+    echo "migration check failed: current revision $current_revision does not match head $head_revision" >&2
+    exit 1
+  fi
+)
+
+echo "migration check passed for $DATABASE_URL"
