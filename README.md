@@ -100,6 +100,12 @@ Production planning is tracked in `PLAN.md` under:
 - `./scripts/clean-local` — remove local-only test/runtime artifacts.
 - `./scripts/create-wave1-worktrees` — create Wave 1 Git worktrees for parallel Codex execution.
 - `./scripts/run-wave1-codex` — launch one Codex terminal per Wave 1 worktree with task prompts.
+- `./scripts/create-wave2-worktrees` — create Wave 2 Git worktrees for the next parallel Codex batch.
+- `./scripts/run-wave2-codex` — launch one Codex terminal per Wave 2 worktree with task prompts.
+- `./scripts/create-wave3-worktrees` — create Wave 3 Git worktrees for the post-API fanout and UI work.
+- `./scripts/run-wave3-codex` — launch one Codex terminal per Wave 3 worktree with task prompts.
+- `./scripts/create-wave4-worktrees` — create Wave 4 Git worktrees for the final invite and notification-attempt batch.
+- `./scripts/run-wave4-codex` — launch one Codex terminal per Wave 4 worktree with task prompts.
 - `./scripts/sync-skills` — mirror `.codex/skills` to `.claude/skills`.
 - `./scripts/test-clip-flow` — rerun clip flow verification (worker decode fallback + critical E2E flow).
 - `./scripts/logs` — tail backend logs.

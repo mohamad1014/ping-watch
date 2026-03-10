@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$scripts_dir/.." && pwd)
+workspace_root=$(cd "$repo_root/.." && pwd)
+
+require_command() {
+  local name="$1"
+  if ! command -v "$name" >/dev/null 2>&1; then
+    echo "missing required command: $name" >&2
+    exit 1
+  fi
+}
+
+require_worktree() {
+  local path="$1"
+  local branch="$2"
+
+  if [[ ! -d "$path/.git" && ! -f "$path/.git" ]]; then
+    echo "missing worktree: $path" >&2
+    echo "run ./scripts/create-wave3-worktrees first" >&2
+    exit 1
+  fi
+
+  local current_branch
+  current_branch=$(git -C "$path" rev-parse --abbrev-ref HEAD)
+  if [[ "$current_branch" != "$branch" ]]; then
+    echo "expected branch '$branch' in $path, found '$current_branch'" >&2
+    exit 1
+  fi
+}
+
+detect_terminal() {
+  if command -v x-terminal-emulator >/dev/null 2>&1; then
+    echo "x-terminal-emulator"
+    return
+  fi
+  if command -v gnome-terminal >/dev/null 2>&1; then
+    echo "gnome-terminal"
+    return
+  fi
+  if command -v konsole >/dev/null 2>&1; then
+    echo "konsole"
+    return
+  fi
+  if command -v xfce4-terminal >/dev/null 2>&1; then
+    echo "xfce4-terminal"
+    return
+  fi
+  if command -v kitty >/dev/null 2>&1; then
+    echo "kitty"
+    return
+  fi
+  echo ""
+}
+
+launch_terminal() {
+  local terminal="$1"
+  local title="$2"
+  local worktree="$3"
+  local prompt="$4"
+  local escaped_worktree
+  local escaped_prompt
+  local command
+
+  escaped_worktree=$(printf '%q' "$worktree")
+  escaped_prompt=$(printf '%q' "$prompt")
+  command="cd ${escaped_worktree} && codex --no-alt-screen --ask-for-approval never --sandbox danger-full-access ${escaped_prompt}; printf '\\nSession ended for ${title}. Press Enter to close...'; read -r _"
+
+  case "$terminal" in
+    x-terminal-emulator)
+      x-terminal-emulator -T "$title" -e bash -lc "$command" &
+      ;;
+    gnome-terminal)
+      gnome-terminal --title="$title" -- bash -lc "$command" &
+      ;;
+    konsole)
+      konsole --new-tab -p tabtitle="$title" -e bash -lc "$command" &
+      ;;
+    xfce4-terminal)
+      xfce4-terminal --title="$title" --hold -e "bash -lc $(
+        printf '%q' "$command"
+      )" &
+      ;;
+    kitty)
+      kitty --title "$title" bash -lc "$command" &
+      ;;
+    *)
+      echo "unsupported terminal: $terminal" >&2
+      exit 1
+      ;;
+  esac
+}
+
+require_command git
+if ! command -v codex >/dev/null 2>&1; then
+  echo "missing required command: codex" >&2
+  exit 1
+fi
+
+terminal=$(detect_terminal)
+if [[ -z "$terminal" ]]; then
+  echo "no supported terminal emulator found" >&2
+  echo "supported: x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, kitty" >&2
+  exit 1
+fi
+
+worktree_pw03="$workspace_root/ping-watch-pw03"
+worktree_pw04="$workspace_root/ping-watch-pw04"
+
+prompt_pw03=$(cat <<'EOF'
+Work only on PW-03 in this branch.
+Task: Implement worker recipient fanout so a device alert can notify all subscribed recipients.
+Base your work on the merged Wave 1 schema plus the finalized recipient-management API from Wave 2.
+Follow PLAN.md and docs/codex-parallel-workflow.md.
+Do test-first.
+Do not change unrelated files.
+Run targeted tests first, then report exact results.
+If the Wave 2 API contract is not present on main, stop and report the dependency instead of inventing one.
+Before finalizing, run the relevant repo verification commands.
+EOF
+)
+
+prompt_pw04=$(cat <<'EOF'
+Work only on PW-04 in this branch.
+Task: Add frontend recipient controls for listing, adding, removing, and re-running recipient onboarding.
+Base your work on the merged Wave 1 schema plus the finalized recipient-management API from Wave 2.
+Follow PLAN.md and docs/codex-parallel-workflow.md.
+Do test-first.
+Do not change unrelated files.
+Run targeted tests first, then report exact results.
+If the Wave 2 API contract is not present on main, stop and report the dependency instead of inventing one.
+Before finalizing, run the relevant repo verification commands.
+EOF
+)
+
+require_worktree "$worktree_pw03" "feature/pw-03-worker-recipient-fanout"
+require_worktree "$worktree_pw04" "feature/pw-04-frontend-recipient-controls"
+
+launch_terminal \
+  "$terminal" \
+  "PW-03" \
+  "$worktree_pw03" \
+  "$prompt_pw03"
+
+launch_terminal \
+  "$terminal" \
+  "PW-04" \
+  "$worktree_pw04" \
+  "$prompt_pw04"
+
+echo "launched one terminal per worktree for Wave 3"

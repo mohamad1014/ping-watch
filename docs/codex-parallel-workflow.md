@@ -45,6 +45,12 @@ Start after `PW-01` and `PW-06` are merged:
 - `feature/pw-07-queue-idempotency-job-metadata`
 - `feature/pw-08-worker-failure-state-visibility`
 
+Recommended merge order:
+
+1. `feature/pw-02-recipient-management-api`
+2. `feature/pw-07-queue-idempotency-job-metadata`
+3. `feature/pw-08-worker-failure-state-visibility`
+
 ### Wave 3
 
 Start after `PW-02` is merged:
@@ -52,12 +58,22 @@ Start after `PW-02` is merged:
 - `feature/pw-03-worker-recipient-fanout`
 - `feature/pw-04-frontend-recipient-controls`
 
+Recommended merge order:
+
+1. `feature/pw-03-worker-recipient-fanout`
+2. `feature/pw-04-frontend-recipient-controls`
+
 ### Wave 4
 
 Start after the Wave 3 contracts are stable:
 
 - `feature/pw-05-invite-share-flow`
 - `feature/pw-09-notification-attempt-tracking-retries`
+
+Recommended merge order:
+
+1. `feature/pw-05-invite-share-flow`
+2. `feature/pw-09-notification-attempt-tracking-retries`
 
 ## Bootstrap Wave 1
 
@@ -78,6 +94,52 @@ It creates sibling worktrees next to the current repo:
 
 The script expects the current checkout to be on `main` and pulls `main` fast-forward before creating branches.
 
+## Bootstrap Wave 2
+
+Use the helper script after Wave 1 is integrated on `main`:
+
+```bash
+./scripts/create-wave2-worktrees
+```
+
+It creates sibling worktrees next to the current repo:
+
+- `../ping-watch-pw02`
+- `../ping-watch-pw07`
+- `../ping-watch-pw08`
+
+The script expects the current checkout to be on `main` and pulls `main` fast-forward before creating branches.
+
+## Bootstrap Wave 3
+
+Use the helper script after Wave 2 is integrated on `main`:
+
+```bash
+./scripts/create-wave3-worktrees
+```
+
+It creates sibling worktrees next to the current repo:
+
+- `../ping-watch-pw03`
+- `../ping-watch-pw04`
+
+The script expects the current checkout to be on `main` and pulls `main` fast-forward before creating branches.
+
+## Bootstrap Wave 4
+
+Use the helper script after Waves 2 and 3 are integrated on `main`:
+
+```bash
+./scripts/create-wave4-worktrees
+```
+
+It creates sibling worktrees next to the current repo:
+
+- `../ping-watch-pw05`
+- `../ping-watch-pw09`
+
+The script expects the current checkout to be on `main` and pulls `main` fast-forward before creating branches.
+
 ## Launch Wave 1 Codex sessions
 
 After the worktrees exist, use:
@@ -87,6 +149,42 @@ After the worktrees exist, use:
 ```
 
 This launches one terminal per worktree and starts one Codex session per worktree with a branch-specific prompt.
+The launcher starts Codex without approval prompts by passing `--ask-for-approval never --sandbox danger-full-access`.
+The launcher expects a desktop terminal emulator and currently supports `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, and `kitty`.
+
+## Launch Wave 2 Codex sessions
+
+After the Wave 2 worktrees exist, use:
+
+```bash
+./scripts/run-wave2-codex
+```
+
+This launches one terminal per Wave 2 worktree and starts one Codex session per branch-specific prompt.
+The launcher starts Codex without approval prompts by passing `--ask-for-approval never --sandbox danger-full-access`.
+The launcher expects a desktop terminal emulator and currently supports `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, and `kitty`.
+
+## Launch Wave 3 Codex sessions
+
+After the Wave 3 worktrees exist, use:
+
+```bash
+./scripts/run-wave3-codex
+```
+
+This launches one terminal per Wave 3 worktree and starts one Codex session per branch-specific prompt.
+The launcher starts Codex without approval prompts by passing `--ask-for-approval never --sandbox danger-full-access`.
+The launcher expects a desktop terminal emulator and currently supports `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, and `kitty`.
+
+## Launch Wave 4 Codex sessions
+
+After the Wave 4 worktrees exist, use:
+
+```bash
+./scripts/run-wave4-codex
+```
+
+This launches one terminal per Wave 4 worktree and starts one Codex session per branch-specific prompt.
 The launcher starts Codex without approval prompts by passing `--ask-for-approval never --sandbox danger-full-access`.
 The launcher expects a desktop terminal emulator and currently supports `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, and `kitty`.
 
