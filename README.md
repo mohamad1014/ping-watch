@@ -96,9 +96,11 @@ Production planning is tracked in `PLAN.md` under:
 - `./scripts/test-all` — run all tests.
 - `./scripts/check-docs-consistency` — verify docs/script consistency for key commands.
 - `./scripts/clean-local` — remove local-only test/runtime artifacts.
+- `./scripts/create-wave1-worktrees` — create Wave 1 Git worktrees for parallel Codex execution.
 - `./scripts/sync-skills` — mirror `.codex/skills` to `.claude/skills`.
 - `./scripts/test-clip-flow` — rerun clip flow verification (worker decode fallback + critical E2E flow).
 - `./scripts/logs` — tail backend logs.
+- `docs/codex-parallel-workflow.md` — branch/worktree workflow for parallel Codex implementation.
 - `docs/worker-notification-logging.md` — notification/worker logging troubleshooting checklist.
 
 ## Getting Started (local)
