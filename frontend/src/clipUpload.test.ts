@@ -118,6 +118,59 @@ describe('uploadPendingClips', () => {
     expect(scheduleClipRetry).not.toHaveBeenCalled()
   })
 
+  it('uses authenticated API upload for local backend upload endpoints', async () => {
+    const initiateUpload = vi.fn().mockResolvedValue({
+      event: { event_id: 'clip-1', status: 'processing', trigger_type: 'motion' },
+      uploadUrl: 'http://127.0.0.1:8002/events/clip-1/upload',
+    })
+    const finalizeUpload = vi.fn().mockResolvedValue({
+      event_id: 'clip-1',
+      status: 'processing',
+      trigger_type: 'motion',
+    })
+    const uploadBlob = vi.fn().mockResolvedValue({ etag: '"etag-direct"' })
+    const uploadBlobViaApi = vi.fn().mockResolvedValue({ etag: '"etag-auth"' })
+    const markClipUploaded = vi.fn().mockResolvedValue(undefined)
+    const scheduleClipRetry = vi.fn().mockResolvedValue(undefined)
+    const listClips = vi.fn().mockResolvedValue([
+      {
+        id: 'clip-1',
+        sessionId: 'sess-1',
+        deviceId: 'device-1',
+        triggerType: 'motion',
+        blob: new Blob(['a']),
+        mimeType: 'video/webm',
+        sizeBytes: 1,
+        durationSeconds: 2,
+        createdAt: 0,
+        uploaded: false,
+      },
+    ])
+
+    const uploaded = await uploadPendingClips({
+      sessionId: 'sess-1',
+      deps: {
+        initiateUpload,
+        uploadBlob,
+        uploadBlobViaApi,
+        finalizeUpload,
+        listClips,
+        markClipUploaded,
+        scheduleClipRetry,
+        getNow: () => 0,
+        sleep: async () => {},
+        isOnline: () => true,
+      },
+    })
+
+    expect(uploaded).toBe(1)
+    expect(uploadBlob).not.toHaveBeenCalled()
+    expect(uploadBlobViaApi).toHaveBeenCalledWith('clip-1', expect.any(Blob), {
+      contentType: 'video/webm',
+    })
+    expect(finalizeUpload).toHaveBeenCalledWith('clip-1', '"etag-auth"')
+  })
+
   it('schedules retry when offline', async () => {
     const initiateUpload = vi.fn()
     const uploadBlob = vi.fn()
@@ -215,7 +268,7 @@ describe('uploadPendingClips', () => {
     expect(scheduleClipRetry).not.toHaveBeenCalled()
   })
 
-  it('uploads pending clips across sessions when a sessionId is provided', async () => {
+  it('uploads only pending clips for the provided sessionId', async () => {
     const initiateUpload = vi.fn().mockResolvedValue({
       event: { event_id: 'clip-1', status: 'processing', trigger_type: 'motion' },
       uploadUrl: 'http://upload',
@@ -270,8 +323,14 @@ describe('uploadPendingClips', () => {
       },
     })
 
-    expect(uploaded).toBe(2)
-    expect(initiateUpload).toHaveBeenCalledTimes(2)
+    expect(uploaded).toBe(1)
+    expect(initiateUpload).toHaveBeenCalledTimes(1)
+    expect(initiateUpload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventId: 'clip-1',
+        sessionId: 'sess-1',
+      })
+    )
   })
 
   it('schedules retry when clip metadata is missing', async () => {

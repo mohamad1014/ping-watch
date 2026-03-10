@@ -16,6 +16,7 @@ from app.db import get_db
 from app.store import (
     create_telegram_link_attempt,
     get_device,
+    get_telegram_target_for_device,
     get_telegram_link_attempt,
     get_telegram_link_attempt_by_token_hash,
     link_device_telegram_chat,
@@ -496,7 +497,8 @@ def _readiness_for_device(
             reason="Device is not registered yet. Refresh and try again.",
         )
 
-    if not device.telegram_chat_id:
+    target_chat_id, _ = get_telegram_target_for_device(db, device)
+    if not target_chat_id:
         logger.info("Telegram readiness: device %s has no linked chat yet", device_id)
         return TelegramReadinessResponse(
             enabled=True,
@@ -506,7 +508,7 @@ def _readiness_for_device(
         )
 
     try:
-        status_code, payload = _telegram_get_chat(token, device.telegram_chat_id)
+        status_code, payload = _telegram_get_chat(token, target_chat_id)
     except httpx.RequestError:
         logger.warning("Telegram readiness check request failed for device %s", device_id)
         return TelegramReadinessResponse(
@@ -520,7 +522,7 @@ def _readiness_for_device(
         logger.info(
             "Telegram readiness: device %s linked chat_id=%s is reachable",
             device_id,
-            device.telegram_chat_id,
+            target_chat_id,
         )
         return TelegramReadinessResponse(
             enabled=True,
@@ -534,7 +536,7 @@ def _readiness_for_device(
         logger.info(
             "Telegram readiness: device %s chat_id=%s requires relink (status=%s description=%s)",
             device_id,
-            device.telegram_chat_id,
+            target_chat_id,
             status_code,
             description,
         )
@@ -848,7 +850,16 @@ def telegram_target(
     device = get_device(db, device_id)
     if device is not None and user_id is not None and device.user_id != user_id:
         device = None
-    if device is None or not device.telegram_chat_id:
+    if device is None:
+        return TelegramTargetResponse(
+            enabled=True,
+            linked=False,
+            device_id=device_id,
+            chat_id=None,
+        )
+
+    target_chat_id, _ = get_telegram_target_for_device(db, device)
+    if not target_chat_id:
         return TelegramTargetResponse(
             enabled=True,
             linked=False,
@@ -860,5 +871,5 @@ def telegram_target(
         enabled=True,
         linked=True,
         device_id=device_id,
-        chat_id=device.telegram_chat_id,
+        chat_id=target_chat_id,
     )

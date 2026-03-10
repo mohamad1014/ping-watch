@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$scripts_dir/.." && pwd)
+
+paths=(
+  "$repo_root/.local_uploads"
+  "$repo_root/.inference_frames"
+  "$repo_root/e2e/test-results"
+  "$repo_root/e2e/playwright-report"
+  "$repo_root/frontend/backend/.venv"
+  "$repo_root/backend/.pytest_cache"
+  "$repo_root/worker/.pytest_cache"
+  "$repo_root/.pytest_cache"
+)
+
+for path in "${paths[@]}"; do
+  if [[ -e "$path" ]]; then
+    rm -rf "$path"
+    echo "removed: ${path#$repo_root/}"
+  fi
+done
+
+if [[ -d "$repo_root/frontend/backend" ]]; then
+  if [[ -z "$(find "$repo_root/frontend/backend" -mindepth 1 -print -quit)" ]]; then
+    rmdir "$repo_root/frontend/backend"
+    echo "removed: frontend/backend"
+  fi
+fi
+
+echo "local cleanup complete"

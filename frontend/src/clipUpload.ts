@@ -78,8 +78,22 @@ const isLocalAzuriteUploadUrl = (uploadUrl: string): boolean => {
   }
 }
 
+const isLocalApiUploadUrl = (uploadUrl: string): boolean => {
+  try {
+    const parsed = new URL(uploadUrl)
+    const localHostnames = new Set(['localhost', '127.0.0.1', '::1'])
+    if (!localHostnames.has(parsed.hostname)) return false
+    return /^\/events\/[^/]+\/upload$/.test(parsed.pathname)
+  } catch {
+    return false
+  }
+}
+
+const shouldUseApiUploadFallback = (uploadUrl: string): boolean =>
+  isLocalAzuriteUploadUrl(uploadUrl) || isLocalApiUploadUrl(uploadUrl)
+
 export const uploadPendingClips = async ({
-  sessionId: _sessionId,
+  sessionId,
   deps,
 }: UploadOptions): Promise<number> => {
   const {
@@ -111,12 +125,17 @@ export const uploadPendingClips = async ({
     readyToUpload: true,
     now: getNow(),
   })
-  if (pending.length === 0) {
+  const scopedPending =
+    sessionId != null
+      ? pending.filter((clip) => !clip.sessionId || clip.sessionId === sessionId)
+      : pending
+
+  if (scopedPending.length === 0) {
     return 0
   }
 
   let uploadedCount = 0
-  for (const clip of pending) {
+  for (const clip of scopedPending) {
     const uploaded = await uploadClip(clip, {
       initiateUpload: initiateUploadFn,
       finalizeUpload: finalizeUploadFn,
@@ -183,7 +202,7 @@ const uploadClip = async (
         clipSizeBytes: clip.sizeBytes,
       })
 
-      if (deps.uploadBlobViaApi && isLocalAzuriteUploadUrl(initiated.uploadUrl)) {
+      if (deps.uploadBlobViaApi && shouldUseApiUploadFallback(initiated.uploadUrl)) {
         const fallbackUpload = await deps.uploadBlobViaApi(clip.id, clip.blob, {
           contentType: clip.mimeType,
         })
@@ -199,7 +218,7 @@ const uploadClip = async (
         })
         etag = directUpload.etag
       } catch (directUploadError) {
-        if (!deps.uploadBlobViaApi || !isLocalAzuriteUploadUrl(initiated.uploadUrl)) {
+        if (!deps.uploadBlobViaApi || !shouldUseApiUploadFallback(initiated.uploadUrl)) {
           throw directUploadError
         }
         const fallbackUpload = await deps.uploadBlobViaApi(clip.id, clip.blob, {

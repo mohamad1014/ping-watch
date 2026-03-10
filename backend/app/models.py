@@ -9,6 +9,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -45,6 +46,11 @@ class DeviceModel(Base):
     user_id: Mapped[str | None] = mapped_column(
         ForeignKey("users.user_id"), index=True, nullable=True
     )
+    telegram_endpoint_id: Mapped[str | None] = mapped_column(
+        ForeignKey("notification_endpoints.endpoint_id"),
+        index=True,
+        nullable=True,
+    )
     label: Mapped[str | None] = mapped_column(String, nullable=True)
     telegram_chat_id: Mapped[str | None] = mapped_column(String, nullable=True)
     telegram_username: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -60,6 +66,24 @@ class UserModel(Base):
     user_id: Mapped[str] = mapped_column(String, primary_key=True)
     email: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class NotificationEndpointModel(Base):
+    __tablename__ = "notification_endpoints"
+    __table_args__ = (
+        CheckConstraint("provider = 'telegram'", name="ck_notification_endpoints_provider"),
+        UniqueConstraint("provider", "chat_id", name="uq_notification_endpoints_provider_chat"),
+    )
+
+    endpoint_id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.user_id"), index=True, nullable=True
+    )
+    provider: Mapped[str] = mapped_column(String, index=True)
+    chat_id: Mapped[str] = mapped_column(String, index=True)
+    telegram_username: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class AuthSessionModel(Base):

@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$scripts_dir/.." && pwd)
+workspace_root=$(cd "$repo_root/.." && pwd)
+base_branch="${1:-main}"
+
+require_command() {
+  local name="$1"
+  if ! command -v "$name" >/dev/null 2>&1; then
+    echo "missing required command: $name" >&2
+    exit 1
+  fi
+}
+
+ensure_branch_absent() {
+  local branch="$1"
+  if git -C "$repo_root" show-ref --verify --quiet "refs/heads/$branch"; then
+    echo "branch already exists locally: $branch" >&2
+    exit 1
+  fi
+}
+
+ensure_path_absent() {
+  local path="$1"
+  if [[ -e "$path" ]]; then
+    echo "worktree path already exists: $path" >&2
+    exit 1
+  fi
+}
+
+create_worktree() {
+  local branch="$1"
+  local path="$2"
+
+  ensure_branch_absent "$branch"
+  ensure_path_absent "$path"
+
+  echo "creating $branch -> $path"
+  # Equivalent command: git worktree add <path> -b <branch> <base_branch>
+  git -C "$repo_root" worktree add "$path" -b "$branch" "$base_branch"
+}
+
+require_command git
+
+current_branch=$(git -C "$repo_root" rev-parse --abbrev-ref HEAD)
+if [[ "$current_branch" != "$base_branch" ]]; then
+  echo "expected current branch '$base_branch' in $repo_root, found '$current_branch'" >&2
+  exit 1
+fi
+
+git -C "$repo_root" fetch origin "$base_branch"
+# Equivalent command from the repo root: git pull --ff-only
+git -C "$repo_root" pull --ff-only
+
+create_worktree "feature/pw-01-device-recipient-subscriptions" "$workspace_root/ping-watch-pw01"
+create_worktree "feature/pw-06-event-lifecycle-expansion" "$workspace_root/ping-watch-pw06"
+create_worktree "ops/pw-10-worker-structured-logs" "$workspace_root/ping-watch-pw10"
+create_worktree "docs/pw-11-runbooks-dashboard-baseline" "$workspace_root/ping-watch-pw11"
+create_worktree "ops/pw-12-cicd-rollback-automation" "$workspace_root/ping-watch-pw12"
+create_worktree "ops/pw-13-security-baseline" "$workspace_root/ping-watch-pw13"
+
+echo "wave 1 worktrees created successfully"

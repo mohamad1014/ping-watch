@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_HF_MODEL = "zai-org/GLM-4.6V-FP8:zai-org"
 DEFAULT_NVIDIA_MODEL = "nvidia/nemotron-nano-12b-v2-vl"
+DEFAULT_INFERENCE_TIMEOUT_SECONDS = 120.0
 
 HF_ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
 NVIDIA_INVOKE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
@@ -162,6 +163,29 @@ def build_nvidia_message_content(prompt: str, video_data_uri: str) -> list[dict]
             },
         },
     ]
+
+
+def _resolve_inference_timeout(timeout: float | None) -> float:
+    if timeout is not None:
+        try:
+            return max(1.0, float(timeout))
+        except (TypeError, ValueError):
+            return DEFAULT_INFERENCE_TIMEOUT_SECONDS
+
+    raw = os.environ.get("INFERENCE_TIMEOUT_SECONDS", str(DEFAULT_INFERENCE_TIMEOUT_SECONDS))
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        return DEFAULT_INFERENCE_TIMEOUT_SECONDS
+
+
+def _nvidia_read_timeout_retries() -> int:
+    raw = os.environ.get("NVIDIA_INFERENCE_TIMEOUT_RETRIES", "1")
+    try:
+        retries = int(raw)
+    except ValueError:
+        return 1
+    return max(0, min(retries, 5))
 
 
 def _to_data_uri(binary_data: bytes, mime_type: str) -> str:
@@ -479,7 +503,7 @@ def run_nvidia_inference(
     user_prompt: Optional[str] = None,
     prompt_override: Optional[str] = None,
     model: Optional[str] = None,
-    timeout: float = 60.0,
+    timeout: float | None = None,
     token: Optional[str] = None,
 ) -> InferenceResult:
     """Run primary NVIDIA video inference."""
@@ -489,6 +513,8 @@ def run_nvidia_inference(
     token = token or get_nvidia_token()
     model = model or DEFAULT_NVIDIA_MODEL
     prompt = prompt_override or build_prompt(user_prompt)
+    resolved_timeout = _resolve_inference_timeout(timeout)
+    max_attempts = _nvidia_read_timeout_retries() + 1
 
     normalized_mime = _normalize_video_mime(clip_mime)
 
@@ -523,43 +549,58 @@ def run_nvidia_inference(
         "Accept": "application/json",
     }
 
-    try:
-        response = httpx.post(
-            NVIDIA_INVOKE_URL,
-            headers=headers,
-            json=payload,
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        data = response.json()
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = httpx.post(
+                NVIDIA_INVOKE_URL,
+                headers=headers,
+                json=payload,
+                timeout=resolved_timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
 
-        choices = data.get("choices", [])
-        if not choices:
-            raise RuntimeError("No choices in API response")
+            choices = data.get("choices", [])
+            if not choices:
+                raise RuntimeError("No choices in API response")
 
-        message = choices[0].get("message", {})
-        response_text = _extract_response_text(message.get("content", ""))
+            message = choices[0].get("message", {})
+            response_text = _extract_response_text(message.get("content", ""))
 
-        parsed = parse_inference_response(response_text)
-        parsed.provider = "nvidia"
-        parsed.model = model
-        return parsed
+            parsed = parse_inference_response(response_text)
+            parsed.provider = "nvidia"
+            parsed.model = model
+            return parsed
 
-    except httpx.HTTPStatusError as exc:
-        logger.error(
-            "HTTP error during NVIDIA inference: %s - %s",
-            exc.response.status_code,
-            exc.response.text,
-        )
-        if exc.response.status_code == 401:
-            raise RuntimeError(
-                "Inference authentication failed (401 Unauthorized): "
-                "check NVIDIA_API_KEY/NV_API_KEY/K_API_KEY/kApiKey."
-            ) from exc
-        raise RuntimeError(f"NVIDIA inference API error: {exc.response.status_code}") from exc
-    except httpx.RequestError as exc:
-        logger.error("Request error during NVIDIA inference: %s", exc)
-        raise RuntimeError(f"NVIDIA inference request failed: {exc}") from exc
+        except httpx.ReadTimeout as exc:
+            if attempt < max_attempts:
+                logger.warning(
+                    "NVIDIA inference read timeout on attempt %s/%s (timeout=%ss): %s",
+                    attempt,
+                    max_attempts,
+                    resolved_timeout,
+                    exc,
+                )
+                continue
+            logger.error("Request error during NVIDIA inference: %s", exc)
+            raise RuntimeError(f"NVIDIA inference request failed: {exc}") from exc
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "HTTP error during NVIDIA inference: %s - %s",
+                exc.response.status_code,
+                exc.response.text,
+            )
+            if exc.response.status_code == 401:
+                raise RuntimeError(
+                    "Inference authentication failed (401 Unauthorized): "
+                    "check NVIDIA_API_KEY/NV_API_KEY/K_API_KEY/kApiKey."
+                ) from exc
+            raise RuntimeError(f"NVIDIA inference API error: {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            logger.error("Request error during NVIDIA inference: %s", exc)
+            raise RuntimeError(f"NVIDIA inference request failed: {exc}") from exc
+
+    raise RuntimeError("NVIDIA inference failed without response")
 
 
 def run_hf_inference(
@@ -567,7 +608,7 @@ def run_hf_inference(
     user_prompt: Optional[str] = None,
     prompt_override: Optional[str] = None,
     model: Optional[str] = None,
-    timeout: float = 60.0,
+    timeout: float | None = None,
     token: Optional[str] = None,
 ) -> InferenceResult:
     """Run Hugging Face image-based fallback inference."""
@@ -577,6 +618,7 @@ def run_hf_inference(
     token = token or get_hf_token()
     model = model or DEFAULT_HF_MODEL
     prompt = prompt_override or build_prompt(user_prompt)
+    resolved_timeout = _resolve_inference_timeout(timeout)
     content = build_hf_message_content(prompt, frame_data_uris)
 
     logger.info(
@@ -601,7 +643,7 @@ def run_hf_inference(
             HF_ROUTER_URL,
             headers=headers,
             json=payload,
-            timeout=timeout,
+            timeout=resolved_timeout,
         )
         response.raise_for_status()
         data = response.json()
@@ -642,7 +684,7 @@ def run_inference(
     frame_data_uris: Optional[list[str]] = None,
     model: Optional[str] = None,
     hf_model: Optional[str] = None,
-    timeout: float = 60.0,
+    timeout: float | None = None,
 ) -> InferenceResult:
     """Run inference with NVIDIA as primary and Hugging Face as fallback."""
     if not clip_data:
@@ -653,6 +695,7 @@ def run_inference(
     hf_token = _read_token(HF_TOKEN_ENV_VARS)
     nvidia_model = model or DEFAULT_NVIDIA_MODEL
     fallback_hf_model = hf_model or DEFAULT_HF_MODEL
+    resolved_timeout = _resolve_inference_timeout(timeout)
 
     if not nvidia_token and not hf_token:
         raise RuntimeError(
@@ -668,7 +711,7 @@ def run_inference(
             hf_token=hf_token,
             nvidia_model=nvidia_model,
             hf_model=fallback_hf_model,
-            timeout=timeout,
+            timeout=resolved_timeout,
         )
 
     clip_prompt = build_clip_analysis_prompt(user_prompt, normalized_rule_set)
@@ -682,7 +725,7 @@ def run_inference(
                 user_prompt=user_prompt,
                 prompt_override=clip_prompt,
                 model=nvidia_model,
-                timeout=timeout,
+                timeout=resolved_timeout,
                 token=nvidia_token,
             )
         except Exception as exc:
@@ -702,7 +745,7 @@ def run_inference(
             user_prompt=user_prompt,
             prompt_override=clip_prompt,
             model=fallback_hf_model,
-            timeout=timeout,
+            timeout=resolved_timeout,
             token=hf_token,
         )
 

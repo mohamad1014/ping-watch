@@ -60,11 +60,12 @@ Free tier has monthly allowance; paid tier raises limits and retention.
 
 ## Status
 
-Phase 2 complete: upload + event sync with retries/offline queue and background retry loop. Auth/credits are still pending.
+Private beta foundation is in place: monitoring/upload/inference scaffolding, auth + ownership enforcement, and frontend account/session flows are implemented. Remaining production hardening is tracked in `PLAN.md` (E5+).
 
 Production planning is tracked in `PLAN.md` under:
-- `Production readiness comparison (as of 2026-02-14)`
-- `12-week milestone plan (week-by-week)`
+- `Production Readiness Comparison`
+- `Epic Roadmap (feature-based)`
+- `Execution Queue (current)`
 
 ## Repo Layout (current)
 
@@ -89,12 +90,17 @@ Production planning is tracked in `PLAN.md` under:
 
 - `./scripts/dev-up` — start local dependencies.
 - `./scripts/dev` — run frontend + backend + worker together.
-- `./scripts/test-unit` — unit tests (frontend + backend).
+- `./scripts/test-unit` — unit tests (frontend + backend + worker).
 - `./scripts/test-integration` — API + DB integration tests.
 - `./scripts/test-e2e` — Playwright E2E suite.
 - `./scripts/test-all` — run all tests.
+- `./scripts/check-docs-consistency` — verify docs/script consistency for key commands.
+- `./scripts/clean-local` — remove local-only test/runtime artifacts.
+- `./scripts/create-wave1-worktrees` — create Wave 1 Git worktrees for parallel Codex execution.
+- `./scripts/sync-skills` — mirror `.codex/skills` to `.claude/skills`.
 - `./scripts/test-clip-flow` — rerun clip flow verification (worker decode fallback + critical E2E flow).
 - `./scripts/logs` — tail backend logs.
+- `docs/codex-parallel-workflow.md` — branch/worktree workflow for parallel Codex implementation.
 - `docs/worker-notification-logging.md` — notification/worker logging troubleshooting checklist.
 
 ## Getting Started (local)
@@ -128,6 +134,7 @@ Note: E2E/Playwright runs use a temp SQLite database for the backend; if you ove
 
 - `VITE_API_URL` — optional backend base URL override for the frontend. If unset, frontend uses `<current-host>:8000` (better for phone/LAN testing). Set explicitly when backend is on a different host/port.
 - `VITE_AUTH_REQUIRED` — when `true`, frontend obtains/stores a bearer token via `POST /auth/dev/login` and sends `Authorization: Bearer ...` on API requests.
+- `VITE_AUTH_AUTO_LOGIN` — when `true`, frontend can auto-bootstrap a dev auth token; set `false` to require explicit sign-in from the account panel.
 - `VITE_ALLOWED_HOSTS` — optional comma-separated extra hostnames allowed by the Vite dev server (useful for tunnel domains).
 - `VITE_POLL_INTERVAL_MS` — polling interval for event refresh (default 5000).
 - `VITE_UPLOAD_INTERVAL_MS` — polling interval for retrying pending uploads (default 10000).
@@ -149,6 +156,8 @@ Note: E2E/Playwright runs use a temp SQLite database for the backend; if you ove
 - `NOTIFY_WEBHOOK_URL` — optional webhook endpoint to receive JSON alert payloads for `should_notify=true` events.
 - `NOTIFY_WEBHOOK_SECRET` — optional static secret sent as `X-Ping-Watch-Webhook-Secret` header on webhook requests.
 - `NOTIFICATION_TIMEOUT_SECONDS` — outbound notification request timeout (default 10 seconds).
+- `INFERENCE_TIMEOUT_SECONDS` — timeout for NVIDIA/Hugging Face inference HTTP requests (default 120 seconds).
+- `NVIDIA_INFERENCE_TIMEOUT_RETRIES` — number of extra retries when NVIDIA inference hits read timeout (default 1; total attempts = retries + 1).
 - `WORKER_LOG_LEVEL` — worker log level (`DEBUG`, `INFO`, `WARNING`, ...). Set to `INFO` to see notification dispatch logs.
 - `WORKER_API_TOKEN` — optional bearer token used by worker callbacks (for example `POST /events/{event_id}/summary`) when `AUTH_REQUIRED=true`.
 
