@@ -154,6 +154,8 @@ Note: E2E/Playwright runs use a temp SQLite database for the backend; if you ove
 - `NOTIFY_WEBHOOK_URL` — optional webhook endpoint to receive JSON alert payloads for `should_notify=true` events.
 - `NOTIFY_WEBHOOK_SECRET` — optional static secret sent as `X-Ping-Watch-Webhook-Secret` header on webhook requests.
 - `NOTIFICATION_TIMEOUT_SECONDS` — outbound notification request timeout (default 10 seconds).
+- `INFERENCE_TIMEOUT_SECONDS` — timeout for NVIDIA/Hugging Face inference HTTP requests (default 120 seconds).
+- `NVIDIA_INFERENCE_TIMEOUT_RETRIES` — number of extra retries when NVIDIA inference hits read timeout (default 1; total attempts = retries + 1).
 - `WORKER_LOG_LEVEL` — worker log level (`DEBUG`, `INFO`, `WARNING`, ...). Set to `INFO` to see notification dispatch logs.
 - `WORKER_API_TOKEN` — optional bearer token used by worker callbacks (for example `POST /events/{event_id}/summary`) when `AUTH_REQUIRED=true`.
 

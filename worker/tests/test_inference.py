@@ -255,6 +255,50 @@ def test_run_inference_uses_hf_when_nvidia_token_missing(monkeypatch):
     assert mock_post.call_args.args[0] == inference.HF_ROUTER_URL
 
 
+def test_run_inference_retries_nvidia_read_timeout(monkeypatch):
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi_test")
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HF_API_TOKEN", raising=False)
+
+    nvidia_success = _mock_success_response(
+        '{"label": "person", "summary": "Recovered after retry", "confidence": 0.88}'
+    )
+    timeout_error = httpx.ReadTimeout("The read operation timed out")
+
+    with patch.object(httpx, "post", side_effect=[timeout_error, nvidia_success]) as mock_post:
+        result = inference.run_inference(
+            clip_data=b"webm-bytes",
+            clip_mime="video/webm",
+            frame_data_uris=["data:image/jpeg;base64,ZmFrZQ=="],
+        )
+
+    assert result.provider == "nvidia"
+    assert result.label == "person"
+    assert mock_post.call_count == 2
+    assert mock_post.call_args_list[0].args[0] == inference.NVIDIA_INVOKE_URL
+    assert mock_post.call_args_list[1].args[0] == inference.NVIDIA_INVOKE_URL
+
+
+def test_run_inference_uses_timeout_from_env(monkeypatch):
+    monkeypatch.setenv("NVIDIA_API_KEY", "nvapi_test")
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HF_API_TOKEN", raising=False)
+    monkeypatch.setenv("INFERENCE_TIMEOUT_SECONDS", "120")
+
+    mock_response = _mock_success_response(
+        '{"label": "motion", "summary": "Detected movement", "confidence": 0.7}'
+    )
+
+    with patch.object(httpx, "post", return_value=mock_response) as mock_post:
+        inference.run_inference(
+            clip_data=b"webm-bytes",
+            clip_mime="video/webm",
+            frame_data_uris=["data:image/jpeg;base64,ZmFrZQ=="],
+        )
+
+    assert mock_post.call_args.kwargs["timeout"] == 120.0
+
+
 def test_run_inference_raises_when_no_provider_credentials(monkeypatch):
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     monkeypatch.delenv("kApiKey", raising=False)
