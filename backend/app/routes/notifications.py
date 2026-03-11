@@ -15,12 +15,20 @@ from app.auth import get_request_user_id
 from app.db import get_db
 from app.store import (
     add_notification_endpoint_subscription_to_device,
+    create_notification_invite,
     create_telegram_link_attempt,
     get_device,
     get_notification_endpoint,
+    get_notification_endpoint_by_telegram_chat,
+    get_notification_invite,
+    get_notification_invite_by_token_hash,
     is_notification_endpoint_accessible_to_user,
+    list_notification_invites_for_device,
     list_notification_recipient_states_for_device,
+    mark_notification_invite_accepted,
+    mark_notification_invite_expired,
     remove_notification_endpoint_subscription_from_device,
+    revoke_notification_invite,
     get_telegram_target_for_device,
     get_telegram_link_attempt,
     get_telegram_link_attempt_by_token_hash,
@@ -114,6 +122,36 @@ class RecipientRemoveResponse(BaseModel):
     removed: bool
 
 
+class NotificationInviteResponse(BaseModel):
+    invite_id: str
+    device_id: str
+    status: str
+    invite_code: str | None = None
+    created_at: str
+    expires_at: str
+    accepted_at: str | None = None
+    revoked_at: str | None = None
+    recipient_chat_id: str | None = None
+    recipient_telegram_username: str | None = None
+
+
+class NotificationInviteListResponse(BaseModel):
+    device_id: str
+    invites: list[NotificationInviteResponse]
+
+
+class NotificationInviteCreateRequest(BaseModel):
+    device_id: str
+
+
+class NotificationInviteAcceptRequest(BaseModel):
+    invite_code: str
+
+
+class NotificationInviteAcceptResponse(TelegramLinkStartResponse):
+    device_id: str
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -166,6 +204,12 @@ def _require_accessible_endpoint(
     return endpoint
 
 
+def _refresh_invite_if_expired(db: Session, invite):
+    if invite.status == "pending" and _ensure_utc(invite.expires_at) < _utc_now():
+        return mark_notification_invite_expired(db, invite)
+    return invite
+
+
 def _recipient_state(
     endpoint,
     *,
@@ -181,12 +225,42 @@ def _recipient_state(
     )
 
 
+def _invite_state(
+    invite,
+    *,
+    endpoint=None,
+    invite_code: str | None = None,
+) -> NotificationInviteResponse:
+    return NotificationInviteResponse(
+        invite_id=invite.invite_id,
+        device_id=invite.device_id,
+        status=invite.status,
+        invite_code=invite_code,
+        created_at=_format_iso(invite.created_at),
+        expires_at=_format_iso(invite.expires_at),
+        accepted_at=_format_iso(invite.accepted_at) if invite.accepted_at else None,
+        revoked_at=_format_iso(invite.revoked_at) if invite.revoked_at else None,
+        recipient_chat_id=endpoint.chat_id if endpoint is not None else None,
+        recipient_telegram_username=(
+            endpoint.telegram_username if endpoint is not None else None
+        ),
+    )
+
+
 def _telegram_link_ttl_seconds() -> int:
     raw = os.environ.get("TELEGRAM_LINK_TOKEN_TTL_SECONDS", "600")
     try:
         return max(60, min(3600, int(raw)))
     except ValueError:
         return 600
+
+
+def _notification_invite_ttl_seconds() -> int:
+    raw = os.environ.get("NOTIFICATION_INVITE_TTL_SECONDS", "86400")
+    try:
+        return max(300, min(604800, int(raw)))
+    except ValueError:
+        return 86400
 
 
 def _normalize_absolute_url(value: str) -> str:
@@ -379,6 +453,18 @@ def _process_start_token(
         mark_telegram_link_attempt_expired(db, attempt)
         attempt = get_telegram_link_attempt(db, attempt.attempt_id) or attempt
 
+    invite = None
+    if attempt.invite_id:
+        invite = get_notification_invite(db, attempt.invite_id)
+        if invite is None:
+            logger.info(
+                "Telegram %s received token for missing invite on attempt %s",
+                source,
+                attempt.attempt_id,
+            )
+            return False
+        invite = _refresh_invite_if_expired(db, invite)
+
     if attempt.status == "linked":
         if send_user_feedback:
             _send_telegram_message(
@@ -392,6 +478,20 @@ def _process_start_token(
             attempt.attempt_id,
         )
         return True
+
+    if invite is not None and invite.status != "pending":
+        if send_user_feedback:
+            _send_telegram_message(
+                token,
+                chat_id_text,
+                "This invite is no longer active. Ask the owner to send a new invite.",
+            )
+        logger.info(
+            "Telegram %s received non-pending invite token for invite %s",
+            source,
+            invite.invite_id,
+        )
+        return False
 
     if attempt.status != "pending":
         if send_user_feedback:
@@ -407,6 +507,32 @@ def _process_start_token(
         )
         return False
 
+    invite = None
+    if attempt.invite_id:
+        invite = get_notification_invite(db, attempt.invite_id)
+        if invite is None:
+            logger.info(
+                "Telegram %s invite attempt %s is missing its invite record",
+                source,
+                attempt.attempt_id,
+            )
+            return False
+        invite = _refresh_invite_if_expired(db, invite)
+        if invite.status != "pending":
+            if send_user_feedback:
+                _send_telegram_message(
+                    token,
+                    chat_id_text,
+                    "This shared invite is no longer active. Ask the owner for a new invite.",
+                )
+            logger.info(
+                "Telegram %s rejected invite attempt %s with invite status=%s",
+                source,
+                attempt.attempt_id,
+                invite.status,
+            )
+            return False
+
     link_device_telegram_chat(
         db,
         device_id=attempt.device_id,
@@ -414,12 +540,30 @@ def _process_start_token(
         username=username,
         user_id=attempt.user_id,
     )
+    if invite is not None:
+        endpoint = get_notification_endpoint_by_telegram_chat(db, chat_id_text)
+        if endpoint is not None:
+            mark_notification_invite_accepted(
+                db,
+                invite,
+                recipient_user_id=attempt.user_id,
+                endpoint=endpoint,
+            )
     mark_telegram_link_attempt_linked(
         db,
         attempt,
         chat_id=chat_id_text,
         username=username,
     )
+    if invite is not None:
+        endpoint = get_notification_endpoint_by_telegram_chat(db, chat_id_text)
+        if endpoint is not None:
+            mark_notification_invite_accepted(
+                db,
+                invite,
+                recipient_user_id=attempt.user_id,
+                endpoint=endpoint,
+            )
     logger.info(
         "Linked Telegram chat %s to device %s via attempt %s",
         chat_id_text,
@@ -793,8 +937,17 @@ def telegram_link_status(
             attempt_id=attempt_id,
         )
 
+    attempt = get_telegram_link_attempt(db, attempt_id, user_id=user_id)
     device = get_device(db, device_id)
-    if device is None or (user_id is not None and device.user_id != user_id):
+    has_device_access = device is not None and (
+        user_id is None or device.user_id == user_id
+    )
+    has_invite_attempt_access = (
+        attempt is not None
+        and attempt.device_id == device_id
+        and getattr(attempt, "invite_id", None) is not None
+    )
+    if not has_device_access and not has_invite_attempt_access:
         return TelegramLinkStatusResponse(
             enabled=True,
             ready=False,
@@ -804,7 +957,6 @@ def telegram_link_status(
             attempt_id=attempt_id,
         )
 
-    attempt = get_telegram_link_attempt(db, attempt_id, user_id=user_id)
     if attempt is None or attempt.device_id != device_id:
         logger.info(
             "Telegram link status stale attempt for device=%s attempt_id=%s",
@@ -1019,6 +1171,145 @@ def telegram_targets(
         linked=bool(recipients),
         device_id=device_id,
         recipients=recipients,
+    )
+
+
+@router.get("/invites")
+def list_notification_invites(
+    device_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> NotificationInviteListResponse:
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
+    device = _require_owned_device(db=db, device_id=device_id, user_id=user_id)
+    invites = [_refresh_invite_if_expired(db, invite) for invite in list_notification_invites_for_device(
+        db,
+        device=device,
+    )]
+    return NotificationInviteListResponse(
+        device_id=device_id,
+        invites=[
+            _invite_state(
+                invite,
+                endpoint=(
+                    get_notification_endpoint(db, invite.accepted_endpoint_id)
+                    if invite.accepted_endpoint_id
+                    else None
+                ),
+            )
+            for invite in invites
+        ],
+    )
+
+
+@router.post("/invites")
+def create_device_notification_invite(
+    payload: NotificationInviteCreateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> NotificationInviteResponse:
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="authentication required")
+
+    device = _require_owned_device(db=db, device_id=payload.device_id, user_id=user_id)
+    invite_code = _generate_link_token()
+    invite = create_notification_invite(
+        db,
+        device=device,
+        owner_user_id=user_id,
+        token_hash=_hash_token(invite_code),
+        expires_at=_utc_now() + timedelta(seconds=_notification_invite_ttl_seconds()),
+    )
+    return _invite_state(invite, invite_code=invite_code)
+
+
+@router.post("/invites/accept")
+def accept_device_notification_invite(
+    payload: NotificationInviteAcceptRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> NotificationInviteAcceptResponse:
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
+    token = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        return NotificationInviteAcceptResponse(
+            enabled=False,
+            ready=False,
+            status="not_configured",
+            reason="Telegram bot token is not configured on the server.",
+            device_id="",
+        )
+
+    invite = get_notification_invite_by_token_hash(db, _hash_token(payload.invite_code.strip()))
+    if invite is None:
+        raise HTTPException(status_code=404, detail="notification invite not found")
+    invite = _refresh_invite_if_expired(db, invite)
+    if invite.status != "pending":
+        raise HTTPException(status_code=409, detail="notification invite is no longer active")
+    if user_id is not None and invite.owner_user_id == user_id:
+        raise HTTPException(status_code=400, detail="device owner cannot accept own invite")
+
+    connect_token = _generate_link_token()
+    connect_url = _build_connect_url(connect_token)
+    if not connect_url:
+        return NotificationInviteAcceptResponse(
+            enabled=True,
+            ready=False,
+            status="error",
+            reason="Telegram onboarding URL is not configured.",
+            device_id=invite.device_id,
+        )
+
+    expires_at = min(
+        _utc_now() + timedelta(seconds=_telegram_link_ttl_seconds()),
+        _ensure_utc(invite.expires_at),
+    )
+    attempt = create_telegram_link_attempt(
+        db,
+        device_id=invite.device_id,
+        user_id=user_id,
+        invite_id=invite.invite_id,
+        token_hash=_hash_token(connect_token),
+        expires_at=expires_at,
+    )
+    return NotificationInviteAcceptResponse(
+        enabled=True,
+        ready=False,
+        status="pending",
+        reason="Open Telegram and send /start from the bot chat to accept this invite.",
+        attempt_id=attempt.attempt_id,
+        connect_url=connect_url,
+        expires_at=expires_at.isoformat(),
+        link_code=connect_token,
+        fallback_command=f"/start {connect_token}",
+        device_id=invite.device_id,
+    )
+
+
+@router.delete("/invites")
+def revoke_device_notification_invite(
+    device_id: str,
+    invite_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> NotificationInviteResponse:
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
+    _require_owned_device(db=db, device_id=device_id, user_id=user_id)
+    invite = get_notification_invite(db, invite_id)
+    if invite is None or invite.device_id != device_id:
+        raise HTTPException(status_code=404, detail="notification invite not found")
+    if user_id is not None and invite.owner_user_id != user_id:
+        raise HTTPException(status_code=404, detail="notification invite not found")
+
+    invite = revoke_notification_invite(db, invite)
+    return _invite_state(
+        invite,
+        endpoint=(
+            get_notification_endpoint(db, invite.accepted_endpoint_id)
+            if invite.accepted_endpoint_id
+            else None
+        ),
     )
 
 

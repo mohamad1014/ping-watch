@@ -10,6 +10,7 @@ from app.models import (
     DeviceModel,
     DeviceNotificationSubscriptionModel,
     EventModel,
+    NotificationInviteModel,
     NotificationEndpointModel,
     SessionModel,
     TelegramLinkAttemptModel,
@@ -24,6 +25,7 @@ def _now() -> datetime:
 def reset_store(db: Session) -> None:
     db.execute(delete(AuthSessionModel))
     db.execute(delete(TelegramLinkAttemptModel))
+    db.execute(delete(NotificationInviteModel))
     db.execute(delete(EventModel))
     db.execute(delete(SessionModel))
     db.execute(delete(DeviceNotificationSubscriptionModel))
@@ -264,6 +266,16 @@ def get_notification_endpoint(
     return db.get(NotificationEndpointModel, endpoint_id)
 
 
+def get_notification_endpoint_by_telegram_chat(
+    db: Session, chat_id: str
+) -> Optional[NotificationEndpointModel]:
+    stmt = select(NotificationEndpointModel).where(
+        NotificationEndpointModel.provider == "telegram",
+        NotificationEndpointModel.chat_id == chat_id,
+    )
+    return db.scalar(stmt)
+
+
 def get_notification_endpoints_for_user(
     db: Session, user_id: str
 ) -> list[NotificationEndpointModel]:
@@ -394,6 +406,114 @@ def remove_notification_endpoint_subscription_from_device(
     return True
 
 
+def create_notification_invite(
+    db: Session,
+    *,
+    device: DeviceModel,
+    owner_user_id: str,
+    token_hash: str,
+    expires_at: datetime,
+) -> NotificationInviteModel:
+    record = NotificationInviteModel(
+        invite_id=str(uuid4()),
+        device_id=device.device_id,
+        owner_user_id=owner_user_id,
+        recipient_user_id=None,
+        accepted_endpoint_id=None,
+        token_hash=token_hash,
+        status="pending",
+        created_at=_now(),
+        expires_at=_to_utc(expires_at),
+        accepted_at=None,
+        revoked_at=None,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def get_notification_invite(
+    db: Session, invite_id: str
+) -> Optional[NotificationInviteModel]:
+    return db.get(NotificationInviteModel, invite_id)
+
+
+def get_notification_invite_by_token_hash(
+    db: Session, token_hash: str
+) -> Optional[NotificationInviteModel]:
+    stmt = select(NotificationInviteModel).where(
+        NotificationInviteModel.token_hash == token_hash
+    )
+    return db.scalar(stmt)
+
+
+def list_notification_invites_for_device(
+    db: Session, *, device: DeviceModel
+) -> list[NotificationInviteModel]:
+    stmt = (
+        select(NotificationInviteModel)
+        .where(NotificationInviteModel.device_id == device.device_id)
+        .order_by(
+            NotificationInviteModel.created_at.desc(),
+            NotificationInviteModel.invite_id.desc(),
+        )
+    )
+    return list(db.scalars(stmt))
+
+
+def mark_notification_invite_expired(
+    db: Session, invite: NotificationInviteModel
+) -> NotificationInviteModel:
+    invite.status = "expired"
+    db.commit()
+    db.refresh(invite)
+    return invite
+
+
+def mark_notification_invite_accepted(
+    db: Session,
+    invite: NotificationInviteModel,
+    *,
+    recipient_user_id: str | None,
+    endpoint: NotificationEndpointModel,
+) -> NotificationInviteModel:
+    invite.status = "accepted"
+    invite.recipient_user_id = recipient_user_id
+    invite.accepted_endpoint_id = endpoint.endpoint_id
+    invite.accepted_at = _now()
+    invite.revoked_at = None
+    db.commit()
+    db.refresh(invite)
+    return invite
+
+
+def revoke_notification_invite(
+    db: Session, invite: NotificationInviteModel
+) -> NotificationInviteModel:
+    if (
+        invite.accepted_endpoint_id is not None
+        and invite.status == "accepted"
+    ):
+        endpoint = get_notification_endpoint(db, invite.accepted_endpoint_id)
+        device = get_device(db, invite.device_id)
+        if endpoint is not None and device is not None:
+            subscription = _get_device_notification_subscription(
+                db,
+                device_id=device.device_id,
+                endpoint_id=endpoint.endpoint_id,
+            )
+            if subscription is not None:
+                db.delete(subscription)
+                db.flush()
+
+    invite.status = "revoked"
+    invite.revoked_at = _now()
+    db.commit()
+    db.refresh(invite)
+    return invite
+
+
 def get_telegram_target_for_device(
     db: Session, device: DeviceModel
 ) -> tuple[Optional[str], Optional[str]]:
@@ -409,6 +529,7 @@ def create_telegram_link_attempt(
     *,
     device_id: str,
     user_id: Optional[str],
+    invite_id: Optional[str] = None,
     token_hash: str,
     expires_at: datetime,
 ) -> TelegramLinkAttemptModel:
@@ -416,6 +537,7 @@ def create_telegram_link_attempt(
         attempt_id=str(uuid4()),
         device_id=device_id,
         user_id=user_id,
+        invite_id=invite_id,
         token_hash=token_hash,
         status="pending",
         created_at=_now(),
