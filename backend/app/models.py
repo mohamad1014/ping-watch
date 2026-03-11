@@ -176,6 +176,48 @@ class EventModel(Base):
     detected_actions: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
 
     session: Mapped[SessionModel] = relationship(back_populates="events")
+    notification_attempts: Mapped[list["NotificationAttemptModel"]] = relationship(
+        back_populates="event", cascade="all, delete-orphan"
+    )
+
+
+class NotificationAttemptModel(Base):
+    __tablename__ = "notification_attempts"
+    __table_args__ = (
+        CheckConstraint(
+            "provider IN ('telegram', 'webhook')",
+            name="ck_notification_attempts_provider",
+        ),
+        CheckConstraint(
+            "status IN ('succeeded', 'failed')",
+            name="ck_notification_attempts_status",
+        ),
+        CheckConstraint(
+            "attempt_number >= 1",
+            name="ck_notification_attempts_attempt_number",
+        ),
+        CheckConstraint(
+            "max_attempts >= attempt_number",
+            name="ck_notification_attempts_max_attempts",
+        ),
+    )
+
+    attempt_id: Mapped[str] = mapped_column(String, primary_key=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.event_id"), index=True)
+    provider: Mapped[str] = mapped_column(String, index=True)
+    recipient: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, index=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retryable: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    next_retry_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    event: Mapped[EventModel] = relationship(back_populates="notification_attempts")
 
 
 class TelegramLinkAttemptModel(Base):

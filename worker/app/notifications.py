@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -49,6 +52,22 @@ def _notification_timeout() -> float:
         return 10.0
 
 
+def _notification_max_retries() -> int:
+    raw = os.environ.get("NOTIFICATION_MAX_RETRIES", "2")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 2
+
+
+def _notification_retry_backoff_seconds() -> float:
+    raw = os.environ.get("NOTIFICATION_RETRY_BACKOFF_SECONDS", "0")
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 0.0
+
+
 def _api_auth_headers() -> dict[str, str] | None:
     token = (os.environ.get("WORKER_API_TOKEN") or "").strip()
     if not token:
@@ -67,6 +86,146 @@ def _truncate(value: str, limit: int = 300) -> str:
     if len(value) <= limit:
         return value
     return value[:limit] + "...(truncated)"
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _format_dt(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat()
+
+
+def _sanitize_webhook_recipient(webhook_url: str) -> str:
+    parsed = urlsplit(webhook_url)
+    hostname = parsed.hostname or ""
+    if parsed.port is not None:
+        hostname = f"{hostname}:{parsed.port}"
+    return urlunsplit((parsed.scheme, hostname, parsed.path, "", ""))
+
+
+def _is_retryable_exception(exc: Exception) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500 or exc.response.status_code == 429
+    return isinstance(exc, httpx.RequestError)
+
+
+def _build_failure_reason(provider: str, exc: Exception) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return _truncate(
+            f"{provider} status {exc.response.status_code}: {exc.response.text.strip()}"
+        )
+    return _truncate(f"{provider} request error: {exc}")
+
+
+def _record_notification_attempt(
+    payload: NotificationPayload,
+    *,
+    provider: str,
+    recipient: str,
+    status: str,
+    failure_reason: str | None,
+    retryable: bool,
+    attempt_number: int,
+    max_attempts: int,
+    attempted_at: datetime,
+    finished_at: datetime,
+    next_retry_at: datetime | None,
+) -> None:
+    try:
+        response = httpx.post(
+            f"{_api_base_url()}/events/{payload.event_id}/notification-attempts",
+            json={
+                "provider": provider,
+                "recipient": recipient,
+                "status": status,
+                "failure_reason": failure_reason,
+                "retryable": retryable,
+                "attempt_number": attempt_number,
+                "max_attempts": max_attempts,
+                "attempted_at": _format_dt(attempted_at),
+                "finished_at": _format_dt(finished_at),
+                "next_retry_at": _format_dt(next_retry_at),
+            },
+            headers=_api_auth_headers(),
+            timeout=_notification_timeout(),
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        logger.warning(
+            "Failed to record notification attempt for event %s provider %s recipient %s: %s",
+            payload.event_id,
+            provider,
+            recipient,
+            exc,
+        )
+
+
+def _deliver_with_retries(
+    payload: NotificationPayload,
+    *,
+    provider: str,
+    recipient: str,
+    send_once,
+) -> bool:
+    max_attempts = _notification_max_retries() + 1
+    retry_delay_seconds = _notification_retry_backoff_seconds()
+
+    for attempt_number in range(1, max_attempts + 1):
+        attempted_at = _utc_now()
+        try:
+            send_once()
+            finished_at = _utc_now()
+            _record_notification_attempt(
+                payload,
+                provider=provider,
+                recipient=recipient,
+                status="succeeded",
+                failure_reason=None,
+                retryable=False,
+                attempt_number=attempt_number,
+                max_attempts=max_attempts,
+                attempted_at=attempted_at,
+                finished_at=finished_at,
+                next_retry_at=None,
+            )
+            return True
+        except Exception as exc:
+            finished_at = _utc_now()
+            retryable = _is_retryable_exception(exc) and attempt_number < max_attempts
+            next_retry_at = (
+                finished_at + timedelta(seconds=retry_delay_seconds)
+                if retryable
+                else None
+            )
+            _record_notification_attempt(
+                payload,
+                provider=provider,
+                recipient=recipient,
+                status="failed",
+                failure_reason=_build_failure_reason(provider, exc),
+                retryable=retryable,
+                attempt_number=attempt_number,
+                max_attempts=max_attempts,
+                attempted_at=attempted_at,
+                finished_at=finished_at,
+                next_retry_at=next_retry_at,
+            )
+            if not retryable:
+                raise
+            logger.warning(
+                "Retrying %s notification for event %s recipient %s after attempt %s/%s",
+                provider,
+                payload.event_id,
+                recipient,
+                attempt_number,
+                max_attempts,
+            )
+            if retry_delay_seconds > 0:
+                time.sleep(retry_delay_seconds)
+    return False
 
 
 def _build_alert_text(payload: NotificationPayload) -> str:
@@ -140,6 +299,58 @@ def _resolve_chat_ids_for_payload(payload: NotificationPayload) -> list[str]:
     return []
 
 
+def _send_telegram_video_once(
+    payload: NotificationPayload,
+    *,
+    token: str,
+    base_url: str,
+    timeout: float,
+    chat_id: str,
+    caption: str,
+) -> None:
+    endpoint = f"{base_url}/bot{token}/sendVideo"
+    filename = f"clip-{payload.event_id}.webm"
+    mime = _normalize_video_mime(payload.clip_mime)
+    response = httpx.post(
+        endpoint,
+        data={
+            "chat_id": chat_id,
+            "caption": caption,
+            "supports_streaming": "true",
+        },
+        files={
+            "video": (
+                filename,
+                payload.clip_data,
+                mime,
+            )
+        },
+        timeout=timeout,
+    )
+    response.raise_for_status()
+
+
+def _send_telegram_text_once(
+    *,
+    token: str,
+    base_url: str,
+    timeout: float,
+    chat_id: str,
+    caption: str,
+) -> None:
+    endpoint = f"{base_url}/bot{token}/sendMessage"
+    response = httpx.post(
+        endpoint,
+        json={
+            "chat_id": chat_id,
+            "text": caption,
+            "disable_web_page_preview": True,
+        },
+        timeout=timeout,
+    )
+    response.raise_for_status()
+
+
 def _send_telegram_notification(payload: NotificationPayload) -> bool:
     token = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
     chat_ids = _resolve_chat_ids_for_payload(payload)
@@ -167,28 +378,25 @@ def _send_telegram_notification(payload: NotificationPayload) -> bool:
                 len(payload.clip_data),
             )
             try:
-                endpoint = f"{base_url}/bot{token}/sendVideo"
-                filename = f"clip-{payload.event_id}.webm"
-                mime = _normalize_video_mime(payload.clip_mime)
-                response = httpx.post(
-                    endpoint,
-                    data={
-                        "chat_id": chat_id,
-                        "caption": caption,
-                        "supports_streaming": "true",
-                    },
-                    files={
-                        "video": (
-                            filename,
-                            payload.clip_data,
-                            mime,
-                        )
-                    },
-                    timeout=timeout,
+                delivered = _deliver_with_retries(
+                    payload,
+                    provider="telegram",
+                    recipient=chat_id,
+                    send_once=lambda: _send_telegram_video_once(
+                        payload,
+                        token=token,
+                        base_url=base_url,
+                        timeout=timeout,
+                        chat_id=chat_id,
+                        caption=caption,
+                    ),
                 )
-                response.raise_for_status()
-                logger.info("Telegram video alert sent for event %s to chat %s", payload.event_id, chat_id)
-                delivered = True
+                if delivered:
+                    logger.info(
+                        "Telegram video alert sent for event %s to chat %s",
+                        payload.event_id,
+                        chat_id,
+                    )
                 continue
             except httpx.HTTPStatusError as exc:
                 logger.error(
@@ -208,21 +416,27 @@ def _send_telegram_notification(payload: NotificationPayload) -> bool:
                 )
                 continue
 
-        endpoint = f"{base_url}/bot{token}/sendMessage"
         logger.info("Sending Telegram text alert for event %s to chat %s", payload.event_id, chat_id)
         try:
-            response = httpx.post(
-                endpoint,
-                json={
-                    "chat_id": chat_id,
-                    "text": caption,
-                    "disable_web_page_preview": True,
-                },
-                timeout=timeout,
+            sent = _deliver_with_retries(
+                payload,
+                provider="telegram",
+                recipient=chat_id,
+                send_once=lambda: _send_telegram_text_once(
+                    token=token,
+                    base_url=base_url,
+                    timeout=timeout,
+                    chat_id=chat_id,
+                    caption=caption,
+                ),
             )
-            response.raise_for_status()
-            logger.info("Telegram text alert sent for event %s to chat %s", payload.event_id, chat_id)
-            delivered = True
+            if sent:
+                logger.info(
+                    "Telegram text alert sent for event %s to chat %s",
+                    payload.event_id,
+                    chat_id,
+                )
+                delivered = True
         except httpx.HTTPStatusError as exc:
             logger.error(
                 "Telegram text alert failed for event %s chat %s: status=%s body=%s",
@@ -256,30 +470,36 @@ def _send_webhook_notification(payload: NotificationPayload) -> bool:
 
     logger.info("Sending webhook alert for event %s", payload.event_id)
     try:
-        response = httpx.post(
-            webhook_url,
-            json={
-                "event_id": payload.event_id,
-                "session_id": payload.session_id,
-                "should_notify": payload.should_notify,
-                "label": payload.label,
-                "confidence": payload.confidence,
-                "summary": payload.summary,
-                "alert_reason": payload.alert_reason,
-                "matched_rules": payload.matched_rules,
-                "detected_entities": payload.detected_entities,
-                "detected_actions": payload.detected_actions,
-                "inference_provider": payload.inference_provider,
-                "inference_model": payload.inference_model,
-                "clip_uri": payload.clip_uri,
-                "clip_mime": _normalize_video_mime(payload.clip_mime),
-            },
-            headers=headers,
-            timeout=timeout,
+        delivered = _deliver_with_retries(
+            payload,
+            provider="webhook",
+            recipient=_sanitize_webhook_recipient(webhook_url),
+            send_once=lambda: httpx.post(
+                webhook_url,
+                json={
+                    "event_id": payload.event_id,
+                    "session_id": payload.session_id,
+                    "should_notify": payload.should_notify,
+                    "label": payload.label,
+                    "confidence": payload.confidence,
+                    "summary": payload.summary,
+                    "alert_reason": payload.alert_reason,
+                    "matched_rules": payload.matched_rules,
+                    "detected_entities": payload.detected_entities,
+                    "detected_actions": payload.detected_actions,
+                    "inference_provider": payload.inference_provider,
+                    "inference_model": payload.inference_model,
+                    "clip_uri": payload.clip_uri,
+                    "clip_mime": _normalize_video_mime(payload.clip_mime),
+                },
+                headers=headers,
+                timeout=timeout,
+            ).raise_for_status(),
         )
-        response.raise_for_status()
-        logger.info("Webhook alert sent for event %s", payload.event_id)
-        return True
+        if delivered:
+            logger.info("Webhook alert sent for event %s", payload.event_id)
+            return True
+        return False
     except httpx.HTTPStatusError as exc:
         logger.error(
             "Webhook alert failed for event %s: status=%s body=%s",

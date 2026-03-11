@@ -34,9 +34,12 @@ def test_send_outbound_notifications_posts_webhook(monkeypatch):
 
     assert result["webhook_sent"] is True
     assert result["telegram_sent"] is False
-    mock_post.assert_called_once()
-    assert mock_post.call_args.args[0] == "https://example.com/hook"
-    body = mock_post.call_args.kwargs["json"]
+    delivery_calls = [
+        call for call in mock_post.call_args_list if "notification-attempts" not in call.args[0]
+    ]
+    assert len(delivery_calls) == 1
+    assert delivery_calls[0].args[0] == "https://example.com/hook"
+    body = delivery_calls[0].kwargs["json"]
     assert body["event_id"] == "evt-1"
     assert body["summary"] == "Person entered the front door"
     assert body["should_notify"] is True
@@ -93,9 +96,12 @@ def test_send_outbound_notifications_posts_telegram_video(monkeypatch):
         headers=None,
         timeout=10,
     )
-    mock_post.assert_called_once()
-    assert mock_post.call_args.args[0] == "https://api.telegram.org/botbot-token/sendVideo"
-    files = mock_post.call_args.kwargs["files"]
+    delivery_calls = [
+        call for call in mock_post.call_args_list if "notification-attempts" not in call.args[0]
+    ]
+    assert len(delivery_calls) == 1
+    assert delivery_calls[0].args[0] == "https://api.telegram.org/botbot-token/sendVideo"
+    files = delivery_calls[0].kwargs["files"]
     assert files["video"][0].startswith("clip-evt-2")
     assert files["video"][2] == "video/webm"
 
@@ -152,8 +158,11 @@ def test_send_outbound_notifications_fans_out_to_all_recipient_chat_ids(monkeypa
         headers=None,
         timeout=10,
     )
-    assert mock_post.call_count == 2
-    chat_ids = [call.kwargs["data"]["chat_id"] for call in mock_post.call_args_list]
+    delivery_calls = [
+        call for call in mock_post.call_args_list if "notification-attempts" not in call.args[0]
+    ]
+    assert len(delivery_calls) == 2
+    chat_ids = [call.kwargs["data"]["chat_id"] for call in delivery_calls]
     assert chat_ids == ["chat-a", "chat-b"]
 
 
@@ -331,3 +340,49 @@ def test_send_outbound_notifications_does_not_use_legacy_chat_id_fallback(monkey
         timeout=10,
     )
     mock_post.assert_not_called()
+
+
+def test_send_outbound_notifications_retries_webhook_request_errors(monkeypatch):
+    monkeypatch.setenv("NOTIFY_WEBHOOK_URL", "https://example.com/hook")
+    monkeypatch.setenv("NOTIFICATION_MAX_RETRIES", "1")
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    attempts = {"count": 0}
+
+    def fake_post(url, **kwargs):
+        if url == "https://example.com/hook":
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise httpx.ConnectError("network down", request=httpx.Request("POST", url))
+            response = MagicMock()
+            response.raise_for_status = MagicMock()
+            return response
+
+        if url == "http://localhost:8000/events/evt-webhook-retry/notification-attempts":
+            response = MagicMock()
+            response.raise_for_status = MagicMock()
+            return response
+
+        raise AssertionError(f"unexpected URL {url}")
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    payload = NotificationPayload(
+        event_id="evt-webhook-retry",
+        session_id="sess-3",
+        summary="Webhook retry",
+        label="motion",
+        confidence=0.5,
+        alert_reason="Matched rule",
+        inference_provider="nvidia",
+        inference_model="nvidia/nemotron-nano-12b-v2-vl",
+        clip_uri=None,
+        clip_mime="video/webm",
+        clip_data=b"fake",
+    )
+
+    result = send_outbound_notifications(payload)
+
+    assert result["telegram_sent"] is False
+    assert result["webhook_sent"] is True
+    assert attempts["count"] == 2
