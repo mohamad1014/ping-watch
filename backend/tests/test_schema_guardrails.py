@@ -186,6 +186,93 @@ def test_ensure_schema_compatible_raises_when_subscription_table_missing(tmp_pat
         ensure_schema_compatible(engine)
 
 
+def test_ensure_schema_compatible_raises_when_notification_attempts_table_missing(tmp_path):
+    db_path = tmp_path / "notification-attempts-old.db"
+    engine = create_engine(f"sqlite:///{db_path}", future=True)
+
+    metadata = sa.MetaData()
+    sa.Table(
+        "events",
+        metadata,
+        sa.Column("event_id", sa.String(), primary_key=True),
+        sa.Column("session_id", sa.String(), nullable=False),
+        sa.Column("user_id", sa.String(), nullable=True),
+        sa.Column("device_id", sa.String(), nullable=False),
+        sa.Column("status", sa.String(), nullable=False),
+        sa.Column("trigger_type", sa.String(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("duration_seconds", sa.Float(), nullable=False),
+        sa.Column("clip_uri", sa.String(), nullable=False),
+        sa.Column("clip_mime", sa.String(), nullable=False),
+        sa.Column("clip_size_bytes", sa.Integer(), nullable=False),
+        sa.Column("clip_container", sa.String(), nullable=True),
+        sa.Column("clip_blob_name", sa.String(), nullable=True),
+        sa.Column("clip_uploaded_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("clip_etag", sa.String(), nullable=True),
+        sa.Column("queue_job_id", sa.String(), nullable=True),
+        sa.Column("enqueued_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("enqueue_attempt_count", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("summary", sa.String(), nullable=True),
+        sa.Column("label", sa.String(), nullable=True),
+        sa.Column("confidence", sa.Float(), nullable=True),
+        sa.Column("inference_provider", sa.String(), nullable=True),
+        sa.Column("inference_model", sa.String(), nullable=True),
+        sa.Column("should_notify", sa.Boolean(), nullable=True),
+        sa.Column("alert_reason", sa.String(), nullable=True),
+        sa.Column("matched_rules", sa.JSON(), nullable=True),
+        sa.Column("detected_entities", sa.JSON(), nullable=True),
+        sa.Column("detected_actions", sa.JSON(), nullable=True),
+    )
+    sa.Table(
+        "sessions",
+        metadata,
+        sa.Column("session_id", sa.String(), primary_key=True),
+        sa.Column("device_id", sa.String(), nullable=False),
+        sa.Column("user_id", sa.String(), nullable=True),
+        sa.Column("status", sa.String(), nullable=False),
+        sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("stopped_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    sa.Table(
+        "devices",
+        metadata,
+        sa.Column("device_id", sa.String(), primary_key=True),
+        sa.Column("user_id", sa.String(), nullable=True),
+        sa.Column("telegram_chat_id", sa.String(), nullable=True),
+        sa.Column("telegram_username", sa.String(), nullable=True),
+        sa.Column("telegram_linked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("label", sa.String(), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    sa.Table(
+        "device_notification_subscriptions",
+        metadata,
+        sa.Column("subscription_id", sa.String(), primary_key=True),
+        sa.Column("device_id", sa.String(), nullable=False),
+        sa.Column("endpoint_id", sa.String(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    sa.Table(
+        "notification_invites",
+        metadata,
+        sa.Column("invite_id", sa.String(), primary_key=True),
+        sa.Column("device_id", sa.String(), nullable=False),
+        sa.Column("owner_user_id", sa.String(), nullable=False),
+        sa.Column("recipient_user_id", sa.String(), nullable=True),
+        sa.Column("accepted_endpoint_id", sa.String(), nullable=True),
+        sa.Column("token_hash", sa.String(), nullable=False),
+        sa.Column("status", sa.String(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("accepted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    metadata.create_all(engine)
+
+    with pytest.raises(RuntimeError, match="notification_attempts"):
+        ensure_schema_compatible(engine)
+
+
 def test_alembic_upgrade_head_recovers_from_stale_wave1_revision(tmp_path):
     repo_root = Path(__file__).resolve().parents[2]
     backend_dir = repo_root / "backend"

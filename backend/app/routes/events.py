@@ -21,13 +21,16 @@ from app.db import get_db
 from app.queue import enqueue_inference_job
 from app.store import (
     create_event,
+    create_notification_attempt,
     event_to_dict,
     get_event,
     get_session,
     list_events,
+    list_notification_attempts,
     mark_event_enqueue_attempt,
     mark_event_clip_uploaded,
     mark_event_clip_uploaded_via_local_api,
+    notification_attempt_to_dict,
     update_event_failure,
     update_event_summary,
 )
@@ -62,6 +65,19 @@ class EventSummaryRequest(BaseModel):
 class EventFailureRequest(BaseModel):
     error_message: str
     error_type: str | None = None
+
+
+class NotificationAttemptRequest(BaseModel):
+    provider: str
+    recipient: str
+    status: str
+    failure_reason: str | None = None
+    retryable: bool
+    attempt_number: int
+    max_attempts: int
+    attempted_at: datetime
+    finished_at: datetime
+    next_retry_at: datetime | None = None
 
 
 class InitiateUploadRequest(BaseModel):
@@ -332,6 +348,44 @@ async def update_event_failure_endpoint(
     if record is None:
         raise HTTPException(status_code=404, detail="event not found")
     return event_to_dict(record)
+
+
+@router.post("/{event_id}/notification-attempts")
+async def create_notification_attempt_endpoint(
+    event_id: str,
+    payload: NotificationAttemptRequest,
+    db: Session = Depends(get_db),
+):
+    record = create_notification_attempt(
+        db,
+        event_id=event_id,
+        provider=payload.provider,
+        recipient=payload.recipient,
+        status=payload.status,
+        failure_reason=payload.failure_reason,
+        retryable=payload.retryable,
+        attempt_number=payload.attempt_number,
+        max_attempts=payload.max_attempts,
+        attempted_at=payload.attempted_at,
+        finished_at=payload.finished_at,
+        next_retry_at=payload.next_retry_at,
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail="event not found")
+    return notification_attempt_to_dict(record)
+
+
+@router.get("/{event_id}/notification-attempts")
+async def list_notification_attempts_endpoint(
+    event_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
+    records = list_notification_attempts(db, event_id=event_id, user_id=user_id)
+    if records is None:
+        raise HTTPException(status_code=404, detail="event not found")
+    return [notification_attempt_to_dict(record) for record in records]
 
 
 @router.get("/{event_id}/summary")

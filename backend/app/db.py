@@ -63,6 +63,20 @@ _REQUIRED_NOTIFICATION_INVITES_COLUMNS = {
 _REQUIRED_TELEGRAM_LINK_ATTEMPT_COLUMNS = {
     "invite_id",
 }
+_REQUIRED_NOTIFICATION_ATTEMPTS_COLUMNS = {
+    "attempt_id",
+    "event_id",
+    "provider",
+    "recipient",
+    "status",
+    "failure_reason",
+    "retryable",
+    "attempt_number",
+    "max_attempts",
+    "attempted_at",
+    "finished_at",
+    "next_retry_at",
+}
 _REQUIRED_SESSIONS_COLUMNS = {
     "user_id",
 }
@@ -137,6 +151,22 @@ def ensure_schema_compatible(engine: Engine) -> None:
                 "Database schema is out of date; run `cd backend && .venv/bin/alembic upgrade head` "
                 f"(missing columns on `telegram_link_attempts`: {', '.join(missing)})"
             )
+
+    if "notification_attempts" not in table_names:
+        raise RuntimeError(
+            "Database schema is out of date; run `cd backend && .venv/bin/alembic upgrade head` "
+            "(missing tables: notification_attempts)"
+        )
+
+    attempt_columns = {
+        col["name"] for col in inspector.get_columns("notification_attempts")
+    }
+    missing = sorted(_REQUIRED_NOTIFICATION_ATTEMPTS_COLUMNS - attempt_columns)
+    if missing:
+        raise RuntimeError(
+            "Database schema is out of date; run `cd backend && .venv/bin/alembic upgrade head` "
+            f"(missing columns on `notification_attempts`: {', '.join(missing)})"
+        )
 
     if "sessions" in table_names:
         session_columns = {col["name"] for col in inspector.get_columns("sessions")}

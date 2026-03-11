@@ -11,6 +11,7 @@ from app.models import (
     DeviceNotificationSubscriptionModel,
     EventModel,
     NotificationInviteModel,
+    NotificationAttemptModel,
     NotificationEndpointModel,
     SessionModel,
     TelegramLinkAttemptModel,
@@ -25,6 +26,8 @@ def _now() -> datetime:
 def reset_store(db: Session) -> None:
     db.execute(delete(AuthSessionModel))
     db.execute(delete(TelegramLinkAttemptModel))
+    db.execute(delete(NotificationInviteModel))
+    db.execute(delete(NotificationAttemptModel))
     db.execute(delete(NotificationInviteModel))
     db.execute(delete(EventModel))
     db.execute(delete(SessionModel))
@@ -692,6 +695,67 @@ def get_event(
     return record
 
 
+def create_notification_attempt(
+    db: Session,
+    *,
+    event_id: str,
+    provider: str,
+    recipient: str,
+    status: str,
+    failure_reason: Optional[str],
+    retryable: bool,
+    attempt_number: int,
+    max_attempts: int,
+    attempted_at: datetime,
+    finished_at: datetime,
+    next_retry_at: Optional[datetime],
+) -> Optional[NotificationAttemptModel]:
+    event = db.get(EventModel, event_id)
+    if event is None:
+        return None
+
+    record = NotificationAttemptModel(
+        attempt_id=str(uuid4()),
+        event_id=event_id,
+        provider=provider,
+        recipient=recipient,
+        status=status,
+        failure_reason=failure_reason,
+        retryable=retryable,
+        attempt_number=attempt_number,
+        max_attempts=max_attempts,
+        attempted_at=_to_utc(attempted_at),
+        finished_at=_to_utc(finished_at),
+        next_retry_at=_to_utc(next_retry_at) if next_retry_at else None,
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def list_notification_attempts(
+    db: Session,
+    *,
+    event_id: str,
+    user_id: Optional[str] = None,
+) -> Optional[list[NotificationAttemptModel]]:
+    event = get_event(db, event_id, user_id=user_id)
+    if event is None:
+        return None
+
+    stmt = (
+        select(NotificationAttemptModel)
+        .where(NotificationAttemptModel.event_id == event_id)
+        .order_by(
+            NotificationAttemptModel.attempted_at.asc(),
+            NotificationAttemptModel.attempt_number.asc(),
+            NotificationAttemptModel.attempt_id.asc(),
+        )
+    )
+    return list(db.scalars(stmt))
+
+
 def update_event_summary(
     db: Session,
     event_id: str,
@@ -901,4 +965,21 @@ def event_to_dict(record: EventModel) -> dict:
         "matched_rules": record.matched_rules,
         "detected_entities": record.detected_entities,
         "detected_actions": record.detected_actions,
+    }
+
+
+def notification_attempt_to_dict(record: NotificationAttemptModel) -> dict:
+    return {
+        "attempt_id": record.attempt_id,
+        "event_id": record.event_id,
+        "provider": record.provider,
+        "recipient": record.recipient,
+        "status": record.status,
+        "failure_reason": record.failure_reason,
+        "retryable": record.retryable,
+        "attempt_number": record.attempt_number,
+        "max_attempts": record.max_attempts,
+        "attempted_at": _format_dt(record.attempted_at),
+        "finished_at": _format_dt(record.finished_at),
+        "next_retry_at": _format_dt(record.next_retry_at),
     }
