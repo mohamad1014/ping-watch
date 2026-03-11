@@ -1070,6 +1070,13 @@ describe('App', () => {
     await waitFor(() => {
       expect(screen.getByText(/shared invite accepted/i)).toBeInTheDocument()
     })
+    expect(screen.queryByRole('button', { name: /start monitoring/i })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('region', { name: /telegram recipients/i })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('region', { name: /share access/i })
+    ).not.toBeInTheDocument()
 
     openSpy.mockRestore()
   })

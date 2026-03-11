@@ -6,7 +6,12 @@ from httpx import ASGITransport, AsyncClient
 
 from app.main import app
 from app.db import SessionLocal
-from app.store import link_device_telegram_chat, register_device
+from app.store import (
+    get_device,
+    get_notification_invite,
+    link_device_telegram_chat,
+    register_device,
+)
 
 
 async def _dev_login(client: AsyncClient, email: str) -> dict[str, str]:
@@ -82,6 +87,35 @@ async def test_owner_can_create_list_and_revoke_notification_invites(monkeypatch
         "device_id": "dev-1",
         "invites": [{**revoked_payload, "invite_code": None}],
     }
+
+
+@pytest.mark.anyio
+async def test_create_notification_invite_works_without_auth_required(monkeypatch):
+    monkeypatch.setenv("AUTH_REQUIRED", "false")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        with SessionLocal() as db:
+            register_device(db, device_id="dev-no-auth")
+
+        create_response = await client.post(
+            "/notifications/invites",
+            json={"device_id": "dev-no-auth"},
+        )
+        created_payload = create_response.json()
+
+        with SessionLocal() as db:
+            stored_device = get_device(db, "dev-no-auth")
+            stored_invite = get_notification_invite(db, created_payload["invite_id"])
+
+    assert create_response.status_code == 200
+    assert created_payload["status"] == "pending"
+    assert created_payload["invite_code"]
+    assert stored_device is not None
+    assert stored_device.user_id is not None
+    assert stored_invite is not None
+    assert stored_invite.owner_user_id == stored_device.user_id
 
 
 @pytest.mark.anyio

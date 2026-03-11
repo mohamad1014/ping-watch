@@ -15,6 +15,7 @@ from app.auth import get_request_user_id
 from app.db import get_db
 from app.store import (
     add_notification_endpoint_subscription_to_device,
+    create_user,
     create_notification_invite,
     create_telegram_link_attempt,
     get_device,
@@ -1209,10 +1210,17 @@ def create_device_notification_invite(
     db: Session = Depends(get_db),
 ) -> NotificationInviteResponse:
     user_id = get_request_user_id(request, require_when_auth_enabled=True)
+    device = _require_owned_device(db=db, device_id=payload.device_id, user_id=user_id)
+    if user_id is None:
+        if device.user_id is None:
+            local_owner = create_user(db)
+            device.user_id = local_owner.user_id
+            db.commit()
+            db.refresh(device)
+        user_id = device.user_id
     if user_id is None:
         raise HTTPException(status_code=401, detail="authentication required")
 
-    device = _require_owned_device(db=db, device_id=payload.device_id, user_id=user_id)
     invite_code = _generate_link_token()
     invite = create_notification_invite(
         db,

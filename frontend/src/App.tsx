@@ -76,6 +76,7 @@ const TELEGRAM_LINK_FLOW_KEY = 'ping-watch:telegram-link-flow'
 const TELEGRAM_LINK_FALLBACK_URL_KEY = 'ping-watch:telegram-link-fallback-url'
 const TELEGRAM_LINK_FALLBACK_COMMAND_KEY = 'ping-watch:telegram-link-fallback-command'
 const TELEGRAM_LINK_WAITING_KEY = 'ping-watch:telegram-link-waiting'
+const RECIPIENT_SHARED_DEVICE_ID_KEY = 'ping-watch:recipient-shared-device-id'
 
 type TelegramLinkFlow = 'device' | 'invite'
 
@@ -262,6 +263,9 @@ function App() {
   const [latestInviteCode, setLatestInviteCode] = useState<string | null>(null)
   const [inviteCodeInput, setInviteCodeInput] = useState('')
   const [inviteAcceptedMessage, setInviteAcceptedMessage] = useState<string | null>(null)
+  const [recipientSharedDeviceId, setRecipientSharedDeviceId] = useState<string | null>(
+    () => readStoredTelegramValue(RECIPIENT_SHARED_DEVICE_ID_KEY)
+  )
 
   // Clips state
   const [clips, setClips] = useState<StoredClip[]>([])
@@ -361,6 +365,16 @@ function App() {
     writeStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_KEY, null)
     writeStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_DEVICE_ID_KEY, null)
     writeStoredTelegramValue(TELEGRAM_LINK_FLOW_KEY, null)
+  }, [])
+
+  const clearRecipientMode = useCallback(() => {
+    setRecipientSharedDeviceId(null)
+    writeStoredTelegramValue(RECIPIENT_SHARED_DEVICE_ID_KEY, null)
+  }, [])
+
+  const activateRecipientMode = useCallback((deviceId: string) => {
+    setRecipientSharedDeviceId(deviceId)
+    writeStoredTelegramValue(RECIPIENT_SHARED_DEVICE_ID_KEY, deviceId)
   }, [])
 
   const refreshTelegramRecipients = useCallback(async (resolvedDeviceId?: string) => {
@@ -677,6 +691,7 @@ function App() {
     setLatestInviteCode(null)
     setInviteCodeInput('')
     setInviteAcceptedMessage(null)
+    clearRecipientMode()
     await deleteAllClips()
     setClips([])
     if (clipUrlRef.current) {
@@ -686,7 +701,7 @@ function App() {
     setSelectedClipId(null)
     setSelectedClipUrl(null)
     dropQueuedProcessingRef.current = false
-  }, [clearTelegramLinkState, motionDetection, audioDetection])
+  }, [clearRecipientMode, clearTelegramLinkState, motionDetection, audioDetection])
 
   const handleAccountSignIn = useCallback(async () => {
     const normalizedEmail = accountEmail.trim().toLowerCase()
@@ -948,7 +963,11 @@ function App() {
       await refreshNotificationInvites(resolvedDeviceId)
     } catch (err) {
       console.error(err)
-      setError('Unable to create a share invite.')
+      if (err instanceof ApiError && err.status === 401) {
+        setError('Sign in is required before creating share invites.')
+      } else {
+        setError('Unable to create a share invite.')
+      }
     } finally {
       setUpdatingInviteId(null)
     }
@@ -1053,6 +1072,7 @@ function App() {
         })
         if (status.ready) {
           if (telegramLinkFlow === 'invite') {
+            activateRecipientMode(linkDeviceId)
             clearTelegramLinkState()
             setInviteAcceptedMessage('Shared invite accepted. Alerts will go to your Telegram account.')
             setInviteCodeInput('')
@@ -1084,6 +1104,7 @@ function App() {
       await refreshTelegramReadiness()
     }
   }, [
+    activateRecipientMode,
     clearTelegramLinkState,
     ensureResolvedDeviceId,
     refreshTelegramReadiness,
@@ -1285,6 +1306,7 @@ function App() {
           })
           if (status.ready) {
             if (telegramLinkFlow === 'invite') {
+              activateRecipientMode(linkDeviceId)
               clearTelegramLinkState()
               setInviteAcceptedMessage('Shared invite accepted. Alerts will go to your Telegram account.')
               setInviteCodeInput('')
@@ -1327,6 +1349,7 @@ function App() {
       window.clearInterval(interval)
     }
   }, [
+    activateRecipientMode,
     clearTelegramLinkState,
     ensureResolvedDeviceId,
     isWaitingForTelegramConnect,
@@ -1360,6 +1383,7 @@ function App() {
     if (sessionStatus === 'active') return 'Capture starting'
     return 'Capture idle'
   })()
+  const isRecipientOnlyMode = Boolean(recipientSharedDeviceId)
 
   return (
     <div className="app">
@@ -1413,7 +1437,8 @@ function App() {
           </section>
         )}
 
-        <section className="status-card" aria-label="Session status">
+        {!isRecipientOnlyMode && (
+          <section className="status-card" aria-label="Session status">
           <div className="status-row">
             <span className="status-label">Session</span>
             <span className="status-value">{statusLabels[sessionStatus]}</span>
@@ -1460,9 +1485,11 @@ function App() {
             <span className="status-label">Last event</span>
             <span className="status-value">{lastEvent ? lastEvent.event_id : 'No events yet'}</span>
           </div>
-        </section>
+          </section>
+        )}
 
-        <section className="analysis-prompt-section" aria-label="Alert instructions">
+        {!isRecipientOnlyMode && (
+          <section className="analysis-prompt-section" aria-label="Alert instructions">
           <label className="analysis-prompt-label">
             <span>Alert instructions</span>
             <textarea
@@ -1474,7 +1501,8 @@ function App() {
               rows={3}
             />
           </label>
-        </section>
+          </section>
+        )}
 
         {(checkingTelegramReadiness || telegramReadiness?.enabled) && (
           <section className="telegram-onboarding" aria-label="Telegram onboarding">
@@ -1526,7 +1554,7 @@ function App() {
           </section>
         )}
 
-        {telegramReadiness?.enabled && (
+        {telegramReadiness?.enabled && !isRecipientOnlyMode && (
           <section className="telegram-recipients" aria-label="Telegram recipients">
             <div className="telegram-recipients-header">
               <div>
@@ -1626,7 +1654,23 @@ function App() {
           )}
         </section>
 
-        {telegramReadiness?.enabled && (
+        {isRecipientOnlyMode && (
+          <section className="share-access" aria-label="Shared alert access">
+            <div className="share-access-header">
+              <div>
+                <h2>Shared alert access</h2>
+                <p className="telegram-recipient-meta">
+                  This browser is connected as a Telegram recipient for a shared device.
+                </p>
+              </div>
+            </div>
+            <p className="telegram-recipient-meta">
+              Device owners start monitoring. You will receive alerts in Telegram for the shared device.
+            </p>
+          </section>
+        )}
+
+        {telegramReadiness?.enabled && !isRecipientOnlyMode && (
           <section className="share-access" aria-label="Share access">
             <div className="share-access-header">
               <div>
@@ -1693,7 +1737,8 @@ function App() {
           </section>
         )}
 
-        <div className="controls">
+        {!isRecipientOnlyMode && (
+          <div className="controls">
           <button
             className="primary"
             type="button"
@@ -1723,11 +1768,13 @@ function App() {
           >
             Upload stored clips
           </button>
-        </div>
+          </div>
+        )}
 
         {error && <p className="error-banner">{error}</p>}
 
-        <section className="clip-controls" aria-label="Sequential recording controls">
+        {!isRecipientOnlyMode && (
+          <section className="clip-controls" aria-label="Sequential recording controls">
           <h2>Recording Settings</h2>
           <div className="motion-grid">
             <label className="motion-field">
@@ -1826,9 +1873,11 @@ function App() {
               </label>
             )}
           </div>
-        </section>
+          </section>
+        )}
 
-        <section className="events">
+        {!isRecipientOnlyMode && (
+          <section className="events">
           <div className="events-header">
             <h2>Recent events</h2>
             <span className="events-meta">{events.length} captured</span>
@@ -1884,9 +1933,11 @@ function App() {
               })}
             </ul>
           )}
-        </section>
+          </section>
+        )}
 
-        <section className="clip-timeline">
+        {!isRecipientOnlyMode && (
+          <section className="clip-timeline">
           <div className="clip-header">
             <h2>Stored clips</h2>
             <span className="events-meta">
@@ -1972,7 +2023,8 @@ function App() {
               <video data-testid="clip-preview" src={selectedClipUrl} controls />
             </div>
           )}
-        </section>
+          </section>
+        )}
       </main>
     </div>
   )
