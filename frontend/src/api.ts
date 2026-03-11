@@ -365,6 +365,40 @@ type TelegramLinkStatusApiResponse = {
   attempt_id: string
 }
 
+export type NotificationRecipient = {
+  endpointId: string
+  provider: string
+  chatId: string
+  telegramUsername: string | null
+  linkedAt: string
+  subscribed: boolean
+}
+
+export type NotificationRecipientListResponse = {
+  deviceId: string
+  recipients: NotificationRecipient[]
+}
+
+type NotificationRecipientApiResponse = {
+  endpoint_id: string
+  provider: string
+  chat_id: string
+  telegram_username?: string | null
+  linked_at: string
+  subscribed: boolean
+}
+
+type NotificationRecipientListApiResponse = {
+  device_id: string
+  recipients: NotificationRecipientApiResponse[]
+}
+
+type NotificationRecipientRemoveApiResponse = {
+  device_id: string
+  endpoint_id: string
+  removed: boolean
+}
+
 export type CreateEventPayload = {
   sessionId: string
   deviceId: string
@@ -455,6 +489,17 @@ const toTelegramLinkStatus = (
   attemptId: response.attempt_id,
 })
 
+const toNotificationRecipient = (
+  response: NotificationRecipientApiResponse
+): NotificationRecipient => ({
+  endpointId: response.endpoint_id,
+  provider: response.provider,
+  chatId: response.chat_id,
+  telegramUsername: response.telegram_username ?? null,
+  linkedAt: response.linked_at,
+  subscribed: response.subscribed,
+})
+
 export const getTelegramReadiness = async (
   deviceId: string
 ): Promise<TelegramReadinessResponse> => {
@@ -487,6 +532,48 @@ export const getTelegramLinkStatus = async (
     `/notifications/telegram/link/status?device_id=${encodeURIComponent(deviceId)}&attempt_id=${encodeURIComponent(attemptId)}`
   )
   return toTelegramLinkStatus(response)
+}
+
+export const listNotificationRecipients = async (
+  deviceId: string
+): Promise<NotificationRecipientListResponse> => {
+  const response = await request<NotificationRecipientListApiResponse>(
+    `/notifications/recipients?device_id=${encodeURIComponent(deviceId)}`
+  )
+  return {
+    deviceId: response.device_id ?? deviceId,
+    recipients: (response.recipients ?? []).map(toNotificationRecipient),
+  }
+}
+
+export const addNotificationRecipient = async (
+  deviceId: string,
+  endpointId: string
+): Promise<NotificationRecipient> => {
+  const response = await request<NotificationRecipientApiResponse>(
+    '/notifications/recipients',
+    {
+      method: 'POST',
+      body: {
+        device_id: deviceId,
+        endpoint_id: endpointId,
+      },
+    }
+  )
+  return toNotificationRecipient(response)
+}
+
+export const removeNotificationRecipient = async (
+  deviceId: string,
+  endpointId: string
+): Promise<boolean> => {
+  const response = await request<NotificationRecipientRemoveApiResponse>(
+    `/notifications/recipients?device_id=${encodeURIComponent(deviceId)}&endpoint_id=${encodeURIComponent(endpointId)}`,
+    {
+      method: 'DELETE',
+    }
+  )
+  return response.removed
 }
 
 export const registerDevice = (payload: {

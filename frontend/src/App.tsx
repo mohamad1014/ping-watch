@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import {
+  addNotificationRecipient,
   ApiError,
   type AuthSession,
   type EventResponse,
   forceStopSession,
   getAuthSession,
+  listNotificationRecipients,
+  type NotificationRecipient,
+  removeNotificationRecipient,
   getTelegramLinkStatus,
   getTelegramReadiness,
   loginWithEmail,
@@ -184,6 +188,17 @@ const isTerminalTelegramLinkStatus = (status: string) =>
   || status === 'unknown_device'
   || status === 'not_configured'
 
+const formatRecipientHandle = (recipient: NotificationRecipient) =>
+  recipient.telegramUsername ? `@${recipient.telegramUsername}` : recipient.chatId
+
+const formatRecipientActionName = (
+  action: 'add' | 'remove',
+  recipient: NotificationRecipient
+) => {
+  const label = recipient.telegramUsername ?? recipient.chatId
+  return `${action === 'add' ? 'Add' : 'Remove'} ${label} ${action === 'add' ? 'to' : 'from'} alerts`
+}
+
 function App() {
   const [authSession, setAuthSession] = useState<AuthSession>(() => getAuthSession())
   const [accountEmail, setAccountEmail] = useState(() => getAuthSession().email ?? '')
@@ -212,6 +227,9 @@ function App() {
   const [telegramLinkAttemptId, setTelegramLinkAttemptId] = useState<string | null>(
     () => readStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_KEY)
   )
+  const [telegramRecipients, setTelegramRecipients] = useState<NotificationRecipient[]>([])
+  const [loadingTelegramRecipients, setLoadingTelegramRecipients] = useState(false)
+  const [updatingRecipientEndpointId, setUpdatingRecipientEndpointId] = useState<string | null>(null)
 
   // Clips state
   const [clips, setClips] = useState<StoredClip[]>([])
@@ -308,6 +326,31 @@ function App() {
     writeStoredTelegramValue(TELEGRAM_LINK_FALLBACK_COMMAND_KEY, null)
     writeStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_KEY, null)
   }, [])
+
+  const refreshTelegramRecipients = useCallback(async (resolvedDeviceId?: string) => {
+    if (requiresAccountSignIn) {
+      setLoadingTelegramRecipients(false)
+      setTelegramRecipients([])
+      return
+    }
+
+    setLoadingTelegramRecipients(true)
+    try {
+      const deviceId = resolvedDeviceId ?? await ensureResolvedDeviceId()
+      const response = await listNotificationRecipients(deviceId)
+      setTelegramRecipients(response.recipients)
+    } catch (err) {
+      console.error(err)
+      if (err instanceof ApiError && err.status === 401) {
+        setAuthSession(getAuthSession())
+        setTelegramRecipients([])
+        return
+      }
+      setError('Unable to load Telegram recipients.')
+    } finally {
+      setLoadingTelegramRecipients(false)
+    }
+  }, [ensureResolvedDeviceId, requiresAccountSignIn])
 
   const persistTelegramLinkState = useCallback((
     state: {
@@ -558,6 +601,7 @@ function App() {
     setEvents([])
     clearTelegramLinkState()
     setTelegramReadiness(null)
+    setTelegramRecipients([])
     await deleteAllClips()
     setClips([])
     if (clipUrlRef.current) {
@@ -662,6 +706,11 @@ function App() {
       })
       const status = await getTelegramReadiness(resolvedDeviceId)
       setTelegramReadiness(status)
+      if (status.enabled) {
+        await refreshTelegramRecipients(resolvedDeviceId)
+      } else {
+        setTelegramRecipients([])
+      }
       console.info('[TelegramOnboarding] Readiness response', {
         deviceId: resolvedDeviceId,
         enabled: status.enabled,
@@ -685,14 +734,46 @@ function App() {
         status: 'error',
         reason: 'Unable to verify Telegram readiness. Retry in a few seconds.',
       })
+      setTelegramRecipients([])
     } finally {
       setCheckingTelegramReadiness(false)
     }
   }, [
     clearTelegramLinkState,
     ensureResolvedDeviceId,
+    refreshTelegramRecipients,
     requiresAccountSignIn,
   ])
+
+  const handleAddRecipient = useCallback(async (recipient: NotificationRecipient) => {
+    setError(null)
+    setUpdatingRecipientEndpointId(recipient.endpointId)
+    try {
+      const resolvedDeviceId = await ensureResolvedDeviceId()
+      await addNotificationRecipient(resolvedDeviceId, recipient.endpointId)
+      await refreshTelegramRecipients(resolvedDeviceId)
+    } catch (err) {
+      console.error(err)
+      setError('Unable to add Telegram recipient.')
+    } finally {
+      setUpdatingRecipientEndpointId(null)
+    }
+  }, [ensureResolvedDeviceId, refreshTelegramRecipients])
+
+  const handleRemoveRecipient = useCallback(async (recipient: NotificationRecipient) => {
+    setError(null)
+    setUpdatingRecipientEndpointId(recipient.endpointId)
+    try {
+      const resolvedDeviceId = await ensureResolvedDeviceId()
+      await removeNotificationRecipient(resolvedDeviceId, recipient.endpointId)
+      await refreshTelegramRecipients(resolvedDeviceId)
+    } catch (err) {
+      console.error(err)
+      setError('Unable to remove Telegram recipient.')
+    } finally {
+      setUpdatingRecipientEndpointId(null)
+    }
+  }, [ensureResolvedDeviceId, refreshTelegramRecipients])
 
   const handleConnectTelegram = async () => {
     setError(null)
@@ -1262,6 +1343,71 @@ function App() {
               >
                 {checkingTelegramReadiness ? 'Checking...' : 'Check Telegram status'}
               </button>
+            )}
+          </section>
+        )}
+
+        {telegramReadiness?.enabled && (
+          <section className="telegram-recipients" aria-label="Telegram recipients">
+            <div className="telegram-recipients-header">
+              <div>
+                <h2>Telegram recipients</h2>
+                <p className="telegram-recipient-meta">
+                  Manage which linked Telegram recipients receive alerts for this device.
+                </p>
+              </div>
+              <button
+                className="secondary"
+                type="button"
+                onClick={handleConnectTelegram}
+                disabled={checkingTelegramReadiness}
+              >
+                Re-run Telegram onboarding
+              </button>
+            </div>
+
+            {loadingTelegramRecipients ? (
+              <p className="telegram-recipient-meta">Loading recipients...</p>
+            ) : telegramRecipients.length === 0 ? (
+              <p className="telegram-recipient-meta">
+                No Telegram recipients are linked yet. Re-run onboarding to link another recipient.
+              </p>
+            ) : (
+              <ul className="telegram-recipient-list">
+                {telegramRecipients.map((recipient) => {
+                  const isUpdating = updatingRecipientEndpointId === recipient.endpointId
+                  return (
+                    <li key={recipient.endpointId} className="telegram-recipient-item">
+                      <div className="telegram-recipient-details">
+                        <span className="telegram-recipient-name">
+                          {formatRecipientHandle(recipient)}
+                        </span>
+                        <span className="telegram-recipient-meta">
+                          {recipient.subscribed ? 'Subscribed' : 'Not subscribed'}
+                        </span>
+                      </div>
+                      <button
+                        className="secondary"
+                        type="button"
+                        onClick={() => {
+                          void (
+                            recipient.subscribed
+                              ? handleRemoveRecipient(recipient)
+                              : handleAddRecipient(recipient)
+                          )
+                        }}
+                        disabled={isUpdating}
+                        aria-label={formatRecipientActionName(
+                          recipient.subscribed ? 'remove' : 'add',
+                          recipient
+                        )}
+                      >
+                        {recipient.subscribed ? 'Remove' : 'Add'}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
             )}
           </section>
         )}

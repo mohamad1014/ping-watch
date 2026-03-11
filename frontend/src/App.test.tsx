@@ -38,11 +38,25 @@ const buildUploadResponse = (etag: string) =>
     json: async () => ({}),
   } as unknown as Response)
 
+type RecipientApiResponse = {
+  endpoint_id: string
+  provider: string
+  chat_id: string
+  telegram_username: string | null
+  linked_at: string
+  subscribed: boolean
+}
+
 const createFetchMock = (routes: {
   registerDevice?: unknown
   telegramReadiness?: unknown[]
   telegramLinkStart?: unknown[]
   telegramLinkStatus?: unknown[]
+  recipients?: {
+    lists?: { device_id: string, recipients: RecipientApiResponse[] }[]
+    add?: RecipientApiResponse[]
+    remove?: { device_id: string, endpoint_id: string, removed: boolean }[]
+  }
   start: unknown
   stop: unknown
   forceStop?: unknown
@@ -85,6 +99,18 @@ const createFetchMock = (routes: {
       reason: null,
       attempt_id: 'attempt-1',
     }]
+  const recipientListQueue = routes.recipients?.lists?.length
+    ? [...routes.recipients.lists]
+    : [{
+      device_id: 'device-1',
+      recipients: [],
+    }]
+  const recipientAddQueue = routes.recipients?.add?.length
+    ? [...routes.recipients.add]
+    : []
+  const recipientRemoveQueue = routes.recipients?.remove?.length
+    ? [...routes.recipients.remove]
+    : []
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = input.toString()
 
@@ -107,6 +133,24 @@ const createFetchMock = (routes: {
         telegramLinkStatusQueue.length > 1
           ? telegramLinkStatusQueue.shift()
           : telegramLinkStatusQueue[0]
+      return buildResponse(payload)
+    }
+
+    if (url.includes('/notifications/recipients') && (!init?.method || init.method === 'GET')) {
+      const payload =
+        recipientListQueue.length > 1 ? recipientListQueue.shift() : recipientListQueue[0]
+      return buildResponse(payload)
+    }
+
+    if (url.endsWith('/notifications/recipients') && init?.method === 'POST') {
+      const payload =
+        recipientAddQueue.length > 1 ? recipientAddQueue.shift() : recipientAddQueue[0]
+      return buildResponse(payload)
+    }
+
+    if (url.includes('/notifications/recipients') && init?.method === 'DELETE') {
+      const payload =
+        recipientRemoveQueue.length > 1 ? recipientRemoveQueue.shift() : recipientRemoveQueue[0]
       return buildResponse(payload)
     }
 
@@ -563,6 +607,207 @@ describe('App', () => {
     )
 
     expect(screen.getByText('/start token-1')).toBeInTheDocument()
+  })
+
+  it('lists recipients and lets the owner add or remove device subscriptions', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: true,
+        status: 'ready',
+        reason: null,
+      }],
+      recipients: {
+        lists: [
+          {
+            device_id: 'device-1',
+            recipients: [
+              {
+                endpoint_id: 'endpoint-1',
+                provider: 'telegram',
+                chat_id: '111',
+                telegram_username: 'alice',
+                linked_at: '2026-03-10T12:00:00Z',
+                subscribed: true,
+              },
+              {
+                endpoint_id: 'endpoint-2',
+                provider: 'telegram',
+                chat_id: '222',
+                telegram_username: 'bob',
+                linked_at: '2026-03-10T12:05:00Z',
+                subscribed: false,
+              },
+            ],
+          },
+          {
+            device_id: 'device-1',
+            recipients: [
+              {
+                endpoint_id: 'endpoint-1',
+                provider: 'telegram',
+                chat_id: '111',
+                telegram_username: 'alice',
+                linked_at: '2026-03-10T12:00:00Z',
+                subscribed: true,
+              },
+              {
+                endpoint_id: 'endpoint-2',
+                provider: 'telegram',
+                chat_id: '222',
+                telegram_username: 'bob',
+                linked_at: '2026-03-10T12:05:00Z',
+                subscribed: true,
+              },
+            ],
+          },
+          {
+            device_id: 'device-1',
+            recipients: [
+              {
+                endpoint_id: 'endpoint-1',
+                provider: 'telegram',
+                chat_id: '111',
+                telegram_username: 'alice',
+                linked_at: '2026-03-10T12:00:00Z',
+                subscribed: false,
+              },
+              {
+                endpoint_id: 'endpoint-2',
+                provider: 'telegram',
+                chat_id: '222',
+                telegram_username: 'bob',
+                linked_at: '2026-03-10T12:05:00Z',
+                subscribed: true,
+              },
+            ],
+          },
+        ],
+        add: [{
+          endpoint_id: 'endpoint-2',
+          provider: 'telegram',
+          chat_id: '222',
+          telegram_username: 'bob',
+          linked_at: '2026-03-10T12:05:00Z',
+          subscribed: true,
+        }],
+        remove: [{
+          device_id: 'device-1',
+          endpoint_id: 'endpoint-1',
+          removed: true,
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    const recipientSection = await screen.findByRole('region', {
+      name: /telegram recipients/i,
+    })
+    expect(within(recipientSection).getByText('@alice')).toBeInTheDocument()
+    expect(within(recipientSection).getByText('@bob')).toBeInTheDocument()
+    expect(within(recipientSection).getByText('Subscribed')).toBeInTheDocument()
+    expect(within(recipientSection).getByText('Not subscribed')).toBeInTheDocument()
+
+    await user.click(
+      within(recipientSection).getByRole('button', { name: /add bob to alerts/i })
+    )
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/notifications/recipients',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          device_id: 'device-1',
+          endpoint_id: 'endpoint-2',
+        }),
+      })
+    )
+    await waitFor(() => {
+      expect(within(recipientSection).getAllByText('Subscribed')).toHaveLength(2)
+    })
+
+    await user.click(
+      within(recipientSection).getByRole('button', { name: /remove alice from alerts/i })
+    )
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/notifications/recipients?device_id=device-1&endpoint_id=endpoint-1',
+      expect.objectContaining({
+        method: 'DELETE',
+      })
+    )
+    await waitFor(() => {
+      expect(within(recipientSection).getByText('Not subscribed')).toBeInTheDocument()
+    })
+  })
+
+  it('re-runs recipient onboarding from the recipient controls area', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: true,
+        status: 'ready',
+        reason: null,
+      }],
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [],
+        }],
+      },
+      telegramLinkStart: [{
+        enabled: true,
+        ready: false,
+        status: 'pending',
+        reason: null,
+        attempt_id: 'attempt-2',
+        connect_url: 'https://t.me/pingwatch_bot?start=token-2',
+        expires_at: '2099-01-01T00:00:00Z',
+        link_code: 'token-2',
+        fallback_command: '/start token-2',
+      }],
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const popup = { location: { href: '' }, close: vi.fn() } as unknown as Window
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup)
+
+    render(<App />)
+
+    const recipientSection = await screen.findByRole('region', {
+      name: /telegram recipients/i,
+    })
+    await user.click(
+      within(recipientSection).getByRole('button', { name: /re-run telegram onboarding/i })
+    )
+
+    expect(openSpy).toHaveBeenCalledWith(
+      'https://t.me/pingwatch_bot?start=token-2',
+      '_blank',
+      'noopener,noreferrer'
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/notifications/telegram/link/start',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          device_id: 'device-1',
+        }),
+      })
+    )
+
+    openSpy.mockRestore()
   })
 
   it('clears stale telegram attempt state when status returns not_found', async () => {
