@@ -111,6 +111,38 @@ class DeviceNotificationSubscriptionModel(Base):
     )
 
 
+class NotificationInviteModel(Base):
+    __tablename__ = "notification_invites"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'accepted', 'revoked', 'expired')",
+            name="ck_notification_invites_status",
+        ),
+    )
+
+    invite_id: Mapped[str] = mapped_column(String, primary_key=True)
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"), index=True)
+    owner_user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id"), index=True)
+    recipient_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.user_id"), index=True, nullable=True
+    )
+    accepted_endpoint_id: Mapped[str | None] = mapped_column(
+        ForeignKey("notification_endpoints.endpoint_id"),
+        index=True,
+        nullable=True,
+    )
+    token_hash: Mapped[str] = mapped_column(String, unique=True, index=True)
+    status: Mapped[str] = mapped_column(String, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class AuthSessionModel(Base):
     __tablename__ = "auth_sessions"
 
@@ -191,6 +223,11 @@ class TelegramLinkAttemptModel(Base):
     device_id: Mapped[str] = mapped_column(String, index=True)
     user_id: Mapped[str | None] = mapped_column(
         ForeignKey("users.user_id"), index=True, nullable=True
+    )
+    invite_id: Mapped[str | None] = mapped_column(
+        ForeignKey("notification_invites.invite_id"),
+        index=True,
+        nullable=True,
     )
     token_hash: Mapped[str] = mapped_column(String, unique=True, index=True)
     status: Mapped[str] = mapped_column(String, index=True)

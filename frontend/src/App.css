@@ -242,6 +242,56 @@
   color: #6a5c48;
 }
 
+.share-access {
+  display: grid;
+  gap: 1rem;
+  padding: 1.2rem;
+  border-radius: 18px;
+  background: #fff;
+  border: 1px solid #e8dfd2;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+}
+
+.share-access-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.share-access-header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.share-access-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.share-access-code {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  color: #6a5c48;
+}
+
+.share-access-code span {
+  font-size: 0.9rem;
+}
+
+.share-access-code code {
+  width: fit-content;
+  padding: 0.35rem 0.55rem;
+  border-radius: 10px;
+  background: #f7f2ea;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  color: #2a2a2a;
+}
+
 .controls {
   display: flex;
   flex-wrap: wrap;

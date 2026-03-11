@@ -47,11 +47,30 @@ type RecipientApiResponse = {
   subscribed: boolean
 }
 
+type InviteApiResponse = {
+  invite_id: string
+  device_id: string
+  status: string
+  invite_code: string | null
+  created_at: string
+  expires_at: string
+  accepted_at: string | null
+  revoked_at: string | null
+  recipient_chat_id: string | null
+  recipient_telegram_username: string | null
+}
+
 const createFetchMock = (routes: {
   registerDevice?: unknown
   telegramReadiness?: unknown[]
   telegramLinkStart?: unknown[]
   telegramLinkStatus?: unknown[]
+  invites?: {
+    lists?: { device_id: string, invites: InviteApiResponse[] }[]
+    create?: InviteApiResponse[]
+    accept?: unknown[]
+    revoke?: InviteApiResponse[]
+  }
   recipients?: {
     lists?: { device_id: string, recipients: RecipientApiResponse[] }[]
     add?: RecipientApiResponse[]
@@ -99,6 +118,21 @@ const createFetchMock = (routes: {
       reason: null,
       attempt_id: 'attempt-1',
     }]
+  const inviteListQueue = routes.invites?.lists?.length
+    ? [...routes.invites.lists]
+    : [{
+      device_id: 'device-1',
+      invites: [],
+    }]
+  const inviteCreateQueue = routes.invites?.create?.length
+    ? [...routes.invites.create]
+    : []
+  const inviteAcceptQueue = routes.invites?.accept?.length
+    ? [...routes.invites.accept]
+    : []
+  const inviteRevokeQueue = routes.invites?.revoke?.length
+    ? [...routes.invites.revoke]
+    : []
   const recipientListQueue = routes.recipients?.lists?.length
     ? [...routes.recipients.lists]
     : [{
@@ -133,6 +167,30 @@ const createFetchMock = (routes: {
         telegramLinkStatusQueue.length > 1
           ? telegramLinkStatusQueue.shift()
           : telegramLinkStatusQueue[0]
+      return buildResponse(payload)
+    }
+
+    if (url.includes('/notifications/invites') && (!init?.method || init.method === 'GET')) {
+      const payload =
+        inviteListQueue.length > 1 ? inviteListQueue.shift() : inviteListQueue[0]
+      return buildResponse(payload)
+    }
+
+    if (url.endsWith('/notifications/invites') && init?.method === 'POST') {
+      const payload =
+        inviteCreateQueue.length > 1 ? inviteCreateQueue.shift() : inviteCreateQueue[0]
+      return buildResponse(payload)
+    }
+
+    if (url.endsWith('/notifications/invites/accept') && init?.method === 'POST') {
+      const payload =
+        inviteAcceptQueue.length > 1 ? inviteAcceptQueue.shift() : inviteAcceptQueue[0]
+      return buildResponse(payload)
+    }
+
+    if (url.includes('/notifications/invites') && init?.method === 'DELETE') {
+      const payload =
+        inviteRevokeQueue.length > 1 ? inviteRevokeQueue.shift() : inviteRevokeQueue[0]
       return buildResponse(payload)
     }
 
@@ -806,6 +864,212 @@ describe('App', () => {
         }),
       })
     )
+
+    openSpy.mockRestore()
+  })
+
+  it('lets the owner create and revoke a share invite', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: true,
+        status: 'ready',
+        reason: null,
+      }],
+      invites: {
+        lists: [
+          {
+            device_id: 'device-1',
+            invites: [],
+          },
+          {
+            device_id: 'device-1',
+            invites: [{
+              invite_id: 'invite-1',
+              device_id: 'device-1',
+              status: 'pending',
+              invite_code: null,
+              created_at: '2026-03-11T10:00:00Z',
+              expires_at: '2026-03-11T10:30:00Z',
+              accepted_at: null,
+              revoked_at: null,
+              recipient_chat_id: null,
+              recipient_telegram_username: null,
+            }],
+          },
+          {
+            device_id: 'device-1',
+            invites: [{
+              invite_id: 'invite-1',
+              device_id: 'device-1',
+              status: 'revoked',
+              invite_code: null,
+              created_at: '2026-03-11T10:00:00Z',
+              expires_at: '2026-03-11T10:30:00Z',
+              accepted_at: null,
+              revoked_at: '2026-03-11T10:05:00Z',
+              recipient_chat_id: null,
+              recipient_telegram_username: null,
+            }],
+          },
+        ],
+        create: [{
+          invite_id: 'invite-1',
+          device_id: 'device-1',
+          status: 'pending',
+          invite_code: 'share-code-1',
+          created_at: '2026-03-11T10:00:00Z',
+          expires_at: '2026-03-11T10:30:00Z',
+          accepted_at: null,
+          revoked_at: null,
+          recipient_chat_id: null,
+          recipient_telegram_username: null,
+        }],
+        revoke: [{
+          invite_id: 'invite-1',
+          device_id: 'device-1',
+          status: 'revoked',
+          invite_code: 'share-code-1',
+          created_at: '2026-03-11T10:00:00Z',
+          expires_at: '2026-03-11T10:30:00Z',
+          accepted_at: null,
+          revoked_at: '2026-03-11T10:05:00Z',
+          recipient_chat_id: null,
+          recipient_telegram_username: null,
+        }],
+      },
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    const shareSection = await screen.findByRole('region', {
+      name: /share access/i,
+    })
+    await user.click(
+      within(shareSection).getByRole('button', { name: /create share invite/i })
+    )
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/notifications/invites',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          device_id: 'device-1',
+        }),
+      })
+    )
+    await waitFor(() => {
+      expect(within(shareSection).getByText('share-code-1')).toBeInTheDocument()
+      expect(within(shareSection).getByText('Pending')).toBeInTheDocument()
+    })
+
+    await user.click(
+      within(shareSection).getByRole('button', { name: /revoke invite invite-1/i })
+    )
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/notifications/invites?device_id=device-1&invite_id=invite-1',
+      expect.objectContaining({
+        method: 'DELETE',
+      })
+    )
+    await waitFor(() => {
+      expect(within(shareSection).getByText('Revoked')).toBeInTheDocument()
+    })
+  })
+
+  it('accepts a share invite through Telegram linking', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: true,
+        status: 'ready',
+        reason: null,
+      }],
+      telegramLinkStatus: [{
+        enabled: true,
+        ready: true,
+        linked: true,
+        status: 'ready',
+        reason: null,
+        attempt_id: 'share-attempt-1',
+      }],
+      invites: {
+        lists: [{
+          device_id: 'device-1',
+          invites: [],
+        }],
+        accept: [{
+          enabled: true,
+          ready: false,
+          status: 'pending',
+          reason: null,
+          attempt_id: 'share-attempt-1',
+          connect_url: 'https://t.me/pingwatch_bot?start=share-token-1',
+          expires_at: '2099-01-01T00:00:00Z',
+          link_code: 'share-token-1',
+          fallback_command: '/start share-token-1',
+          device_id: 'shared-device-1',
+        }],
+      },
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const popup = { location: { href: '' }, close: vi.fn() } as unknown as Window
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup)
+
+    render(<App />)
+
+    const acceptSection = await screen.findByRole('region', {
+      name: /accept shared invite/i,
+    })
+    await user.type(
+      within(acceptSection).getByLabelText(/invite code/i),
+      'share-code-1'
+    )
+    await user.click(
+      within(acceptSection).getByRole('button', { name: /accept invite/i })
+    )
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/notifications/invites/accept',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          invite_code: 'share-code-1',
+        }),
+      })
+    )
+    expect(openSpy).toHaveBeenCalledWith(
+      'https://t.me/pingwatch_bot?start=share-token-1',
+      '_blank',
+      'noopener,noreferrer'
+    )
+    await waitFor(() => {
+      expect(screen.getByText(/shared invite accepted/i)).toBeInTheDocument()
+    })
 
     openSpy.mockRestore()
   })

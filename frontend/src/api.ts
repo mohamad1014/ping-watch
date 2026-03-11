@@ -379,6 +379,24 @@ export type NotificationRecipientListResponse = {
   recipients: NotificationRecipient[]
 }
 
+export type NotificationInvite = {
+  inviteId: string
+  deviceId: string
+  status: string
+  inviteCode: string | null
+  createdAt: string
+  expiresAt: string
+  acceptedAt: string | null
+  revokedAt: string | null
+  recipientChatId: string | null
+  recipientTelegramUsername: string | null
+}
+
+export type NotificationInviteListResponse = {
+  deviceId: string
+  invites: NotificationInvite[]
+}
+
 type NotificationRecipientApiResponse = {
   endpoint_id: string
   provider: string
@@ -391,6 +409,24 @@ type NotificationRecipientApiResponse = {
 type NotificationRecipientListApiResponse = {
   device_id: string
   recipients: NotificationRecipientApiResponse[]
+}
+
+type NotificationInviteApiResponse = {
+  invite_id: string
+  device_id: string
+  status: string
+  invite_code?: string | null
+  created_at: string
+  expires_at: string
+  accepted_at?: string | null
+  revoked_at?: string | null
+  recipient_chat_id?: string | null
+  recipient_telegram_username?: string | null
+}
+
+type NotificationInviteListApiResponse = {
+  device_id: string
+  invites: NotificationInviteApiResponse[]
 }
 
 type NotificationRecipientRemoveApiResponse = {
@@ -500,6 +536,21 @@ const toNotificationRecipient = (
   subscribed: response.subscribed,
 })
 
+const toNotificationInvite = (
+  response: NotificationInviteApiResponse
+): NotificationInvite => ({
+  inviteId: response.invite_id,
+  deviceId: response.device_id,
+  status: response.status,
+  inviteCode: response.invite_code ?? null,
+  createdAt: response.created_at,
+  expiresAt: response.expires_at,
+  acceptedAt: response.accepted_at ?? null,
+  revokedAt: response.revoked_at ?? null,
+  recipientChatId: response.recipient_chat_id ?? null,
+  recipientTelegramUsername: response.recipient_telegram_username ?? null,
+})
+
 export const getTelegramReadiness = async (
   deviceId: string
 ): Promise<TelegramReadinessResponse> => {
@@ -574,6 +625,64 @@ export const removeNotificationRecipient = async (
     }
   )
   return response.removed
+}
+
+export const listNotificationInvites = async (
+  deviceId: string
+): Promise<NotificationInviteListResponse> => {
+  const response = await request<NotificationInviteListApiResponse>(
+    `/notifications/invites?device_id=${encodeURIComponent(deviceId)}`
+  )
+  return {
+    deviceId: response.device_id ?? deviceId,
+    invites: (response.invites ?? []).map(toNotificationInvite),
+  }
+}
+
+export const createNotificationInvite = async (
+  deviceId: string
+): Promise<NotificationInvite> => {
+  const response = await request<NotificationInviteApiResponse>(
+    '/notifications/invites',
+    {
+      method: 'POST',
+      body: {
+        device_id: deviceId,
+      },
+    }
+  )
+  return toNotificationInvite(response)
+}
+
+export const acceptNotificationInvite = async (
+  inviteCode: string
+): Promise<TelegramLinkStartResponse & { deviceId: string }> => {
+  const response = await request<TelegramLinkStartApiResponse & { device_id: string }>(
+    '/notifications/invites/accept',
+    {
+      method: 'POST',
+      body: {
+        invite_code: inviteCode,
+      },
+    }
+  )
+  return {
+    ...toTelegramLinkStart(response),
+    deviceId: response.device_id,
+  }
+}
+
+export const revokeNotificationInvite = async (
+  deviceId: string,
+  inviteId: string
+): Promise<NotificationInvite> => {
+  const response = await request<NotificationInviteApiResponse>(
+    `/notifications/invites?device_id=${encodeURIComponent(deviceId)}&invite_id=${encodeURIComponent(inviteId)}`,
+    {
+      method: 'DELETE',
+    }
+  )
+  return toNotificationInvite(response)
 }
 
 export const registerDevice = (payload: {

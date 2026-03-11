@@ -1,14 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import {
+  acceptNotificationInvite,
   addNotificationRecipient,
   ApiError,
   type AuthSession,
+  createNotificationInvite,
   type EventResponse,
   forceStopSession,
   getAuthSession,
   listNotificationRecipients,
+  listNotificationInvites,
   type NotificationRecipient,
+  type NotificationInvite,
+  revokeNotificationInvite,
   removeNotificationRecipient,
   getTelegramLinkStatus,
   getTelegramReadiness,
@@ -66,9 +71,13 @@ type QueuedClip = {
 }
 
 const TELEGRAM_LINK_ATTEMPT_KEY = 'ping-watch:telegram-link-attempt-id'
+const TELEGRAM_LINK_ATTEMPT_DEVICE_ID_KEY = 'ping-watch:telegram-link-attempt-device-id'
+const TELEGRAM_LINK_FLOW_KEY = 'ping-watch:telegram-link-flow'
 const TELEGRAM_LINK_FALLBACK_URL_KEY = 'ping-watch:telegram-link-fallback-url'
 const TELEGRAM_LINK_FALLBACK_COMMAND_KEY = 'ping-watch:telegram-link-fallback-command'
 const TELEGRAM_LINK_WAITING_KEY = 'ping-watch:telegram-link-waiting'
+
+type TelegramLinkFlow = 'device' | 'invite'
 
 const getEnvNumber = (key: string) => {
   const env = (import.meta as ImportMeta & {
@@ -199,6 +208,17 @@ const formatRecipientActionName = (
   return `${action === 'add' ? 'Add' : 'Remove'} ${label} ${action === 'add' ? 'to' : 'from'} alerts`
 }
 
+const formatInviteStatus = (status: string) =>
+  status.charAt(0).toUpperCase() + status.slice(1)
+
+const formatInviteRecipient = (invite: NotificationInvite) =>
+  invite.recipientTelegramUsername
+    ? `@${invite.recipientTelegramUsername}`
+    : invite.recipientChatId
+
+const formatInviteActionName = (invite: NotificationInvite) =>
+  `Revoke invite ${invite.inviteId}`
+
 function App() {
   const [authSession, setAuthSession] = useState<AuthSession>(() => getAuthSession())
   const [accountEmail, setAccountEmail] = useState(() => getAuthSession().email ?? '')
@@ -227,9 +247,21 @@ function App() {
   const [telegramLinkAttemptId, setTelegramLinkAttemptId] = useState<string | null>(
     () => readStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_KEY)
   )
+  const [telegramLinkAttemptDeviceId, setTelegramLinkAttemptDeviceId] = useState<string | null>(
+    () => readStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_DEVICE_ID_KEY)
+  )
+  const [telegramLinkFlow, setTelegramLinkFlow] = useState<TelegramLinkFlow>(
+    () => (readStoredTelegramValue(TELEGRAM_LINK_FLOW_KEY) === 'invite' ? 'invite' : 'device')
+  )
   const [telegramRecipients, setTelegramRecipients] = useState<NotificationRecipient[]>([])
   const [loadingTelegramRecipients, setLoadingTelegramRecipients] = useState(false)
   const [updatingRecipientEndpointId, setUpdatingRecipientEndpointId] = useState<string | null>(null)
+  const [notificationInvites, setNotificationInvites] = useState<NotificationInvite[]>([])
+  const [loadingNotificationInvites, setLoadingNotificationInvites] = useState(false)
+  const [updatingInviteId, setUpdatingInviteId] = useState<string | null>(null)
+  const [latestInviteCode, setLatestInviteCode] = useState<string | null>(null)
+  const [inviteCodeInput, setInviteCodeInput] = useState('')
+  const [inviteAcceptedMessage, setInviteAcceptedMessage] = useState<string | null>(null)
 
   // Clips state
   const [clips, setClips] = useState<StoredClip[]>([])
@@ -321,10 +353,14 @@ function App() {
     setTelegramPopupFallbackUrl(null)
     setTelegramFallbackCommand(null)
     setTelegramLinkAttemptId(null)
+    setTelegramLinkAttemptDeviceId(null)
+    setTelegramLinkFlow('device')
     writeStoredTelegramValue(TELEGRAM_LINK_WAITING_KEY, null)
     writeStoredTelegramValue(TELEGRAM_LINK_FALLBACK_URL_KEY, null)
     writeStoredTelegramValue(TELEGRAM_LINK_FALLBACK_COMMAND_KEY, null)
     writeStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_KEY, null)
+    writeStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_DEVICE_ID_KEY, null)
+    writeStoredTelegramValue(TELEGRAM_LINK_FLOW_KEY, null)
   }, [])
 
   const refreshTelegramRecipients = useCallback(async (resolvedDeviceId?: string) => {
@@ -352,12 +388,39 @@ function App() {
     }
   }, [ensureResolvedDeviceId, requiresAccountSignIn])
 
+  const refreshNotificationInvites = useCallback(async (resolvedDeviceId?: string) => {
+    if (requiresAccountSignIn) {
+      setLoadingNotificationInvites(false)
+      setNotificationInvites([])
+      return
+    }
+
+    setLoadingNotificationInvites(true)
+    try {
+      const deviceId = resolvedDeviceId ?? await ensureResolvedDeviceId()
+      const response = await listNotificationInvites(deviceId)
+      setNotificationInvites(response.invites)
+    } catch (err) {
+      console.error(err)
+      if (err instanceof ApiError && err.status === 401) {
+        setAuthSession(getAuthSession())
+        setNotificationInvites([])
+        return
+      }
+      setError('Unable to load share invites.')
+    } finally {
+      setLoadingNotificationInvites(false)
+    }
+  }, [ensureResolvedDeviceId, requiresAccountSignIn])
+
   const persistTelegramLinkState = useCallback((
     state: {
       waiting?: boolean
       fallbackUrl?: string | null
       fallbackCommand?: string | null
       attemptId?: string | null
+      deviceId?: string | null
+      flow?: TelegramLinkFlow
     }
   ) => {
     if (state.waiting !== undefined) {
@@ -378,6 +441,14 @@ function App() {
     if (state.attemptId !== undefined) {
       setTelegramLinkAttemptId(state.attemptId)
       writeStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_KEY, state.attemptId)
+    }
+    if (state.deviceId !== undefined) {
+      setTelegramLinkAttemptDeviceId(state.deviceId)
+      writeStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_DEVICE_ID_KEY, state.deviceId)
+    }
+    if (state.flow !== undefined) {
+      setTelegramLinkFlow(state.flow)
+      writeStoredTelegramValue(TELEGRAM_LINK_FLOW_KEY, state.flow)
     }
   }, [])
 
@@ -602,6 +673,10 @@ function App() {
     clearTelegramLinkState()
     setTelegramReadiness(null)
     setTelegramRecipients([])
+    setNotificationInvites([])
+    setLatestInviteCode(null)
+    setInviteCodeInput('')
+    setInviteAcceptedMessage(null)
     await deleteAllClips()
     setClips([])
     if (clipUrlRef.current) {
@@ -708,8 +783,10 @@ function App() {
       setTelegramReadiness(status)
       if (status.enabled) {
         await refreshTelegramRecipients(resolvedDeviceId)
+        await refreshNotificationInvites(resolvedDeviceId)
       } else {
         setTelegramRecipients([])
+        setNotificationInvites([])
       }
       console.info('[TelegramOnboarding] Readiness response', {
         deviceId: resolvedDeviceId,
@@ -741,6 +818,7 @@ function App() {
   }, [
     clearTelegramLinkState,
     ensureResolvedDeviceId,
+    refreshNotificationInvites,
     refreshTelegramRecipients,
     requiresAccountSignIn,
   ])
@@ -760,6 +838,90 @@ function App() {
     }
   }, [ensureResolvedDeviceId, refreshTelegramRecipients])
 
+  const beginTelegramLinkFlow = useCallback((
+    start: {
+      enabled: boolean
+      ready: boolean
+      status: string
+      reason: string | null
+      attemptId: string | null
+      connectUrl: string | null
+      fallbackCommand: string | null
+    },
+    options: {
+      deviceId: string
+      flow: TelegramLinkFlow
+      preOpenedPopup: Window | null
+    }
+  ) => {
+    const fallbackCommand = deriveTelegramFallbackCommand(
+      start.fallbackCommand,
+      start.connectUrl
+    )
+    setTelegramReadiness({
+      enabled: start.enabled,
+      ready: start.ready,
+      status: start.status,
+      reason: start.reason,
+    })
+
+    if (!start.connectUrl || !start.attemptId) {
+      options.preOpenedPopup?.close()
+      clearTelegramLinkState()
+      setError(start.reason || 'Unable to generate Telegram connect link.')
+      return
+    }
+
+    persistTelegramLinkState({
+      attemptId: start.attemptId,
+      deviceId: options.deviceId,
+      flow: options.flow,
+      fallbackCommand,
+    })
+
+    let popup = options.preOpenedPopup
+    if (!popup) {
+      popup = window.open(start.connectUrl, '_blank', 'noopener,noreferrer')
+    }
+    if (!popup) {
+      persistTelegramLinkState({
+        waiting: true,
+        fallbackUrl: start.connectUrl,
+        fallbackCommand,
+        deviceId: options.deviceId,
+        flow: options.flow,
+      })
+      setError('Popup blocked. Use the backup Telegram link below.')
+      return
+    }
+
+    if (options.preOpenedPopup) {
+      try {
+        popup.location.href = start.connectUrl
+      } catch {
+        popup.close()
+        persistTelegramLinkState({
+          waiting: true,
+          fallbackUrl: start.connectUrl,
+          fallbackCommand,
+          deviceId: options.deviceId,
+          flow: options.flow,
+        })
+        setError('Unable to redirect popup. Use the backup Telegram link below.')
+        return
+      }
+    }
+
+    persistTelegramLinkState({
+      waiting: true,
+      fallbackUrl: start.connectUrl,
+      fallbackCommand,
+      deviceId: options.deviceId,
+      flow: options.flow,
+    })
+    setError(null)
+  }, [clearTelegramLinkState, persistTelegramLinkState])
+
   const handleRemoveRecipient = useCallback(async (recipient: NotificationRecipient) => {
     setError(null)
     setUpdatingRecipientEndpointId(recipient.endpointId)
@@ -775,8 +937,69 @@ function App() {
     }
   }, [ensureResolvedDeviceId, refreshTelegramRecipients])
 
+  const handleCreateInvite = useCallback(async () => {
+    setError(null)
+    setInviteAcceptedMessage(null)
+    setUpdatingInviteId('creating')
+    try {
+      const resolvedDeviceId = await ensureResolvedDeviceId()
+      const invite = await createNotificationInvite(resolvedDeviceId)
+      setLatestInviteCode(invite.inviteCode)
+      await refreshNotificationInvites(resolvedDeviceId)
+    } catch (err) {
+      console.error(err)
+      setError('Unable to create a share invite.')
+    } finally {
+      setUpdatingInviteId(null)
+    }
+  }, [ensureResolvedDeviceId, refreshNotificationInvites])
+
+  const handleRevokeInvite = useCallback(async (invite: NotificationInvite) => {
+    setError(null)
+    setUpdatingInviteId(invite.inviteId)
+    try {
+      const resolvedDeviceId = await ensureResolvedDeviceId()
+      await revokeNotificationInvite(resolvedDeviceId, invite.inviteId)
+      await refreshNotificationInvites(resolvedDeviceId)
+      await refreshTelegramRecipients(resolvedDeviceId)
+    } catch (err) {
+      console.error(err)
+      setError('Unable to revoke that share invite.')
+    } finally {
+      setUpdatingInviteId(null)
+    }
+  }, [ensureResolvedDeviceId, refreshNotificationInvites, refreshTelegramRecipients])
+
+  const handleAcceptInvite = useCallback(async () => {
+    const normalizedCode = inviteCodeInput.trim()
+    if (!normalizedCode) {
+      setError('Enter an invite code before accepting a shared invite.')
+      return
+    }
+
+    setError(null)
+    setInviteAcceptedMessage(null)
+    const preOpenedPopup = shouldPreOpenTelegramPopup()
+      ? window.open('', '_blank', 'noopener,noreferrer')
+      : null
+
+    try {
+      const start = await acceptNotificationInvite(normalizedCode)
+      beginTelegramLinkFlow(start, {
+        deviceId: start.deviceId,
+        flow: 'invite',
+        preOpenedPopup,
+      })
+    } catch (err) {
+      console.error(err)
+      preOpenedPopup?.close()
+      setError('Unable to accept that shared invite.')
+    }
+  }, [beginTelegramLinkFlow, inviteCodeInput])
+
   const handleConnectTelegram = async () => {
     setError(null)
+    setInviteAcceptedMessage(null)
     const preOpenedPopup = shouldPreOpenTelegramPopup()
       ? window.open('', '_blank', 'noopener,noreferrer')
       : null
@@ -789,16 +1012,6 @@ function App() {
         deviceId: resolvedDeviceId,
       })
       const start = await startTelegramLink(resolvedDeviceId)
-      const fallbackCommand = deriveTelegramFallbackCommand(
-        start.fallbackCommand,
-        start.connectUrl
-      )
-      setTelegramReadiness({
-        enabled: start.enabled,
-        ready: start.ready,
-        status: start.status,
-        reason: start.reason,
-      })
       console.info('[TelegramOnboarding] Link start response', {
         deviceId: resolvedDeviceId,
         enabled: start.enabled,
@@ -807,63 +1020,11 @@ function App() {
         attemptId: start.attemptId,
         hasConnectUrl: Boolean(start.connectUrl),
       })
-
-      if (!start.connectUrl || !start.attemptId) {
-        preOpenedPopup?.close()
-        clearTelegramLinkState()
-        setError(start.reason || 'Unable to generate Telegram connect link.')
-        return
-      }
-
-      persistTelegramLinkState({
-        attemptId: start.attemptId,
-        fallbackCommand,
+      beginTelegramLinkFlow(start, {
+        deviceId: resolvedDeviceId,
+        flow: 'device',
+        preOpenedPopup,
       })
-
-      let popup = preOpenedPopup
-      if (!popup) {
-        popup = window.open(start.connectUrl, '_blank', 'noopener,noreferrer')
-      }
-      if (!popup) {
-        console.warn('[TelegramOnboarding] Popup blocked; using backup link', {
-          attemptId: start.attemptId,
-        })
-        persistTelegramLinkState({
-          waiting: true,
-          fallbackUrl: start.connectUrl,
-          fallbackCommand,
-        })
-        setError('Popup blocked. Use the backup Telegram link below.')
-        return
-      }
-
-      if (preOpenedPopup) {
-        try {
-          popup.location.href = start.connectUrl
-          console.info('[TelegramOnboarding] Reused pre-opened popup', {
-            attemptId: start.attemptId,
-          })
-        } catch {
-          popup.close()
-          persistTelegramLinkState({
-            waiting: true,
-            fallbackUrl: start.connectUrl,
-            fallbackCommand,
-          })
-          setError('Unable to redirect popup. Use the backup Telegram link below.')
-          return
-        }
-      }
-
-      persistTelegramLinkState({
-        waiting: true,
-        fallbackUrl: start.connectUrl,
-        fallbackCommand,
-      })
-      console.info('[TelegramOnboarding] Waiting for Telegram confirmation', {
-        attemptId: start.attemptId,
-      })
-      setError(null)
     } catch (err) {
       console.error(err)
       preOpenedPopup?.close()
@@ -875,14 +1036,15 @@ function App() {
     setError(null)
     try {
       const resolvedDeviceId = await ensureResolvedDeviceId()
+      const linkDeviceId = telegramLinkAttemptDeviceId ?? resolvedDeviceId
       if (telegramLinkAttemptId) {
         console.info('[TelegramOnboarding] Checking link attempt status', {
-          deviceId: resolvedDeviceId,
+          deviceId: linkDeviceId,
           attemptId: telegramLinkAttemptId,
         })
-        const status = await getTelegramLinkStatus(resolvedDeviceId, telegramLinkAttemptId)
+        const status = await getTelegramLinkStatus(linkDeviceId, telegramLinkAttemptId)
         console.info('[TelegramOnboarding] Link status response', {
-          deviceId: resolvedDeviceId,
+          deviceId: linkDeviceId,
           attemptId: telegramLinkAttemptId,
           ready: status.ready,
           linked: status.linked,
@@ -890,6 +1052,12 @@ function App() {
           reason: status.reason,
         })
         if (status.ready) {
+          if (telegramLinkFlow === 'invite') {
+            clearTelegramLinkState()
+            setInviteAcceptedMessage('Shared invite accepted. Alerts will go to your Telegram account.')
+            setInviteCodeInput('')
+            return
+          }
           await refreshTelegramReadiness()
           return
         }
@@ -919,6 +1087,8 @@ function App() {
     clearTelegramLinkState,
     ensureResolvedDeviceId,
     refreshTelegramReadiness,
+    telegramLinkAttemptDeviceId,
+    telegramLinkFlow,
     telegramLinkAttemptId,
   ])
 
@@ -1100,19 +1270,26 @@ function App() {
       if (cancelled) return
       try {
         const resolvedDeviceId = await ensureResolvedDeviceId()
+        const linkDeviceId = telegramLinkAttemptDeviceId ?? resolvedDeviceId
         if (telegramLinkAttemptId) {
           console.info('[TelegramOnboarding] Polling link status', {
-            deviceId: resolvedDeviceId,
+            deviceId: linkDeviceId,
             attemptId: telegramLinkAttemptId,
           })
-          const status = await getTelegramLinkStatus(resolvedDeviceId, telegramLinkAttemptId)
+          const status = await getTelegramLinkStatus(linkDeviceId, telegramLinkAttemptId)
           console.info('[TelegramOnboarding] Poll result', {
-            deviceId: resolvedDeviceId,
+            deviceId: linkDeviceId,
             attemptId: telegramLinkAttemptId,
             ready: status.ready,
             status: status.status,
           })
           if (status.ready) {
+            if (telegramLinkFlow === 'invite') {
+              clearTelegramLinkState()
+              setInviteAcceptedMessage('Shared invite accepted. Alerts will go to your Telegram account.')
+              setInviteCodeInput('')
+              return
+            }
             await refreshTelegramReadiness()
             return
           }
@@ -1155,6 +1332,8 @@ function App() {
     isWaitingForTelegramConnect,
     requiresAccountSignIn,
     refreshTelegramReadiness,
+    telegramLinkAttemptDeviceId,
+    telegramLinkFlow,
     telegramLinkAttemptId,
   ])
 
@@ -1404,6 +1583,108 @@ function App() {
                       >
                         {recipient.subscribed ? 'Remove' : 'Add'}
                       </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </section>
+        )}
+
+        <section className="share-access" aria-label="Accept shared invite">
+          <div className="share-access-header">
+            <div>
+              <h2>Accept shared invite</h2>
+              <p className="telegram-recipient-meta">
+                Paste an invite code from a device owner to route shared alerts to your Telegram account.
+              </p>
+            </div>
+          </div>
+          <div className="share-access-controls">
+            <label className="account-field">
+              <span>Invite code</span>
+              <input
+                type="text"
+                value={inviteCodeInput}
+                onChange={(event) => setInviteCodeInput(event.target.value)}
+                aria-label="Invite code"
+                placeholder="share-code"
+              />
+            </label>
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => {
+                void handleAcceptInvite()
+              }}
+            >
+              Accept invite
+            </button>
+          </div>
+          {inviteAcceptedMessage && (
+            <p className="telegram-recipient-meta">{inviteAcceptedMessage}</p>
+          )}
+        </section>
+
+        {telegramReadiness?.enabled && (
+          <section className="share-access" aria-label="Share access">
+            <div className="share-access-header">
+              <div>
+                <h2>Share access</h2>
+                <p className="telegram-recipient-meta">
+                  Generate time-limited invites so other Telegram recipients can subscribe safely.
+                </p>
+              </div>
+              <button
+                className="secondary"
+                type="button"
+                onClick={() => {
+                  void handleCreateInvite()
+                }}
+                disabled={updatingInviteId === 'creating'}
+              >
+                Create share invite
+              </button>
+            </div>
+            {latestInviteCode && (
+              <p className="share-access-code">
+                <span>Latest invite code</span>
+                <code>{latestInviteCode}</code>
+              </p>
+            )}
+            {loadingNotificationInvites ? (
+              <p className="telegram-recipient-meta">Loading share invites...</p>
+            ) : notificationInvites.length === 0 ? (
+              <p className="telegram-recipient-meta">
+                No share invites yet. Create one when you want to grant Telegram access.
+              </p>
+            ) : (
+              <ul className="telegram-recipient-list">
+                {notificationInvites.map((invite) => {
+                  const isUpdating = updatingInviteId === invite.inviteId
+                  return (
+                    <li key={invite.inviteId} className="telegram-recipient-item">
+                      <div className="telegram-recipient-details">
+                        <span className="telegram-recipient-name">
+                          {formatInviteStatus(invite.status)}
+                        </span>
+                        <span className="telegram-recipient-meta">
+                          {formatInviteRecipient(invite) ?? invite.inviteId}
+                        </span>
+                      </div>
+                      {invite.status !== 'revoked' && invite.status !== 'expired' && (
+                        <button
+                          className="secondary"
+                          type="button"
+                          onClick={() => {
+                            void handleRevokeInvite(invite)
+                          }}
+                          disabled={isUpdating}
+                          aria-label={formatInviteActionName(invite)}
+                        >
+                          Revoke
+                        </button>
+                      )}
                     </li>
                   )
                 })}

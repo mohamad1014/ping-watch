@@ -47,6 +47,22 @@ _REQUIRED_DEVICE_NOTIFICATION_SUBSCRIPTIONS_COLUMNS = {
     "endpoint_id",
     "created_at",
 }
+_REQUIRED_NOTIFICATION_INVITES_COLUMNS = {
+    "invite_id",
+    "device_id",
+    "owner_user_id",
+    "recipient_user_id",
+    "accepted_endpoint_id",
+    "token_hash",
+    "status",
+    "created_at",
+    "expires_at",
+    "accepted_at",
+    "revoked_at",
+}
+_REQUIRED_TELEGRAM_LINK_ATTEMPT_COLUMNS = {
+    "invite_id",
+}
 _REQUIRED_SESSIONS_COLUMNS = {
     "user_id",
 }
@@ -92,6 +108,35 @@ def ensure_schema_compatible(engine: Engine) -> None:
             "Database schema is out of date; run `cd backend && .venv/bin/alembic upgrade head` "
             f"(missing columns on `device_notification_subscriptions`: {', '.join(missing)})"
         )
+
+    if "notification_invites" not in table_names:
+        raise RuntimeError(
+            "Database schema is out of date; run `cd backend && .venv/bin/alembic upgrade head` "
+            "(missing tables: notification_invites)"
+        )
+
+    invite_columns = {
+        col["name"] for col in inspector.get_columns("notification_invites")
+    }
+    missing = sorted(_REQUIRED_NOTIFICATION_INVITES_COLUMNS - invite_columns)
+    if missing:
+        raise RuntimeError(
+            "Database schema is out of date; run `cd backend && .venv/bin/alembic upgrade head` "
+            f"(missing columns on `notification_invites`: {', '.join(missing)})"
+        )
+
+    if "telegram_link_attempts" in table_names:
+        telegram_link_attempt_columns = {
+            col["name"] for col in inspector.get_columns("telegram_link_attempts")
+        }
+        missing = sorted(
+            _REQUIRED_TELEGRAM_LINK_ATTEMPT_COLUMNS - telegram_link_attempt_columns
+        )
+        if missing:
+            raise RuntimeError(
+                "Database schema is out of date; run `cd backend && .venv/bin/alembic upgrade head` "
+                f"(missing columns on `telegram_link_attempts`: {', '.join(missing)})"
+            )
 
     if "sessions" in table_names:
         session_columns = {col["name"] for col in inspector.get_columns("sessions")}
