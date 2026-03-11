@@ -587,7 +587,7 @@ def update_event_summary(
     record = db.get(EventModel, event_id)
     if record is None:
         return None
-    if record.status == "canceled":
+    if record.status in {"canceled", "failed"}:
         return record
     record.summary = summary
     record.label = label
@@ -600,6 +600,34 @@ def update_event_summary(
     record.detected_entities = detected_entities
     record.detected_actions = detected_actions
     record.status = "done"
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def update_event_failure(
+    db: Session,
+    event_id: str,
+    error_message: str,
+    error_type: Optional[str],
+) -> Optional[EventModel]:
+    record = db.get(EventModel, event_id)
+    if record is None:
+        return None
+    if record.status == "canceled":
+        return record
+
+    record.summary = "Processing failed"
+    record.label = "error"
+    record.confidence = 0.0
+    record.inference_provider = None
+    record.inference_model = None
+    record.should_notify = False
+    record.alert_reason = error_message
+    record.matched_rules = [f"error_type:{error_type}"] if error_type else []
+    record.detected_entities = []
+    record.detected_actions = []
+    record.status = "failed"
     db.commit()
     db.refresh(record)
     return record

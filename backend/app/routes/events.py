@@ -28,6 +28,7 @@ from app.store import (
     mark_event_enqueue_attempt,
     mark_event_clip_uploaded,
     mark_event_clip_uploaded_via_local_api,
+    update_event_failure,
     update_event_summary,
 )
 
@@ -56,6 +57,11 @@ class EventSummaryRequest(BaseModel):
     matched_rules: list[str] | None = None
     detected_entities: list[str] | None = None
     detected_actions: list[str] | None = None
+
+
+class EventFailureRequest(BaseModel):
+    error_message: str
+    error_type: str | None = None
 
 
 class InitiateUploadRequest(BaseModel):
@@ -307,6 +313,21 @@ async def update_event_summary_endpoint(
         payload.matched_rules,
         payload.detected_entities,
         payload.detected_actions,
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail="event not found")
+    return event_to_dict(record)
+
+
+@router.post("/{event_id}/failure")
+async def update_event_failure_endpoint(
+    event_id: str, payload: EventFailureRequest, db: Session = Depends(get_db)
+):
+    record = update_event_failure(
+        db,
+        event_id,
+        payload.error_message,
+        payload.error_type,
     )
     if record is None:
         raise HTTPException(status_code=404, detail="event not found")

@@ -54,6 +54,36 @@ def test_post_event_summary_calls_api(monkeypatch):
     assert result["status"] == "done"
 
 
+def test_post_event_failure_calls_api(monkeypatch):
+    """Test that post_event_failure calls the backend API."""
+    response = build_response(
+        "http://localhost:8000/events/evt_1/failure",
+        {
+            "event_id": "evt_1",
+            "status": "failed",
+            "summary": "Processing failed",
+            "label": "error",
+            "alert_reason": "Download failed",
+        },
+    )
+    mock_post = MagicMock(return_value=response)
+    monkeypatch.setattr(httpx, "post", mock_post)
+
+    result = tasks.post_event_failure(
+        event_id="evt_1",
+        error_message="Download failed",
+        error_type="RuntimeError",
+    )
+
+    mock_post.assert_called_once()
+    payload = mock_post.call_args.kwargs["json"]
+    assert payload == {
+        "error_message": "Download failed",
+        "error_type": "RuntimeError",
+    }
+    assert result["status"] == "failed"
+
+
 def test_download_clip_data_local_container(monkeypatch):
     """Test that local container uses local download."""
     mock_local = MagicMock(return_value=b"local data")
@@ -170,13 +200,15 @@ def test_process_clip_missing_event_id():
     assert "missing event_id" in result["error"]
 
 
-def test_process_clip_error_posts_fallback_summary(monkeypatch):
-    """Test that errors post a fallback summary."""
+def test_process_clip_error_persists_failure_state(monkeypatch):
+    """Test that errors persist failed state metadata."""
     mock_download = MagicMock(side_effect=RuntimeError("Download failed"))
-    mock_post = MagicMock(return_value={"status": "done"})
+    mock_failure = MagicMock(return_value={"status": "failed"})
+    mock_post_summary = MagicMock()
 
     monkeypatch.setattr(tasks, "download_clip_data", mock_download)
-    monkeypatch.setattr(tasks, "post_event_summary", mock_post)
+    monkeypatch.setattr(tasks, "post_event_failure", mock_failure, raising=False)
+    monkeypatch.setattr(tasks, "post_event_summary", mock_post_summary)
 
     payload = {
         "event_id": "evt_123",
@@ -191,11 +223,13 @@ def test_process_clip_error_posts_fallback_summary(monkeypatch):
     assert result["status"] == "error"
     assert "Download failed" in result["error"]
 
-    # Verify fallback summary was posted
-    mock_post.assert_called_once()
-    call_kwargs = mock_post.call_args[1]
-    assert call_kwargs["label"] == "error"
-    assert "Processing failed" in call_kwargs["summary"]
+    # Verify failed state was persisted, not converted to done fallback summary
+    mock_failure.assert_called_once_with(
+        event_id="evt_123",
+        error_message="Download failed",
+        error_type="RuntimeError",
+    )
+    mock_post_summary.assert_not_called()
 
 
 def test_process_clip_auth_error_logs_without_traceback(monkeypatch):

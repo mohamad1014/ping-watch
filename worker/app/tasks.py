@@ -81,6 +81,32 @@ def post_event_summary(
         return response.json()
 
 
+def post_event_failure(
+    event_id: str,
+    error_message: str,
+    error_type: str | None = None,
+) -> dict[str, Any]:
+    """Post worker failure metadata to the backend API."""
+    with worker_log_context(event_id=event_id):
+        payload = {
+            "error_message": error_message,
+            "error_type": error_type,
+        }
+        logger.info(
+            "Posting failure for event %s: error_type=%s",
+            event_id,
+            error_type,
+        )
+        response = httpx.post(
+            f"{_api_base_url()}/events/{event_id}/failure",
+            json=payload,
+            headers=_api_auth_headers() or None,
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+
+
 def download_clip_data(
     clip_blob_name: str,
     clip_container: str,
@@ -311,21 +337,13 @@ def process_clip(payload: dict[str, Any]) -> dict[str, Any]:
                 logger.exception(f"Failed to process clip for event {event_id}: {exc}")
 
             try:
-                post_event_summary(
+                post_event_failure(
                     event_id=event_id,
-                    summary=f"Processing failed: {str(exc)[:200]}",
-                    label="error",
-                    confidence=0.0,
-                    inference_provider=None,
-                    inference_model=None,
-                    should_notify=False,
-                    alert_reason="Processing failed before alert evaluation",
-                    matched_rules=[],
-                    detected_entities=[],
-                    detected_actions=[],
+                    error_message=str(exc)[:200],
+                    error_type=type(exc).__name__,
                 )
             except Exception as post_exc:
-                logger.error(f"Failed to post error summary: {post_exc}")
+                logger.error(f"Failed to post failure metadata: {post_exc}")
 
             return {
                 "status": "error",
