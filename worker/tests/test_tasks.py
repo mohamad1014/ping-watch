@@ -161,6 +161,10 @@ def test_process_clip_full_pipeline(monkeypatch):
     assert result["label"] == "person"
     assert result["confidence"] == 0.92
     assert result["should_notify"] is True
+    assert result["notification_delivery"] == {
+        "telegram_sent": False,
+        "webhook_sent": False,
+    }
 
     # Verify pipeline was called correctly
     mock_download.assert_called_once_with(
@@ -190,6 +194,48 @@ def test_process_clip_full_pipeline(monkeypatch):
     assert notify_payload.event_id == "evt_123"
     assert notify_payload.device_id == "dev_789"
     assert notify_payload.should_notify is True
+
+
+def test_process_clip_reports_fanout_delivery_result(monkeypatch):
+    mock_download = MagicMock(return_value=b"video data")
+    mock_extract = MagicMock(return_value=["data:image/jpeg;base64,frame1"])
+    mock_inference = MagicMock(return_value=InferenceResult(
+        label="person",
+        summary="Person detected in frame",
+        confidence=0.92,
+        provider="nvidia",
+        model="nvidia/nemotron-nano-12b-v2-vl",
+        should_notify=True,
+        alert_reason="Matched person at front door",
+        matched_rules=["person at front door"],
+        detected_entities=["person", "door"],
+        detected_actions=["entering"],
+    ))
+    mock_post = MagicMock(return_value={"status": "done"})
+    mock_notify = MagicMock(return_value={"telegram_sent": True, "webhook_sent": False})
+
+    monkeypatch.setattr(tasks, "download_clip_data", mock_download)
+    monkeypatch.setattr("app.tasks.extract_frames_as_base64", mock_extract)
+    monkeypatch.setattr("app.tasks.run_inference", mock_inference)
+    monkeypatch.setattr(tasks, "post_event_summary", mock_post)
+    monkeypatch.setattr(tasks, "send_outbound_notifications", mock_notify)
+
+    result = tasks.process_clip(
+        {
+            "event_id": "evt_fanout",
+            "session_id": "sess_fanout",
+            "device_id": "dev_fanout",
+            "clip_blob_name": "sessions/sess_fanout/events/evt_fanout.webm",
+            "clip_container": "clips",
+            "clip_mime": "video/webm",
+        }
+    )
+
+    assert result["status"] == "done"
+    assert result["notification_delivery"] == {
+        "telegram_sent": True,
+        "webhook_sent": False,
+    }
 
 
 def test_process_clip_missing_event_id():

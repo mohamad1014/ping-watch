@@ -47,7 +47,7 @@ def test_send_outbound_notifications_posts_telegram_video(monkeypatch):
     monkeypatch.setenv("API_BASE_URL", "http://backend:8000")
     monkeypatch.delenv("NOTIFY_WEBHOOK_URL", raising=False)
 
-    class TargetResponse:
+    class TargetsResponse:
         status_code = 200
 
         def json(self):
@@ -55,10 +55,12 @@ def test_send_outbound_notifications_posts_telegram_video(monkeypatch):
                 "enabled": True,
                 "linked": True,
                 "device_id": "dev-1",
-                "chat_id": "chat-1",
+                "recipients": [
+                    {"chat_id": "chat-1", "telegram_username": "alice"},
+                ],
             }
 
-    mock_get = MagicMock(return_value=TargetResponse())
+    mock_get = MagicMock(return_value=TargetsResponse())
     monkeypatch.setattr(httpx, "get", mock_get)
 
     response = MagicMock()
@@ -86,8 +88,9 @@ def test_send_outbound_notifications_posts_telegram_video(monkeypatch):
     assert result["telegram_sent"] is True
     assert result["webhook_sent"] is False
     mock_get.assert_called_once_with(
-        "http://backend:8000/notifications/telegram/target",
+        "http://backend:8000/notifications/telegram/targets",
         params={"device_id": "dev-1"},
+        headers=None,
         timeout=10,
     )
     mock_post.assert_called_once()
@@ -97,12 +100,12 @@ def test_send_outbound_notifications_posts_telegram_video(monkeypatch):
     assert files["video"][2] == "video/webm"
 
 
-def test_send_outbound_notifications_resolves_chat_id_per_device(monkeypatch):
+def test_send_outbound_notifications_fans_out_to_all_recipient_chat_ids(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
     monkeypatch.setenv("API_BASE_URL", "http://backend:8000")
     monkeypatch.delenv("NOTIFY_WEBHOOK_URL", raising=False)
 
-    class TargetResponse:
+    class TargetsResponse:
         status_code = 200
 
         def json(self):
@@ -110,10 +113,13 @@ def test_send_outbound_notifications_resolves_chat_id_per_device(monkeypatch):
                 "enabled": True,
                 "linked": True,
                 "device_id": "dev-1",
-                "chat_id": "chat-from-device",
+                "recipients": [
+                    {"chat_id": "chat-a", "telegram_username": "alice"},
+                    {"chat_id": "chat-b", "telegram_username": "bob"},
+                ],
             }
 
-    mock_get = MagicMock(return_value=TargetResponse())
+    mock_get = MagicMock(return_value=TargetsResponse())
     monkeypatch.setattr(httpx, "get", mock_get)
 
     response = MagicMock()
@@ -141,11 +147,65 @@ def test_send_outbound_notifications_resolves_chat_id_per_device(monkeypatch):
     assert result["telegram_sent"] is True
     assert result["webhook_sent"] is False
     mock_get.assert_called_once_with(
-        "http://backend:8000/notifications/telegram/target",
+        "http://backend:8000/notifications/telegram/targets",
         params={"device_id": "dev-1"},
+        headers=None,
         timeout=10,
     )
-    assert mock_post.call_args.kwargs["data"]["chat_id"] == "chat-from-device"
+    assert mock_post.call_count == 2
+    chat_ids = [call.kwargs["data"]["chat_id"] for call in mock_post.call_args_list]
+    assert chat_ids == ["chat-a", "chat-b"]
+
+
+def test_send_outbound_notifications_forwards_worker_bearer_token_to_target_lookup(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("WORKER_API_TOKEN", "worker-secret")
+    monkeypatch.setenv("API_BASE_URL", "http://backend:8000")
+    monkeypatch.delenv("NOTIFY_WEBHOOK_URL", raising=False)
+
+    class TargetsResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "enabled": True,
+                "linked": True,
+                "device_id": "dev-1",
+                "recipients": [
+                    {"chat_id": "chat-a", "telegram_username": "alice"},
+                ],
+            }
+
+    mock_get = MagicMock(return_value=TargetsResponse())
+    monkeypatch.setattr(httpx, "get", mock_get)
+
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    monkeypatch.setattr(httpx, "post", MagicMock(return_value=response))
+
+    payload = NotificationPayload(
+        event_id="evt-auth",
+        session_id="sess-auth",
+        device_id="dev-1",
+        summary="Dog detected in the driveway",
+        label="animal",
+        confidence=0.81,
+        alert_reason="Matched animal rule",
+        inference_provider="nvidia",
+        inference_model="nvidia/nemotron-nano-12b-v2-vl",
+        clip_uri=None,
+        clip_mime="video/webm",
+        clip_data=b"fake-video-bytes",
+    )
+
+    send_outbound_notifications(payload)
+
+    mock_get.assert_called_once_with(
+        "http://backend:8000/notifications/telegram/targets",
+        params={"device_id": "dev-1"},
+        headers={"Authorization": "Bearer worker-secret"},
+        timeout=10,
+    )
 
 
 def test_send_outbound_notifications_no_channels(monkeypatch):
@@ -230,7 +290,7 @@ def test_send_outbound_notifications_does_not_use_legacy_chat_id_fallback(monkey
     monkeypatch.setenv("API_BASE_URL", "http://backend:8000")
     monkeypatch.delenv("NOTIFY_WEBHOOK_URL", raising=False)
 
-    class TargetResponse:
+    class TargetsResponse:
         status_code = 200
 
         def json(self):
@@ -238,10 +298,10 @@ def test_send_outbound_notifications_does_not_use_legacy_chat_id_fallback(monkey
                 "enabled": True,
                 "linked": False,
                 "device_id": "dev-1",
-                "chat_id": None,
+                "recipients": [],
             }
 
-    mock_get = MagicMock(return_value=TargetResponse())
+    mock_get = MagicMock(return_value=TargetsResponse())
     monkeypatch.setattr(httpx, "get", mock_get)
     mock_post = MagicMock()
     monkeypatch.setattr(httpx, "post", mock_post)
@@ -265,8 +325,9 @@ def test_send_outbound_notifications_does_not_use_legacy_chat_id_fallback(monkey
 
     assert result == {"telegram_sent": False, "webhook_sent": False}
     mock_get.assert_called_once_with(
-        "http://backend:8000/notifications/telegram/target",
+        "http://backend:8000/notifications/telegram/targets",
         params={"device_id": "dev-1"},
+        headers=None,
         timeout=10,
     )
     mock_post.assert_not_called()

@@ -73,6 +73,18 @@ class TelegramTargetResponse(BaseModel):
     chat_id: str | None = None
 
 
+class TelegramRecipientTargetResponse(BaseModel):
+    chat_id: str
+    telegram_username: str | None = None
+
+
+class TelegramTargetsResponse(BaseModel):
+    enabled: bool
+    linked: bool
+    device_id: str
+    recipients: list[TelegramRecipientTargetResponse]
+
+
 class TelegramWebhookResponse(BaseModel):
     ok: bool = True
 
@@ -209,6 +221,17 @@ def _telegram_base_url() -> str:
     return (os.environ.get("TELEGRAM_API_BASE_URL") or "https://api.telegram.org").rstrip(
         "/"
     )
+
+
+def _require_worker_api_token(request: Request) -> None:
+    expected = (os.environ.get("WORKER_API_TOKEN") or "").strip()
+    if not expected:
+        return
+
+    authorization = (request.headers.get("authorization") or "").strip()
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token or not secrets.compare_digest(token, expected):
+        raise HTTPException(status_code=401, detail="invalid worker token")
 
 
 def _telegram_get_chat(token: str, chat_id: str) -> tuple[int, dict]:
@@ -951,6 +974,51 @@ def telegram_target(
         linked=True,
         device_id=device_id,
         chat_id=target_chat_id,
+    )
+
+
+@router.get("/telegram/targets")
+def telegram_targets(
+    device_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> TelegramTargetsResponse:
+    _require_worker_api_token(request)
+    token = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        return TelegramTargetsResponse(
+            enabled=False,
+            linked=False,
+            device_id=device_id,
+            recipients=[],
+        )
+
+    device = get_device(db, device_id)
+    if device is None:
+        return TelegramTargetsResponse(
+            enabled=True,
+            linked=False,
+            device_id=device_id,
+            recipients=[],
+        )
+
+    recipients = [
+        TelegramRecipientTargetResponse(
+            chat_id=endpoint.chat_id,
+            telegram_username=endpoint.telegram_username,
+        )
+        for endpoint, subscribed in list_notification_recipient_states_for_device(
+            db,
+            device=device,
+            user_id=None,
+        )
+        if subscribed
+    ]
+    return TelegramTargetsResponse(
+        enabled=True,
+        linked=bool(recipients),
+        device_id=device_id,
+        recipients=recipients,
     )
 
 

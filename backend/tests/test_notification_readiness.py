@@ -10,7 +10,13 @@ import app.routes.notifications as notifications_route
 from app.db import SessionLocal, engine
 from app.main import app
 from app.models import DeviceModel, NotificationEndpointModel
-from app.store import get_telegram_link_attempt, link_device_telegram_chat
+from app.store import (
+    add_notification_endpoint_subscription_to_device,
+    get_device,
+    get_notification_endpoints_for_device,
+    get_telegram_link_attempt,
+    link_device_telegram_chat,
+)
 
 
 @pytest.mark.anyio
@@ -818,3 +824,58 @@ async def test_telegram_target_switches_to_newly_added_recipient_subscription(mo
 
     assert updated_target.status_code == 200
     assert updated_target.json()["chat_id"] == "222"
+
+
+@pytest.mark.anyio
+async def test_telegram_targets_lists_all_subscribed_recipients_for_worker(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setenv("WORKER_API_TOKEN", "worker-secret")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post("/devices/register", json={"device_id": "dev-1"})
+        await client.post("/devices/register", json={"device_id": "dev-2"})
+
+        with SessionLocal() as db:
+            link_device_telegram_chat(
+                db,
+                device_id="dev-1",
+                chat_id="111",
+                username="alice",
+                user_id=None,
+            )
+            link_device_telegram_chat(
+                db,
+                device_id="dev-2",
+                chat_id="222",
+                username="bob",
+                user_id=None,
+            )
+            dev_1 = get_device(db, "dev-1")
+            dev_2 = get_device(db, "dev-2")
+            assert dev_1 is not None
+            assert dev_2 is not None
+            endpoint_222 = get_notification_endpoints_for_device(db, dev_2)[0]
+            add_notification_endpoint_subscription_to_device(
+                db,
+                device=dev_1,
+                endpoint=endpoint_222,
+            )
+
+        targets_response = await client.get(
+            "/notifications/telegram/targets",
+            params={"device_id": "dev-1"},
+            headers={"authorization": "Bearer worker-secret"},
+        )
+
+    assert targets_response.status_code == 200
+    assert targets_response.json() == {
+        "enabled": True,
+        "linked": True,
+        "device_id": "dev-1",
+        "recipients": [
+            {"chat_id": "222", "telegram_username": "bob"},
+            {"chat_id": "111", "telegram_username": "alice"},
+        ],
+    }

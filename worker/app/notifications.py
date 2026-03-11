@@ -49,6 +49,13 @@ def _notification_timeout() -> float:
         return 10.0
 
 
+def _api_auth_headers() -> dict[str, str] | None:
+    token = (os.environ.get("WORKER_API_TOKEN") or "").strip()
+    if not token:
+        return None
+    return {"Authorization": f"Bearer {token}"}
+
+
 def _normalize_video_mime(value: str | None) -> str:
     raw = (value or "").strip().lower()
     if not raw:
@@ -80,136 +87,159 @@ def _build_alert_text(payload: NotificationPayload) -> str:
     return "\n".join(lines)
 
 
-def _resolve_chat_id_for_payload(payload: NotificationPayload) -> str | None:
+def _resolve_chat_ids_for_payload(payload: NotificationPayload) -> list[str]:
     if payload.device_id:
         try:
             response = httpx.get(
-                f"{_api_base_url()}/notifications/telegram/target",
+                f"{_api_base_url()}/notifications/telegram/targets",
                 params={"device_id": payload.device_id},
+                headers=_api_auth_headers(),
                 timeout=_notification_timeout(),
             )
             if response.status_code == 200:
                 data = response.json()
-                chat_id = str(data.get("chat_id") or "").strip()
-                if chat_id:
+                recipients = data.get("recipients") or []
+                chat_ids = [
+                    str(recipient.get("chat_id") or "").strip()
+                    for recipient in recipients
+                    if str(recipient.get("chat_id") or "").strip()
+                ]
+                if chat_ids:
                     logger.info(
-                        "Resolved Telegram chat for event %s via device mapping (device=%s)",
+                        "Resolved %s Telegram chat target(s) for event %s via device mapping (device=%s)",
+                        len(chat_ids),
                         payload.event_id,
                         payload.device_id,
                     )
-                    return chat_id
+                    return chat_ids
                 logger.info(
-                    "Telegram target response had no chat id for event %s (device=%s)",
+                    "Telegram targets response had no chat ids for event %s (device=%s)",
                     payload.event_id,
                     payload.device_id,
                 )
             else:
                 logger.warning(
-                    "Telegram target lookup failed for event %s (device=%s, status=%s)",
+                    "Telegram targets lookup failed for event %s (device=%s, status=%s)",
                     payload.event_id,
                     payload.device_id,
                     response.status_code,
                 )
         except (httpx.RequestError, ValueError) as exc:
             logger.warning(
-                "Failed to resolve Telegram target for event %s and device %s: %s",
+                "Failed to resolve Telegram targets for event %s and device %s: %s",
                 payload.event_id,
                 payload.device_id,
                 exc,
             )
 
     logger.info(
-        "No Telegram chat target resolved for event %s (device=%s)",
+        "No Telegram chat targets resolved for event %s (device=%s)",
         payload.event_id,
         payload.device_id or "n/a",
     )
-    return None
+    return []
 
 
 def _send_telegram_notification(payload: NotificationPayload) -> bool:
     token = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
-    chat_id = _resolve_chat_id_for_payload(payload)
-    if not token or not chat_id:
+    chat_ids = _resolve_chat_ids_for_payload(payload)
+    if not token or not chat_ids:
         logger.info(
-            "Telegram notification skipped for event %s: token_configured=%s chat_configured=%s",
+            "Telegram notification skipped for event %s: token_configured=%s recipient_count=%s",
             payload.event_id,
             bool(token),
-            bool(chat_id),
+            len(chat_ids),
         )
         return False
 
     base_url = os.environ.get("TELEGRAM_API_BASE_URL", "https://api.telegram.org").rstrip("/")
     timeout = _notification_timeout()
     caption = _build_alert_text(payload)
+    delivered = False
 
     send_video = _is_truthy(os.environ.get("TELEGRAM_SEND_VIDEO"), default=True)
-    if send_video and payload.clip_data:
-        logger.info(
-            "Sending Telegram video alert for event %s (clip_bytes=%s)",
-            payload.event_id,
-            len(payload.clip_data),
-        )
+    for chat_id in chat_ids:
+        if send_video and payload.clip_data:
+            logger.info(
+                "Sending Telegram video alert for event %s to chat %s (clip_bytes=%s)",
+                payload.event_id,
+                chat_id,
+                len(payload.clip_data),
+            )
+            try:
+                endpoint = f"{base_url}/bot{token}/sendVideo"
+                filename = f"clip-{payload.event_id}.webm"
+                mime = _normalize_video_mime(payload.clip_mime)
+                response = httpx.post(
+                    endpoint,
+                    data={
+                        "chat_id": chat_id,
+                        "caption": caption,
+                        "supports_streaming": "true",
+                    },
+                    files={
+                        "video": (
+                            filename,
+                            payload.clip_data,
+                            mime,
+                        )
+                    },
+                    timeout=timeout,
+                )
+                response.raise_for_status()
+                logger.info("Telegram video alert sent for event %s to chat %s", payload.event_id, chat_id)
+                delivered = True
+                continue
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    "Telegram video alert failed for event %s chat %s: status=%s body=%s",
+                    payload.event_id,
+                    chat_id,
+                    exc.response.status_code,
+                    _truncate(exc.response.text),
+                )
+                continue
+            except httpx.RequestError as exc:
+                logger.error(
+                    "Telegram video alert request failed for event %s chat %s: %s",
+                    payload.event_id,
+                    chat_id,
+                    exc,
+                )
+                continue
+
+        endpoint = f"{base_url}/bot{token}/sendMessage"
+        logger.info("Sending Telegram text alert for event %s to chat %s", payload.event_id, chat_id)
         try:
-            endpoint = f"{base_url}/bot{token}/sendVideo"
-            filename = f"clip-{payload.event_id}.webm"
-            mime = _normalize_video_mime(payload.clip_mime)
             response = httpx.post(
                 endpoint,
-                data={
+                json={
                     "chat_id": chat_id,
-                    "caption": caption,
-                    "supports_streaming": "true",
-                },
-                files={
-                    "video": (
-                        filename,
-                        payload.clip_data,
-                        mime,
-                    )
+                    "text": caption,
+                    "disable_web_page_preview": True,
                 },
                 timeout=timeout,
             )
             response.raise_for_status()
-            logger.info("Telegram video alert sent for event %s", payload.event_id)
-            return True
+            logger.info("Telegram text alert sent for event %s to chat %s", payload.event_id, chat_id)
+            delivered = True
         except httpx.HTTPStatusError as exc:
             logger.error(
-                "Telegram video alert failed for event %s: status=%s body=%s",
+                "Telegram text alert failed for event %s chat %s: status=%s body=%s",
                 payload.event_id,
+                chat_id,
                 exc.response.status_code,
                 _truncate(exc.response.text),
             )
-            raise
         except httpx.RequestError as exc:
-            logger.error("Telegram video alert request failed for event %s: %s", payload.event_id, exc)
-            raise
+            logger.error(
+                "Telegram text alert request failed for event %s chat %s: %s",
+                payload.event_id,
+                chat_id,
+                exc,
+            )
 
-    endpoint = f"{base_url}/bot{token}/sendMessage"
-    logger.info("Sending Telegram text alert for event %s", payload.event_id)
-    try:
-        response = httpx.post(
-            endpoint,
-            json={
-                "chat_id": chat_id,
-                "text": caption,
-                "disable_web_page_preview": True,
-            },
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        logger.info("Telegram text alert sent for event %s", payload.event_id)
-        return True
-    except httpx.HTTPStatusError as exc:
-        logger.error(
-            "Telegram text alert failed for event %s: status=%s body=%s",
-            payload.event_id,
-            exc.response.status_code,
-            _truncate(exc.response.text),
-        )
-        raise
-    except httpx.RequestError as exc:
-        logger.error("Telegram text alert request failed for event %s: %s", payload.event_id, exc)
-        raise
+    return delivered
 
 
 def _send_webhook_notification(payload: NotificationPayload) -> bool:
