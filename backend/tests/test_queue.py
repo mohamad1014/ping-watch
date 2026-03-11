@@ -34,6 +34,7 @@ def test_enqueue_inference_job_success(monkeypatch):
     assert payload["device_id"] == "dev_1"
     assert payload["clip_mime"] == "video/webm"
     assert payload["analysis_prompt"] == "Focus on people"
+    assert call_args.kwargs["job_id"] == "event-evt_1"
 
 
 def test_enqueue_inference_job_redis_unavailable(monkeypatch, caplog):

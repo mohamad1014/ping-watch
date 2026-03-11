@@ -45,7 +45,7 @@ def enqueue_inference_job(
 
     try:
         queue = queue or get_queue()
-        job = queue.enqueue("app.tasks.process_clip", payload)
+        job = queue.enqueue("app.tasks.process_clip", payload, job_id=f"event-{event_id}")
         logger.info(f"Enqueued inference job {job.id} for event {event_id}")
         return job.id
     except Exception as exc:

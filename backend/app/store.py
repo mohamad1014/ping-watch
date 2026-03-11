@@ -549,6 +549,9 @@ def create_event(
         clip_size_bytes=clip_size_bytes,
         clip_container=clip_container,
         clip_blob_name=clip_blob_name,
+        queue_job_id=None,
+        enqueued_at=None,
+        enqueue_attempt_count=0,
     )
     db.add(record)
     db.commit()
@@ -617,6 +620,28 @@ def mark_event_clip_uploaded(
         record.clip_etag = etag
     if record.status == "queued":
         record.status = "processing"
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def mark_event_enqueue_attempt(
+    db: Session,
+    event_id: str,
+    *,
+    job_id: Optional[str],
+    user_id: Optional[str] = None,
+) -> Optional[EventModel]:
+    record = get_event(db, event_id, user_id=user_id)
+    if record is None:
+        return None
+
+    record.enqueue_attempt_count = (record.enqueue_attempt_count or 0) + 1
+    if job_id is not None:
+        if record.queue_job_id is None:
+            record.queue_job_id = job_id
+        if record.enqueued_at is None:
+            record.enqueued_at = _now()
     db.commit()
     db.refresh(record)
     return record
@@ -713,6 +738,9 @@ def event_to_dict(record: EventModel) -> dict:
         "clip_blob_name": record.clip_blob_name,
         "clip_uploaded_at": _format_dt(record.clip_uploaded_at),
         "clip_etag": record.clip_etag,
+        "queue_job_id": record.queue_job_id,
+        "enqueued_at": _format_dt(record.enqueued_at),
+        "enqueue_attempt_count": record.enqueue_attempt_count,
         "summary": record.summary,
         "label": record.label,
         "confidence": record.confidence,

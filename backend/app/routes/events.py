@@ -25,6 +25,7 @@ from app.store import (
     get_event,
     get_session,
     list_events,
+    mark_event_enqueue_attempt,
     mark_event_clip_uploaded,
     mark_event_clip_uploaded_via_local_api,
     update_event_summary,
@@ -251,16 +252,25 @@ async def finalize_upload_endpoint(
     session = get_session(db, record.session_id)
     analysis_prompt = session.analysis_prompt if session else None
 
-    # Enqueue inference job (fire-and-forget, don't block on queue errors)
-    enqueue_inference_job(
-        event_id=record.event_id,
-        session_id=record.session_id,
-        device_id=record.device_id,
-        clip_blob_name=record.clip_blob_name or "",
-        clip_container=record.clip_container or "",
-        clip_mime=record.clip_mime,
-        analysis_prompt=analysis_prompt,
-    )
+    if record.queue_job_id is None:
+        # Enqueue inference job (fire-and-forget, don't block on queue errors)
+        job_id = enqueue_inference_job(
+            event_id=record.event_id,
+            session_id=record.session_id,
+            device_id=record.device_id,
+            clip_blob_name=record.clip_blob_name or "",
+            clip_container=record.clip_container or "",
+            clip_mime=record.clip_mime,
+            analysis_prompt=analysis_prompt,
+        )
+        refreshed = mark_event_enqueue_attempt(
+            db,
+            record.event_id,
+            job_id=job_id,
+            user_id=user_id,
+        )
+        if refreshed is not None:
+            record = refreshed
 
     return event_to_dict(record)
 

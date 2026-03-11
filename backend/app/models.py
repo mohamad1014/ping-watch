@@ -159,6 +159,11 @@ class EventModel(Base):
         DateTime(timezone=True), nullable=True
     )
     clip_etag: Mapped[str | None] = mapped_column(String, nullable=True)
+    queue_job_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    enqueued_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    enqueue_attempt_count: Mapped[int] = mapped_column(Integer, default=0)
     summary: Mapped[str | None] = mapped_column(String, nullable=True)
     label: Mapped[str | None] = mapped_column(String, nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
