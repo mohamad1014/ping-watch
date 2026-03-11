@@ -10,7 +10,7 @@ import app.routes.notifications as notifications_route
 from app.db import SessionLocal, engine
 from app.main import app
 from app.models import DeviceModel, NotificationEndpointModel
-from app.store import get_telegram_link_attempt
+from app.store import get_telegram_link_attempt, link_device_telegram_chat
 
 
 @pytest.mark.anyio
@@ -740,3 +740,81 @@ async def test_telegram_link_status_handles_get_updates_webhook_conflict(monkeyp
     assert payload["status"] == "ready"
     assert get_updates_call_count == 2
     assert any(url.endswith("/bottoken/deleteWebhook") for url, _ in post_calls)
+
+
+@pytest.mark.anyio
+async def test_telegram_target_switches_to_newly_added_recipient_subscription(monkeypatch):
+    monkeypatch.setenv("AUTH_REQUIRED", "true")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        owner_login = await client.post(
+            "/auth/dev/login", json={"email": "owner@example.com"}
+        )
+        assert owner_login.status_code == 200
+        owner = owner_login.json()
+        headers = {"authorization": f"Bearer {owner['access_token']}"}
+
+        await client.post(
+            "/devices/register",
+            json={"device_id": "dev-1"},
+            headers=headers,
+        )
+        await client.post(
+            "/devices/register",
+            json={"device_id": "dev-2"},
+            headers=headers,
+        )
+
+        with SessionLocal() as db:
+            link_device_telegram_chat(
+                db,
+                device_id="dev-1",
+                chat_id="111",
+                username="alice",
+                user_id=owner["user_id"],
+            )
+            link_device_telegram_chat(
+                db,
+                device_id="dev-2",
+                chat_id="222",
+                username="bob",
+                user_id=owner["user_id"],
+            )
+
+        initial_target = await client.get(
+            "/notifications/telegram/target",
+            params={"device_id": "dev-1"},
+            headers=headers,
+        )
+        recipients = await client.get(
+            "/notifications/recipients",
+            params={"device_id": "dev-1"},
+            headers=headers,
+        )
+        recipient_to_add = next(
+            item for item in recipients.json()["recipients"] if item["chat_id"] == "222"
+        )
+
+        add_response = await client.post(
+            "/notifications/recipients",
+            json={"device_id": "dev-1", "endpoint_id": recipient_to_add["endpoint_id"]},
+            headers=headers,
+        )
+        updated_target = await client.get(
+            "/notifications/telegram/target",
+            params={"device_id": "dev-1"},
+            headers=headers,
+        )
+
+    assert initial_target.status_code == 200
+    assert initial_target.json()["chat_id"] == "111"
+
+    assert add_response.status_code == 200
+    assert add_response.json()["chat_id"] == "222"
+    assert add_response.json()["subscribed"] is True
+
+    assert updated_target.status_code == 200
+    assert updated_target.json()["chat_id"] == "222"

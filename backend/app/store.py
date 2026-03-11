@@ -264,6 +264,52 @@ def get_notification_endpoint(
     return db.get(NotificationEndpointModel, endpoint_id)
 
 
+def get_notification_endpoints_for_user(
+    db: Session, user_id: str
+) -> list[NotificationEndpointModel]:
+    stmt = (
+        select(NotificationEndpointModel)
+        .where(
+            NotificationEndpointModel.provider == "telegram",
+            NotificationEndpointModel.user_id == user_id,
+        )
+        .order_by(
+            NotificationEndpointModel.linked_at.desc(),
+            NotificationEndpointModel.endpoint_id.desc(),
+        )
+    )
+    return list(db.scalars(stmt))
+
+
+def is_notification_endpoint_accessible_to_user(
+    db: Session,
+    *,
+    endpoint: NotificationEndpointModel,
+    user_id: str,
+) -> bool:
+    if endpoint.user_id == user_id:
+        return True
+
+    # Legacy endpoint rows can have null user_id. Allow access only when the endpoint
+    # is already attached to one of this user's devices.
+    if endpoint.user_id is not None:
+        return False
+
+    stmt = (
+        select(DeviceNotificationSubscriptionModel.subscription_id)
+        .join(
+            DeviceModel,
+            DeviceModel.device_id == DeviceNotificationSubscriptionModel.device_id,
+        )
+        .where(
+            DeviceNotificationSubscriptionModel.endpoint_id == endpoint.endpoint_id,
+            DeviceModel.user_id == user_id,
+        )
+        .limit(1)
+    )
+    return db.scalar(stmt) is not None
+
+
 def get_notification_endpoints_for_device(
     db: Session, device: DeviceModel
 ) -> list[NotificationEndpointModel]:
@@ -285,6 +331,67 @@ def get_notification_endpoints_for_device(
         )
     )
     return list(db.scalars(stmt))
+
+
+def list_notification_recipient_states_for_device(
+    db: Session,
+    *,
+    device: DeviceModel,
+    user_id: Optional[str],
+) -> list[tuple[NotificationEndpointModel, bool]]:
+    subscribed_endpoints = get_notification_endpoints_for_device(db, device)
+    subscribed_ids = {endpoint.endpoint_id for endpoint in subscribed_endpoints}
+
+    if user_id is None:
+        return [(endpoint, True) for endpoint in subscribed_endpoints]
+
+    combined: dict[str, NotificationEndpointModel] = {
+        endpoint.endpoint_id: endpoint for endpoint in subscribed_endpoints
+    }
+    for endpoint in get_notification_endpoints_for_user(db, user_id):
+        combined.setdefault(endpoint.endpoint_id, endpoint)
+
+    ordered = sorted(
+        combined.values(),
+        key=lambda endpoint: (endpoint.linked_at, endpoint.endpoint_id),
+        reverse=True,
+    )
+    return [(endpoint, endpoint.endpoint_id in subscribed_ids) for endpoint in ordered]
+
+
+def add_notification_endpoint_subscription_to_device(
+    db: Session,
+    *,
+    device: DeviceModel,
+    endpoint: NotificationEndpointModel,
+) -> DeviceNotificationSubscriptionModel:
+    subscription = _subscribe_device_to_notification_endpoint(
+        db,
+        device_id=device.device_id,
+        endpoint_id=endpoint.endpoint_id,
+        created_at=_now(),
+    )
+    db.commit()
+    db.refresh(subscription)
+    return subscription
+
+
+def remove_notification_endpoint_subscription_from_device(
+    db: Session,
+    *,
+    device: DeviceModel,
+    endpoint: NotificationEndpointModel,
+) -> bool:
+    subscription = _get_device_notification_subscription(
+        db,
+        device_id=device.device_id,
+        endpoint_id=endpoint.endpoint_id,
+    )
+    if subscription is None:
+        return False
+    db.delete(subscription)
+    db.commit()
+    return True
 
 
 def get_telegram_target_for_device(

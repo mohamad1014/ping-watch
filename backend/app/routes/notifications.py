@@ -14,8 +14,13 @@ from sqlalchemy.orm import Session
 from app.auth import get_request_user_id
 from app.db import get_db
 from app.store import (
+    add_notification_endpoint_subscription_to_device,
     create_telegram_link_attempt,
     get_device,
+    get_notification_endpoint,
+    is_notification_endpoint_accessible_to_user,
+    list_notification_recipient_states_for_device,
+    remove_notification_endpoint_subscription_from_device,
     get_telegram_target_for_device,
     get_telegram_link_attempt,
     get_telegram_link_attempt_by_token_hash,
@@ -72,6 +77,31 @@ class TelegramWebhookResponse(BaseModel):
     ok: bool = True
 
 
+class RecipientStateResponse(BaseModel):
+    endpoint_id: str
+    provider: str
+    chat_id: str
+    telegram_username: str | None
+    linked_at: str
+    subscribed: bool
+
+
+class RecipientListResponse(BaseModel):
+    device_id: str
+    recipients: list[RecipientStateResponse]
+
+
+class RecipientSubscriptionRequest(BaseModel):
+    device_id: str
+    endpoint_id: str
+
+
+class RecipientRemoveResponse(BaseModel):
+    device_id: str
+    endpoint_id: str
+    removed: bool
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -88,6 +118,55 @@ def _notification_timeout() -> float:
         return max(1.0, float(raw))
     except ValueError:
         return 10.0
+
+
+def _format_iso(value: datetime) -> str:
+    return value.isoformat()
+
+
+def _require_owned_device(
+    *,
+    db: Session,
+    device_id: str,
+    user_id: str | None,
+):
+    device = get_device(db, device_id)
+    if device is None or (user_id is not None and device.user_id != user_id):
+        raise HTTPException(status_code=404, detail="device not found")
+    return device
+
+
+def _require_accessible_endpoint(
+    *,
+    db: Session,
+    endpoint_id: str,
+    user_id: str | None,
+):
+    endpoint = get_notification_endpoint(db, endpoint_id)
+    if endpoint is None or endpoint.provider != "telegram":
+        raise HTTPException(status_code=404, detail="notification endpoint not found")
+    if user_id is not None and not is_notification_endpoint_accessible_to_user(
+        db,
+        endpoint=endpoint,
+        user_id=user_id,
+    ):
+        raise HTTPException(status_code=404, detail="notification endpoint not found")
+    return endpoint
+
+
+def _recipient_state(
+    endpoint,
+    *,
+    subscribed: bool,
+) -> RecipientStateResponse:
+    return RecipientStateResponse(
+        endpoint_id=endpoint.endpoint_id,
+        provider=endpoint.provider,
+        chat_id=endpoint.chat_id,
+        telegram_username=endpoint.telegram_username,
+        linked_at=_format_iso(endpoint.linked_at),
+        subscribed=subscribed,
+    )
 
 
 def _telegram_link_ttl_seconds() -> int:
@@ -872,4 +951,78 @@ def telegram_target(
         linked=True,
         device_id=device_id,
         chat_id=target_chat_id,
+    )
+
+
+@router.get("/recipients")
+def list_notification_recipients(
+    device_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> RecipientListResponse:
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
+    device = _require_owned_device(db=db, device_id=device_id, user_id=user_id)
+
+    recipients = list_notification_recipient_states_for_device(
+        db,
+        device=device,
+        user_id=user_id,
+    )
+    return RecipientListResponse(
+        device_id=device_id,
+        recipients=[
+            _recipient_state(endpoint, subscribed=subscribed)
+            for endpoint, subscribed in recipients
+        ],
+    )
+
+
+@router.post("/recipients")
+def add_notification_recipient(
+    payload: RecipientSubscriptionRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> RecipientStateResponse:
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
+    device = _require_owned_device(db=db, device_id=payload.device_id, user_id=user_id)
+    endpoint = _require_accessible_endpoint(
+        db=db,
+        endpoint_id=payload.endpoint_id,
+        user_id=user_id,
+    )
+
+    add_notification_endpoint_subscription_to_device(
+        db,
+        device=device,
+        endpoint=endpoint,
+    )
+    return _recipient_state(endpoint, subscribed=True)
+
+
+@router.delete("/recipients")
+def remove_notification_recipient(
+    device_id: str,
+    endpoint_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> RecipientRemoveResponse:
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
+    device = _require_owned_device(db=db, device_id=device_id, user_id=user_id)
+    endpoint = _require_accessible_endpoint(
+        db=db,
+        endpoint_id=endpoint_id,
+        user_id=user_id,
+    )
+    removed = remove_notification_endpoint_subscription_from_device(
+        db,
+        device=device,
+        endpoint=endpoint,
+    )
+    if not removed:
+        raise HTTPException(status_code=404, detail="notification subscription not found")
+
+    return RecipientRemoveResponse(
+        device_id=device_id,
+        endpoint_id=endpoint_id,
+        removed=True,
     )
