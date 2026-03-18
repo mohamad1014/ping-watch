@@ -29,9 +29,11 @@
 
 - App entry: `backend/app/main.py`
 - Routes:
+  - Auth: `backend/app/routes/auth.py`
   - Sessions: `backend/app/routes/sessions.py`
   - Events: `backend/app/routes/events.py`
   - Devices: `backend/app/routes/devices.py`
+  - Notifications: `backend/app/routes/notifications.py`
 - Persistence and storage:
   - DB setup: `backend/app/db.py`
   - Models: `backend/app/models.py`
@@ -44,9 +46,13 @@
 - Entry point: `worker/app/cli.py`
 - RQ worker: `worker/app/worker.py`
 - Queue abstraction: `worker/app/queue.py`
+- Notification delivery: `worker/app/notifications.py`
+- Structured logging: `worker/app/logging.py`
 - Tasks: `worker/app/tasks.py`
 
 ## Infra and Scripts
 
 - Local deps: `infra/docker-compose.yml`
-- Dev/test scripts: `scripts/dev`, `scripts/dev-up`, `scripts/test-unit`, `scripts/test-integration`, `scripts/test-e2e`, `scripts/test-all`, `scripts/logs`
+- Dev/test scripts: `scripts/dev`, `scripts/dev-up`, `scripts/dev-down`, `scripts/test-unit`, `scripts/test-integration`, `scripts/test-e2e`, `scripts/test-all`, `scripts/test-clip-flow`, `scripts/logs`
+- Migration and rollback checks: `scripts/check-migrations`, `scripts/staging-rollback-drill`
+- Repo guardrails: `scripts/check-docs-consistency`, `PROGRESS.md`, `PLAN.md`, `AGENTS.md`

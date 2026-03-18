@@ -60,12 +60,14 @@ Free tier has monthly allowance; paid tier raises limits and retention.
 
 ## Status
 
-Private beta foundation is in place: monitoring/upload/inference scaffolding, auth + ownership enforcement, and frontend account/session flows are implemented. Remaining production hardening is tracked in `PLAN.md` (E5+).
+Private beta foundation is in place: monitoring/upload/inference scaffolding, auth + ownership enforcement, multi-recipient Telegram routing, invite/share flow, and recipient-only UI are implemented. Remaining production hardening is tracked in `PLAN.md` (currently centered on observability, delivery automation, security, and performance validation).
 
 Production planning is tracked in `PLAN.md` under:
 - `Production Readiness Comparison`
 - `Epic Roadmap (feature-based)`
 - `Execution Queue (current)`
+
+Execution progress is tracked in `PROGRESS.md`.
 
 ## Repo Layout (current)
 
@@ -76,6 +78,7 @@ Production planning is tracked in `PLAN.md` under:
 - `infra/` — docker-compose for local dependencies
 - `scripts/` — dev/test/logs entrypoints
 - `docs/` — architecture and decisions
+- `PROGRESS.md` — live execution tracker for completed work, active work, blockers, and next steps
 
 ## Decisions (2026-01-24)
 

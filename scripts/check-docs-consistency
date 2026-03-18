@@ -36,6 +36,7 @@ require_text() {
 # Key docs must exist
 require_file "$repo_root/README.md"
 require_file "$repo_root/AGENTS.md"
+require_file "$repo_root/PROGRESS.md"
 require_file "$repo_root/docs/queue-stall-runbook.md"
 require_file "$repo_root/docs/notification-failure-runbook.md"
 require_file "$repo_root/docs/observability-dashboard-baseline.md"
@@ -50,6 +51,10 @@ for name in dev-up dev test-unit test-integration test-e2e test-all logs; do
   require_text "$repo_root/AGENTS.md" "\\./scripts/$name" "AGENTS.md missing ./scripts/$name"
   require_text "$repo_root/README.md" "\\./scripts/$name" "README.md missing ./scripts/$name"
 done
+
+# AGENTS/README should describe the live progress tracker
+require_text "$repo_root/AGENTS.md" "PROGRESS.md" "AGENTS.md missing PROGRESS.md"
+require_text "$repo_root/README.md" "PROGRESS.md" "README.md missing PROGRESS.md"
 
 # README should link the current operations docs
 require_text "$repo_root/README.md" "docs/queue-stall-runbook.md" "README.md missing docs/queue-stall-runbook.md"

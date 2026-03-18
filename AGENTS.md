@@ -3,6 +3,7 @@
 ## Project Structure & Module Organization
 
 - `PLAN.md` is the primary product/architecture plan and source of truth for scope.
+- `PROGRESS.md` is the execution tracker and must be updated after each meaningful completed step, status change, or newly discovered blocker.
 - `README.md` documents the current scaffold and local setup.
 - Default layout (adjust only if we agree to change stacks):
   - `frontend/` — PWA (React + TypeScript).
@@ -54,6 +55,7 @@ No shared formatter is enforced across the full monorepo yet. If you introduce o
   - `./scripts/test-e2e`
   - or `./scripts/test-all`
 - Report exact pass/fail output and any blockers.
+- Update `PROGRESS.md` to reflect what was completed, what is in progress, and any blockers before finalizing substantial work.
 
 ## Commit & Pull Request Guidelines
 
