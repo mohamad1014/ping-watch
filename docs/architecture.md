@@ -1,6 +1,6 @@
 # Architecture Overview
 
-This repo implements a phone-as-sensor PWA that captures clips, uploads event media, and processes them via a backend + worker pipeline. Local dev uses Postgres, Redis, and Azurite.
+This repo implements a phone-as-sensor PWA that captures clips, uploads event media, and processes them via a backend + worker pipeline. Local dev uses Postgres, Redis, and Azurite; several test flows run against isolated SQLite databases instead of the shared Postgres dev instance.
 
 ## System Context (Current MVP)
 
@@ -61,13 +61,20 @@ flowchart TD
 ## Key Runtime Responsibilities
 
 - PWA: capture media, trigger events, create clips, upload, and poll for results.
-- API: sessions/events, upload URL issuance, status persistence, and summaries.
-- Worker: (stub now) read jobs, perform inference, write summaries back.
+- API: auth, ownership checks, sessions/events, upload URL issuance, notification/linking APIs, and status persistence.
+- Worker: read jobs, perform inference, write summaries back, and record notification attempts/fanout outcomes.
 - Infra: Postgres for state, Redis for queue, Azurite for local blob emulation.
 
-## Planned Extensions (Not Implemented Yet)
+## Shipped Notification And Access Capabilities
 
-- Telegram notifications and WebSocket updates.
+- Telegram device linking is implemented with a one-time token flow.
+- Per-device multi-recipient subscriptions are implemented.
+- Invite/share access is implemented so additional recipients can subscribe safely.
+- Recipient-only browser mode is implemented for shared recipients.
+- Webhook delivery is supported as an optional outbound notification target.
+
+## Planned Extensions (Still Not Implemented)
+
 - Production queue adapter (Azure Service Bus).
 - GPU inference integration.
-- Week-by-week production delivery milestones are tracked in `PLAN.md` (`12-week milestone plan`).
+- Observability dashboards/alerts, deploy rollback automation, and performance/SLO validation are tracked in `PLAN.md`.

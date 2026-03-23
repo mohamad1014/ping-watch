@@ -1,6 +1,6 @@
 # Ping Watch Progress
 
-Updated: **2026-03-18**
+Updated: **2026-03-23**
 
 ## Purpose
 
@@ -47,6 +47,18 @@ Update it after each meaningful step so the repo always reflects:
   - `docs/repo-map.md` refreshed for current routes, worker modules, and scripts
   - `scripts/check-docs-consistency` now enforces `PROGRESS.md` presence and references
   - targeted docs checks passed
+- Code-quality and production-risk fixes completed:
+  - worker writeback endpoints now enforce `WORKER_API_TOKEN` consistently
+  - duplicate invite-acceptance write removed from Telegram linking flow
+  - backend startup moved to FastAPI lifespan handling
+  - normal startup no longer depends on ad hoc schema creation for Postgres
+  - backend unit tests now run against isolated in-memory SQLite by default
+  - SQLite startup/test paths were stabilized for live-server and notification-attempt coverage
+  - full unit, integration, and E2E gates passed after the fixes
+- Documentation drift cleanup completed:
+  - `README.md` now reflects current Telegram/webhook capabilities and current backend test defaults
+  - `docs/architecture.md` now matches shipped notification, invite/share, and recipient-routing behavior
+  - `docs/repo-map.md` now references the current frontend module layout instead of removed clip pipeline files
 
 ## In Progress
 
@@ -59,10 +71,10 @@ Update it after each meaningful step so the repo always reflects:
 ## Next Steps
 
 1. Push local `main` to `origin`.
-2. Finish observability baseline work.
-3. Extend CI/CD to deploy, migrate, and rollback automation.
-4. Add security baseline controls.
-5. Add queue backlog and dead-letter visibility.
+2. Finish the code-quality and production-risk audit.
+3. Finish observability baseline work.
+4. Extend CI/CD to deploy, migrate, and rollback automation.
+5. Reconcile any remaining stale docs outside the core onboarding set when touched.
 
 ## Update Rules
 

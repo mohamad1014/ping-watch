@@ -16,14 +16,16 @@
 - App shell + UI: `frontend/src/App.tsx`, `frontend/src/App.css`, `frontend/src/index.css`
 - API client: `frontend/src/api.ts`
 - Device/session helper: `frontend/src/device.ts`
-- Media capture: `frontend/src/recorder.ts`
+- Media capture: `frontend/src/recorder.ts`, `frontend/src/sequentialRecorder.ts`
 - Motion detection: `frontend/src/motion.ts`
 - Audio trigger: `frontend/src/audio.ts`
 - Clip pipeline:
-  - Ring buffer: `frontend/src/clipBuffer.ts`
-  - Clip assembly: `frontend/src/clipAssembler.ts`
   - Local store (IndexedDB): `frontend/src/clipStore.ts`
   - Upload flow: `frontend/src/clipUpload.ts`
+  - Processing queue: `frontend/src/clipProcessingQueue.ts`
+  - Clip analysis + logging: `frontend/src/clipAnalyzer.ts`, `frontend/src/clipLogger.ts`
+  - Trigger benchmarking helpers: `frontend/src/benchmarkManager.ts`
+  - Hooks: `frontend/src/hooks/useMotionDetection.ts`, `frontend/src/hooks/useAudioDetection.ts`, `frontend/src/hooks/useRecordingSettings.ts`
 
 ## Backend (FastAPI)
 

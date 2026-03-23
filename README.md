@@ -16,7 +16,7 @@ Phone-as-sensor PWA that records continuously, detects motion or audio spikes, a
 1) **Local capture + trigger**: media capture, ring buffer, motion trigger, optional audio trigger, local event list.  
 2) **Cloud upload + timeline sync**: SAS uploads to blob storage, events API, processing state UI.  
 3) **Inference worker + results**: queue → GPU worker → labels/summaries/tags persisted.  
-4) **Notifications + monitoring**: Telegram alerts + WebSocket updates.  
+4) **Notifications + monitoring**: Telegram alerts, webhook delivery, recipient sharing, and device-linking flows.  
 5) **Optimization (later)**: smarter motion filtering and preview-frame prechecks.
 
 ## Core Architecture
@@ -34,9 +34,9 @@ Phone-as-sensor PWA that records continuously, detects motion or audio spikes, a
 
 - **API**: auth, device registration, sessions, event records, SAS upload URL.
 - **Storage**: Azure Blob for clips, PostgreSQL for users/devices/events/credits.
-- **Queue**: Service Bus event `clip_uploaded`.
+- **Queue**: Redis/RQ locally; production queue adapter still targets Azure Service Bus.
 - **Worker**: GPU inference → labels/summary → results stored.
-- **Notifications**: Telegram bot and WebSocket updates.
+- **Notifications**: Telegram bot fanout, invite/share flows, and optional webhook delivery.
 
 ## Credits & Pricing
 
@@ -144,7 +144,7 @@ Test:
 - `./scripts/test-e2e` (requires Playwright system deps; see output of `npx playwright install` if missing)
 - `./scripts/test-integration` (runs backend live-server test + Playwright integration test)
 
-Note: backend tests default to Postgres. Run `./scripts/dev-up` first, or set `DATABASE_URL=sqlite:///./test.db` to use SQLite locally.
+Note: backend unit tests default to isolated SQLite/in-memory databases and do not require `./scripts/dev-up`. Integration and local dev flows still use the configured `DATABASE_URL` (Postgres by default in local dev) unless a script overrides it.
 Note: E2E/Playwright runs use a temp SQLite database for the backend; if you override `DATABASE_URL`, ensure it points to a writable, disposable path.
 
 ## CI And Rollback Validation
@@ -331,7 +331,10 @@ curl -X POST http://localhost:8000/notifications/telegram/link/start \
 - What it does: Telegram webhook endpoint. `/start <token>` validates the one-time token and links the Telegram chat to the device.
 
 `GET /notifications/telegram/target?device_id=<id>`
-- What it does: returns resolved chat target metadata (`linked`, `chat_id`) for this device.
+- What it does: returns the resolved fallback chat target metadata (`enabled`, `linked`, `chat_id`) for this device.
+
+`GET /notifications/telegram/targets?device_id=<id>`
+- What it does: returns the subscribed Telegram recipient list used for fanout delivery.
 
 ## Upload Pipeline (Azurite)
 
