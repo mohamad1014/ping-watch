@@ -61,33 +61,34 @@ async def test_finalize_upload_sets_uploaded_fields_and_is_idempotent():
         "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",
     )
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        start = await client.post("/sessions/start", json={"device_id": "dev_1"})
-        session_id = start.json()["session_id"]
-        initiate = await client.post(
-            "/events/upload/initiate",
-            json={
-                "event_id": "clip-abc",
-                "session_id": session_id,
-                "device_id": "dev_1",
-                "trigger_type": "motion",
-                "duration_seconds": 1.0,
-                "clip_mime": "video/webm",
-                "clip_size_bytes": 12,
-            },
-        )
-        assert initiate.status_code == 200
+    with patch("app.routes.events._uploaded_clip_exists", return_value=True):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            start = await client.post("/sessions/start", json={"device_id": "dev_1"})
+            session_id = start.json()["session_id"]
+            initiate = await client.post(
+                "/events/upload/initiate",
+                json={
+                    "event_id": "clip-abc",
+                    "session_id": session_id,
+                    "device_id": "dev_1",
+                    "trigger_type": "motion",
+                    "duration_seconds": 1.0,
+                    "clip_mime": "video/webm",
+                    "clip_size_bytes": 12,
+                },
+            )
+            assert initiate.status_code == 200
 
-        finalize = await client.post(
-            "/events/clip-abc/upload/finalize",
-            json={"etag": '"0x8DAF1234"'},
-        )
-        finalize_again = await client.post(
-            "/events/clip-abc/upload/finalize",
-            json={"etag": '"0x8DAF1234"'},
-        )
+            finalize = await client.post(
+                "/events/clip-abc/upload/finalize",
+                json={"etag": '"0x8DAF1234"'},
+            )
+            finalize_again = await client.post(
+                "/events/clip-abc/upload/finalize",
+                json={"etag": '"0x8DAF1234"'},
+            )
 
     assert finalize.status_code == 200
     assert finalize_again.status_code == 200
@@ -108,7 +109,10 @@ async def test_finalize_upload_enqueues_clip_mime():
         "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",
     )
 
-    with patch("app.routes.events.enqueue_inference_job", return_value="job-1") as mock_enqueue:
+    with (
+        patch("app.routes.events._uploaded_clip_exists", return_value=True),
+        patch("app.routes.events.enqueue_inference_job", return_value="job-1") as mock_enqueue,
+    ):
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -136,6 +140,47 @@ async def test_finalize_upload_enqueues_clip_mime():
     assert finalize.status_code == 200
     mock_enqueue.assert_called_once()
     assert mock_enqueue.call_args.kwargs["clip_mime"] == "video/webm"
+
+
+@pytest.mark.anyio
+async def test_finalize_upload_rejects_missing_remote_blob():
+    os.environ.setdefault(
+        "AZURITE_BLOB_ENDPOINT", "http://127.0.0.1:10000/devstoreaccount1"
+    )
+    os.environ.setdefault("AZURITE_ACCOUNT_NAME", "devstoreaccount1")
+    os.environ.setdefault(
+        "AZURITE_ACCOUNT_KEY",
+        "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",
+    )
+
+    with patch("app.routes.events.enqueue_inference_job", return_value="job-1") as mock_enqueue:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            start = await client.post("/sessions/start", json={"device_id": "dev_1"})
+            session_id = start.json()["session_id"]
+            initiate = await client.post(
+                "/events/upload/initiate",
+                json={
+                    "event_id": "clip-missing-blob",
+                    "session_id": session_id,
+                    "device_id": "dev_1",
+                    "trigger_type": "motion",
+                    "duration_seconds": 1.0,
+                    "clip_mime": "video/webm",
+                    "clip_size_bytes": 12,
+                },
+            )
+            assert initiate.status_code == 200
+
+            finalize = await client.post(
+                "/events/clip-missing-blob/upload/finalize",
+                json={"etag": '"etag-missing"'},
+            )
+
+    assert finalize.status_code == 409
+    assert finalize.json() == {"detail": "clip upload not found"}
+    mock_enqueue.assert_not_called()
 
 
 @pytest.mark.anyio

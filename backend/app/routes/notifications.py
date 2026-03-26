@@ -556,15 +556,6 @@ def _process_start_token(
         chat_id=chat_id_text,
         username=username,
     )
-    if invite is not None:
-        endpoint = get_notification_endpoint_by_telegram_chat(db, chat_id_text)
-        if endpoint is not None:
-            mark_notification_invite_accepted(
-                db,
-                invite,
-                recipient_user_id=attempt.user_id,
-                endpoint=endpoint,
-            )
     logger.info(
         "Linked Telegram chat %s to device %s via attempt %s",
         chat_id_text,

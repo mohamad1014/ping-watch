@@ -1,6 +1,7 @@
 import hashlib
 import os
 import secrets
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -14,6 +15,11 @@ _PUBLIC_WRITE_PATHS = {
     "/auth/dev/login",
     "/notifications/telegram/webhook",
 }
+_WORKER_WRITE_PATH_PATTERNS = (
+    re.compile(r"^/events/[^/]+/summary/?$"),
+    re.compile(r"^/events/[^/]+/failure/?$"),
+    re.compile(r"^/events/[^/]+/notification-attempts/?$"),
+)
 
 
 def _utc_now() -> datetime:
@@ -38,6 +44,10 @@ def is_auth_required() -> bool:
 
 def is_dev_login_enabled() -> bool:
     return _is_truthy(os.environ.get("AUTH_DEV_LOGIN_ENABLED"), default=True)
+
+
+def worker_api_token() -> str:
+    return (os.environ.get("WORKER_API_TOKEN") or "").strip()
 
 
 def token_ttl_seconds() -> int:
@@ -86,7 +96,12 @@ def should_authenticate_request(request: Request) -> bool:
         return False
     if request.method.upper() not in _PROTECTED_WRITE_METHODS:
         return False
-    if _normalized_path(request.url.path) in _PUBLIC_WRITE_PATHS:
+    normalized_path = _normalized_path(request.url.path)
+    if normalized_path in _PUBLIC_WRITE_PATHS:
+        return False
+    if worker_api_token() and any(
+        pattern.match(normalized_path) for pattern in _WORKER_WRITE_PATH_PATTERNS
+    ):
         return False
     return True
 

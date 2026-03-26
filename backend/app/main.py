@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import math
 import time
 from collections import defaultdict, deque
@@ -24,7 +25,14 @@ from app.routes.sessions import router as sessions_router
 
 logger = setup_logging()
 
-app = FastAPI(title="ping-watch-api")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="ping-watch-api", lifespan=lifespan)
 CORS_ALLOWED_ORIGIN_REGEX = (
     r"^https?://("
     r"localhost|127\.0\.0\.1|0\.0\.0\.0|"
@@ -119,12 +127,6 @@ def _rate_limit_response(request: Request) -> JSONResponse | None:
         content={"detail": "rate limit exceeded"},
         headers={"Retry-After": str(retry_after)},
     )
-
-
-@app.on_event("startup")
-async def startup():
-    init_db()
-
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):

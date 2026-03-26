@@ -22,7 +22,10 @@ def _seed_azurite_env() -> None:
 async def test_finalize_upload_is_idempotent_after_successful_enqueue():
     _seed_azurite_env()
 
-    with patch("app.routes.events.enqueue_inference_job", return_value="job-123") as mock_enqueue:
+    with (
+        patch("app.routes.events._uploaded_clip_exists", return_value=True),
+        patch("app.routes.events.enqueue_inference_job", return_value="job-123") as mock_enqueue,
+    ):
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -70,10 +73,13 @@ async def test_finalize_upload_is_idempotent_after_successful_enqueue():
 async def test_finalize_upload_retries_enqueue_after_previous_failure():
     _seed_azurite_env()
 
-    with patch(
-        "app.routes.events.enqueue_inference_job",
-        side_effect=[None, "job-234"],
-    ) as mock_enqueue:
+    with (
+        patch("app.routes.events._uploaded_clip_exists", return_value=True),
+        patch(
+            "app.routes.events.enqueue_inference_job",
+            side_effect=[None, "job-234"],
+        ) as mock_enqueue,
+    ):
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:

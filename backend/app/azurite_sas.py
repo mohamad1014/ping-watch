@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from urllib.parse import urlencode, urlparse
 
@@ -220,3 +220,38 @@ def ensure_container_exists(config: AzuriteConfig) -> None:
         if exc.code == 409:
             return
         raise
+
+
+def blob_exists(config: AzuriteConfig, blob_name: str) -> bool:
+    x_ms_version = config.sas_version
+    x_ms_date = _format_sas_dt(_utc_now())
+    blob_url = build_blob_url(config, blob_name)
+    endpoint_path = urlparse(config.endpoint).path.strip("/")
+    resource_path = "/".join(
+        part for part in (endpoint_path, config.container, blob_name) if part
+    )
+    canonicalized_resource = f"/{config.account_name}/{resource_path}"
+    authorization = _build_shared_key_authorization(
+        config=config,
+        method="HEAD",
+        content_length=0,
+        canonicalized_resource=canonicalized_resource,
+        x_ms_date=x_ms_date,
+        x_ms_version=x_ms_version,
+    )
+
+    request = Request(blob_url, method="HEAD")
+    request.add_header("x-ms-date", x_ms_date)
+    request.add_header("x-ms-version", x_ms_version)
+    request.add_header("Content-Length", "0")
+    request.add_header("Authorization", authorization)
+
+    try:
+        with urlopen(request, timeout=config.request_timeout_seconds) as response:
+            return response.status == 200
+    except HTTPError as exc:
+        if exc.code == 404:
+            return False
+        raise
+    except URLError:
+        return False

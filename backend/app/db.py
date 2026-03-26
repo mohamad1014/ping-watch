@@ -4,16 +4,25 @@ from sqlalchemy import inspect
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql+psycopg://pingwatch:pingwatch@localhost:5432/pingwatch"
 )
 
 connect_args = {}
+engine_kwargs = {}
 if DATABASE_URL.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
+    if ":memory:" in DATABASE_URL:
+        engine_kwargs["poolclass"] = StaticPool
 
-engine = create_engine(DATABASE_URL, future=True, connect_args=connect_args)
+engine = create_engine(
+    DATABASE_URL,
+    future=True,
+    connect_args=connect_args,
+    **engine_kwargs,
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 Base = declarative_base()
@@ -179,10 +188,11 @@ def ensure_schema_compatible(engine: Engine) -> None:
 
 
 def init_db() -> None:
-    # Import models so they register with the metadata before create_all.
+    # Import models so they register with the metadata before schema checks.
     from app import models  # noqa: F401
 
-    Base.metadata.create_all(bind=engine)
+    if engine.url.drivername.startswith("sqlite"):
+        Base.metadata.create_all(bind=engine)
     ensure_schema_compatible(engine)
 
 

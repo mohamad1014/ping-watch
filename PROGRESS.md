@@ -59,6 +59,11 @@ Update it after each meaningful step so the repo always reflects:
   - `README.md` now reflects current Telegram/webhook capabilities and current backend test defaults
   - `docs/architecture.md` now matches shipped notification, invite/share, and recipient-routing behavior
   - `docs/repo-map.md` now references the current frontend module layout instead of removed clip pipeline files
+- Upload finalize guard fix completed:
+  - backend now verifies that a clip exists before accepting `POST /events/{event_id}/upload/finalize`
+  - missing remote/local uploads now return `409 clip upload not found` instead of enqueueing a doomed worker job
+  - targeted backend tests passed for clip upload, local fallback, queue idempotency, and event failure states
+  - live retest confirmed the original bad path is now rejected before enqueue
 
 ## In Progress
 
@@ -74,7 +79,7 @@ Update it after each meaningful step so the repo always reflects:
 2. Finish the code-quality and production-risk audit.
 3. Finish observability baseline work.
 4. Extend CI/CD to deploy, migrate, and rollback automation.
-5. Reconcile any remaining stale docs outside the core onboarding set when touched.
+5. Run the full unit/integration/E2E gate after the current backend worktree changes settle.
 
 ## Update Rules
 

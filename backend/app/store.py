@@ -920,7 +920,7 @@ def cancel_inflight_events_for_session(
 def _format_dt(value: Optional[datetime]) -> Optional[str]:
     if value is None:
         return None
-    return value.isoformat()
+    return _to_utc(value).isoformat()
 
 
 def session_to_dict(record: SessionModel) -> dict:
