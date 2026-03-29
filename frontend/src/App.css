@@ -302,6 +302,12 @@
   justify-self: flex-start;
 }
 
+.analysis-prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
 .analysis-prompt-input {
   width: 100%;
   padding: 0.75rem 1rem;
@@ -548,29 +554,25 @@
   line-height: 1.45;
 }
 
-.monitoring-confirmations {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
+.monitoring-readiness-action {
+  margin-top: 0.4rem;
+  width: fit-content;
 }
 
-.monitoring-confirmation {
-  display: inline-flex;
-  align-items: center;
+.monitoring-hints {
+  display: grid;
   gap: 0.55rem;
-  padding: 0.8rem 0.95rem;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.7);
+  padding: 0.95rem 1rem;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
   border: 1px solid #e2d7c9;
-  color: #3e3021;
-  font-size: 0.92rem;
-  font-weight: 500;
 }
 
-.monitoring-confirmation input {
-  width: 1rem;
-  height: 1rem;
-  accent-color: #ff7a59;
+.monitoring-hint {
+  margin: 0;
+  color: #4f3a14;
+  font-size: 0.92rem;
+  line-height: 1.5;
 }
 
 .monitoring-preview-actions {
@@ -592,6 +594,22 @@
   border-radius: 16px;
   background: #fff;
   border: 1px solid #e8ddd0;
+}
+
+.monitoring-camera-preview {
+  width: min(100%, 22rem);
+  justify-self: start;
+}
+
+.monitoring-camera-preview-video {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  max-height: 24rem;
+  display: block;
+  object-fit: contain;
+  border-radius: 14px;
+  background: #111;
+  border: 1px solid #e2d7c9;
 }
 
 .monitoring-preview-eyebrow {
@@ -660,6 +678,23 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
+}
+
+.telegram-actions-compact {
+  width: 100%;
+}
+
+.telegram-inline-link {
+  width: fit-content;
+  color: #7a5420;
+  font-size: 0.88rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.telegram-inline-link:hover,
+.telegram-inline-link:focus-visible {
+  text-decoration: underline;
 }
 
 .telegram-onboarding-copy {
@@ -787,8 +822,7 @@
 }
 
 .share-access-controls {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 0.75rem;
   align-items: end;
 }
@@ -798,6 +832,15 @@
   gap: 0.35rem;
   margin: 0;
   color: #6a5c48;
+}
+
+.share-access-invite-callout {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.95rem 1rem;
+  border-radius: 14px;
+  background: #f7f2ea;
+  border: 1px solid #eadfce;
 }
 
 .share-access-code span {
@@ -1255,13 +1298,8 @@ button:not(:disabled):hover {
     grid-auto-flow: row;
   }
 
-  .monitoring-confirmations {
-    flex-direction: column;
-  }
-
-  .monitoring-confirmation {
+  .monitoring-preview-actions button {
     width: 100%;
-    justify-content: flex-start;
   }
 
   .events-header {

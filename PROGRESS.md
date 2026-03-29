@@ -109,6 +109,41 @@ Update it after each meaningful step so the repo always reflects:
   - added a final pre-start checklist with explicit plug-in and camera-aim confirmations plus an alert preview flow
   - moved the Telegram test action into monitoring readiness and tightened mobile spacing for the owner flow
   - updated frontend account and E2E coverage, then reran full unit, integration, and E2E gates successfully
+- Telegram invite flow clarity follow-up completed:
+  - made `Another phone` the default Telegram setup path so invite-based sharing is the first thing owners see
+  - moved `Share access` above `Link another phone` and added explicit step-by-step copy after invite creation
+  - updated Telegram frontend tests for the new default path and reran full unit, integration, and E2E gates successfully
+- Share invite clipboard polish completed:
+  - copied the generated share invite code to the clipboard immediately after invite creation when clipboard access is available
+  - added frontend coverage for the automatic copy behavior and reran full unit, integration, and E2E gates successfully
+- Alert instruction controls refinement completed:
+  - moved alert instruction add/remove actions into each instruction card so users can manage instructions inline
+  - kept remove disabled when only one instruction remains so the required minimum stays intact
+  - updated frontend coverage for the per-card controls and reran full unit, integration, and E2E gates successfully
+- Telegram action cleanup completed:
+  - exposed `Check Telegram status` in both the `This phone` and `Another phone` paths so users can refresh status from either setup flow
+  - cleaned the Telegram action layout by grouping status actions consistently and demoting reopen links into lighter inline follow-ups
+  - updated frontend coverage for the shared status action and reran full unit, integration, and E2E gates successfully
+- Monitoring tips wording completed:
+  - changed the monitoring readiness card so only Telegram setup and alert instructions are required before start
+  - kept `Phone plugged in` and `Camera aimed` as optional tips instead of blockers
+  - updated readiness-focused frontend coverage and reran the full unit, integration, and E2E gates successfully
+- Monitoring Telegram shortcut completed:
+  - added `Check Telegram status` directly inside the required-before-start card when Telegram setup still needs attention
+  - kept the extra status action hidden once Telegram is already ready so the monitoring card stays cleaner
+  - updated readiness coverage and reran the full unit, integration, and E2E gates successfully
+- Monitoring Telegram action placement refined:
+  - moved the readiness-card `Check Telegram status` action under the `Telegram linked` requirement so the recovery step sits next to the blocked item
+  - kept that inline action hidden once Telegram is green inside the monitoring card
+  - updated readiness-focused frontend coverage and reran the full unit, integration, and E2E gates successfully
+- Monitoring hints and camera preview completed:
+  - replaced optional `Phone plugged in` and `Camera aimed` checkboxes with plain helpful hints
+  - added a 5-second manual camera preview so users can quickly verify framing before starting
+  - updated frontend readiness/account coverage and reran the full unit, integration, and E2E gates successfully
+- Camera preview framing refined:
+  - kept the preview embedded in-page and disabled picture-in-picture for the temporary preview video
+  - changed the preview to a smaller contained frame so the full camera view stays visible without cropping
+  - updated frontend coverage and reran the full unit, integration, and E2E gates successfully
 
 ## In Progress
 

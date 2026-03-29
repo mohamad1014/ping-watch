@@ -40,17 +40,9 @@ const buildUploadResponse = (etag: string) =>
   } as unknown as Response)
 
 const addRequiredAlertInstruction = async (user: ReturnType<typeof userEvent.setup>) => {
-  const firstInstruction = await screen.findByLabelText(/alert instruction 1/i)
+  const firstInstruction = await screen.findByRole('textbox', { name: /alert instruction 1/i })
   await user.clear(firstInstruction)
   await user.type(firstInstruction, 'Alert if a person enters the office.')
-  const phonePluggedInCheckbox = screen.queryByRole('checkbox', { name: /phone plugged in/i }) as HTMLInputElement | null
-  if (phonePluggedInCheckbox && !phonePluggedInCheckbox.checked) {
-    await user.click(phonePluggedInCheckbox)
-  }
-  const cameraAimedCheckbox = screen.queryByRole('checkbox', { name: /camera aimed/i }) as HTMLInputElement | null
-  if (cameraAimedCheckbox && !cameraAimedCheckbox.checked) {
-    await user.click(cameraAimedCheckbox)
-  }
 }
 
 type RecipientApiResponse = {
@@ -368,18 +360,27 @@ describe('App', () => {
     const thisPhoneButton = within(telegramSection).getByRole('button', { name: /this phone/i })
     const anotherPhoneButton = within(telegramSection).getByRole('button', { name: /another phone/i })
 
-    expect(thisPhoneButton).toHaveAttribute('aria-pressed', 'true')
-    expect(anotherPhoneButton).toHaveAttribute('aria-pressed', 'false')
-    expect(within(telegramSection).getByText(/choose this if the monitoring phone should also receive telegram alerts/i)).toBeInTheDocument()
-    expect(within(telegramSection).queryByText(/paste an invite code from a device owner/i)).not.toBeInTheDocument()
-
-    await user.click(anotherPhoneButton)
-
     expect(thisPhoneButton).toHaveAttribute('aria-pressed', 'false')
     expect(anotherPhoneButton).toHaveAttribute('aria-pressed', 'true')
     expect(within(telegramSection).getByText(/choose this if alerts should go to a different phone or another person's telegram account/i)).toBeInTheDocument()
     expect(within(telegramSection).getByText(/paste an invite code from a device owner/i)).toBeInTheDocument()
+    expect(
+      within(telegramSection).getByPlaceholderText(/insert code shared from other phone here to connect!/i)
+    ).toBeInTheDocument()
+    expect(
+      within(telegramSection).getByRole('button', { name: /check telegram status/i })
+    ).toBeInTheDocument()
     expect(within(telegramSection).queryByText(/connect telegram and send \/start to your bot before monitoring/i)).not.toBeInTheDocument()
+
+    await user.click(thisPhoneButton)
+
+    expect(thisPhoneButton).toHaveAttribute('aria-pressed', 'true')
+    expect(anotherPhoneButton).toHaveAttribute('aria-pressed', 'false')
+    expect(within(telegramSection).getByText(/choose this if the monitoring phone should also receive telegram alerts/i)).toBeInTheDocument()
+    expect(
+      within(telegramSection).getByRole('button', { name: /check telegram status/i })
+    ).toBeInTheDocument()
+    expect(within(telegramSection).queryByText(/paste an invite code from a device owner/i)).not.toBeInTheDocument()
   })
 
   it('shows a short telegram summary and next action for each setup path', async () => {
@@ -410,22 +411,28 @@ describe('App', () => {
       events: [[]],
     })
     vi.stubGlobal('fetch', fetchMock)
+    const originalClipboard = navigator.clipboard
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    })
 
     render(<App />)
 
     const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    expect(within(telegramSection).getByText(/another phone is not linked yet/i)).toBeInTheDocument()
+    expect(
+      within(telegramSection).getByText(/next: create a share invite here, then open it on the other phone and accept it in telegram/i)
+    ).toBeInTheDocument()
+
+    await user.click(within(telegramSection).getByRole('button', { name: /this phone/i }))
+
     expect(
       within(telegramSection).getByText(/this phone is not ready to receive telegram alerts yet/i)
     ).toBeInTheDocument()
     expect(
       within(telegramSection).getByText(/next: tap connect telegram alerts, then send \/start in the bot chat/i)
-    ).toBeInTheDocument()
-
-    await user.click(within(telegramSection).getByRole('button', { name: /another phone/i }))
-
-    expect(within(telegramSection).getByText(/another phone is not linked yet/i)).toBeInTheDocument()
-    expect(
-      within(telegramSection).getByText(/next: create a share invite here, then open it on the other phone and accept it in telegram/i)
     ).toBeInTheDocument()
   })
 
@@ -438,6 +445,42 @@ describe('App', () => {
     expect(within(onboardingSection).getByText(/place this phone and start monitoring/i)).toBeInTheDocument()
     expect(within(onboardingSection).queryByText(/switch to dev mode only when you need to tune recording/i)).not.toBeInTheDocument()
     expect(within(onboardingSection).queryByRole('button', { name: /user mode/i })).not.toBeInTheDocument()
+  })
+
+  it('lets each alert instruction manage its own add and remove actions', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    const firstInstruction = await screen.findByRole('textbox', { name: /alert instruction 1/i })
+    const firstInstructionCard = firstInstruction.closest('.analysis-prompt-item')
+    expect(firstInstructionCard).not.toBeNull()
+    expect(
+      within(firstInstructionCard as HTMLElement).getByRole('button', { name: /add alert instruction after 1/i })
+    ).toBeInTheDocument()
+    expect(
+      within(firstInstructionCard as HTMLElement).getByRole('button', { name: /remove alert instruction 1/i })
+    ).toBeDisabled()
+
+    await user.click(
+      within(firstInstructionCard as HTMLElement).getByRole('button', { name: /add alert instruction after 1/i })
+    )
+
+    const secondInstruction = screen.getByRole('textbox', { name: /alert instruction 2/i })
+    const secondInstructionCard = secondInstruction.closest('.analysis-prompt-item')
+    expect(secondInstructionCard).not.toBeNull()
+    expect(
+      within(secondInstructionCard as HTMLElement).getByRole('button', { name: /add alert instruction after 2/i })
+    ).toBeInTheDocument()
+    expect(
+      within(secondInstructionCard as HTMLElement).getByRole('button', { name: /remove alert instruction 2/i })
+    ).toBeEnabled()
+
+    await user.click(
+      within(firstInstructionCard as HTMLElement).getByRole('button', { name: /remove alert instruction 1/i })
+    )
+
+    expect(screen.queryByRole('textbox', { name: /alert instruction 2/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: /alert instruction 1/i })).toBeInTheDocument()
   })
 
   it('requires at least one alert instruction and sends multiple instructions together', async () => {
@@ -454,6 +497,12 @@ describe('App', () => {
       events: [[]],
     })
     vi.stubGlobal('fetch', fetchMock)
+    const originalClipboard = navigator.clipboard
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    })
 
     render(<App />)
 
@@ -462,12 +511,9 @@ describe('App', () => {
 
     const firstInstruction = await screen.findByRole('textbox', { name: /alert instruction 1/i })
     await user.type(firstInstruction, 'Alert if a person enters the office.')
-    expect(startButton).toBeDisabled()
-    await user.click(screen.getByRole('checkbox', { name: /phone plugged in/i }))
-    await user.click(screen.getByRole('checkbox', { name: /camera aimed/i }))
     expect(startButton).toBeEnabled()
 
-    await user.click(screen.getByRole('button', { name: /add instruction/i }))
+    await user.click(screen.getByRole('button', { name: /add alert instruction after 1/i }))
     const secondInstruction = screen.getByRole('textbox', { name: /alert instruction 2/i })
     await user.type(secondInstruction, 'Alert if motion happens after 10 PM.')
 
@@ -517,30 +563,80 @@ describe('App', () => {
       events: [[]],
     })
     vi.stubGlobal('fetch', fetchMock)
+    const originalClipboard = navigator.clipboard
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    })
 
     render(<App />)
-    const firstInstruction = await screen.findByLabelText(/alert instruction 1/i)
+    const firstInstruction = await screen.findByRole('textbox', { name: /alert instruction 1/i })
     await user.clear(firstInstruction)
     await user.type(firstInstruction, 'Alert if a person enters the office.')
 
     expect(screen.getByText(/telegram linked/i)).toBeInTheDocument()
     expect(screen.getByText(/at least one instruction added/i)).toBeInTheDocument()
-    expect(screen.getByRole('checkbox', { name: /phone plugged in/i })).not.toBeChecked()
-    expect(screen.getByRole('checkbox', { name: /camera aimed/i })).not.toBeChecked()
+    expect(screen.queryByRole('checkbox', { name: /phone plugged in/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: /camera aimed/i })).not.toBeInTheDocument()
 
     const startButton = screen.getByRole('button', { name: /start monitoring/i })
-    expect(startButton).toBeDisabled()
+    const readinessCard = screen.getByText(/required before start/i).closest('.monitoring-readiness-card')
+    expect(readinessCard).not.toBeNull()
+    expect(startButton).toBeEnabled()
     expect(screen.getByRole('button', { name: /send test alert/i })).toBeInTheDocument()
+    expect(
+      within(readinessCard as HTMLElement).queryByRole('button', { name: /check telegram status/i })
+    ).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /preview how alerts will be described/i }))
 
     expect(screen.getByText(/preview alert wording/i)).toBeInTheDocument()
     expect(screen.getAllByText(/alert if a person enters the office/i).length).toBeGreaterThan(0)
+    expect(screen.getByText(/helpful tips/i)).toBeInTheDocument()
+    expect(screen.getByText(/keep the phone plugged in for longer sessions/i)).toBeInTheDocument()
+    expect(screen.getByText(/use camera preview to check what the lens sees before you start/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /preview camera for 5 seconds/i })).toBeInTheDocument()
+  })
 
-    await user.click(screen.getByRole('checkbox', { name: /phone plugged in/i }))
-    await user.click(screen.getByRole('checkbox', { name: /camera aimed/i }))
+  it('starts a temporary camera preview when requested', async () => {
+    runtimeFlags.__PING_WATCH_DISABLE_MEDIA__ = false
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: true,
+        status: 'ready',
+        reason: null,
+      }],
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const previewStream = {
+      getTracks: () => [{ stop: vi.fn() }],
+    } as unknown as MediaStream
+    const getUserMedia = vi.fn().mockResolvedValue(previewStream)
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: { getUserMedia },
+      configurable: true,
+    })
 
-    expect(startButton).toBeEnabled()
+    render(<App />)
+    const firstInstruction = await screen.findByRole('textbox', { name: /alert instruction 1/i })
+    fireEvent.change(firstInstruction, { target: { value: 'Alert if a person enters the office.' } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /preview camera for 5 seconds/i }))
+    })
+
+    await waitFor(() => {
+      expect(getUserMedia).toHaveBeenCalledWith({ video: true, audio: false })
+      expect(screen.getByRole('region', { name: /camera preview/i })).toBeInTheDocument()
+    })
+    expect(screen.getByText(/live for 5 seconds/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/camera preview video/i)).toHaveAttribute('disablePictureInPicture')
+    expect(screen.getByRole('button', { name: /camera preview live/i })).toBeDisabled()
   })
 
   it('lets panels be minimized from their section header', async () => {
@@ -574,6 +670,7 @@ describe('App', () => {
   })
 
   it('requires Telegram readiness before start when backend reports not ready', async () => {
+    const user = userEvent.setup()
     const fetchMock = createFetchMock({
       telegramReadiness: [{
         enabled: true,
@@ -590,17 +687,24 @@ describe('App', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    await user.click(within(telegramSection).getByRole('button', { name: /this phone/i }))
 
     expect(
-      await screen.findByRole('button', { name: /connect telegram alerts/i })
+      await within(telegramSection).findByRole('button', { name: /connect telegram alerts/i })
     ).toBeInTheDocument()
     expect(screen.getByLabelText(/telegram status: action needed/i)).toBeInTheDocument()
     expect(
       screen.getByText(/open telegram and send \/start to your bot/i)
     ).toBeInTheDocument()
+    const telegramChecklistItem = screen.getByText(/telegram linked/i).closest('.monitoring-readiness-item')
+    expect(telegramChecklistItem).not.toBeNull()
     expect(screen.getByText(/bot linked/i)).toBeInTheDocument()
     expect(screen.getByText(/recipient added/i)).toBeInTheDocument()
     expect(screen.getByText(/ready to monitor/i)).toBeInTheDocument()
+    expect(
+      within(telegramChecklistItem as HTMLElement).getByRole('button', { name: /check telegram status/i })
+    ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /start monitoring/i })).toBeDisabled()
   })
 
@@ -653,9 +757,11 @@ describe('App', () => {
 
     render(<App />)
     await addRequiredAlertInstruction(user)
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    await user.click(within(telegramSection).getByRole('button', { name: /this phone/i }))
 
     await user.click(
-      await screen.findByRole('button', { name: /connect telegram alerts/i })
+      await within(telegramSection).findByRole('button', { name: /connect telegram alerts/i })
     )
 
     expect(openSpy).toHaveBeenCalledWith(
@@ -760,9 +866,11 @@ describe('App', () => {
       .mockReturnValueOnce(null)
 
     render(<App />)
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    await user.click(within(telegramSection).getByRole('button', { name: /this phone/i }))
 
     await user.click(
-      await screen.findByRole('button', { name: /connect telegram alerts/i })
+      await within(telegramSection).findByRole('button', { name: /connect telegram alerts/i })
     )
 
     expect(openSpy).toHaveBeenNthCalledWith(
@@ -826,9 +934,11 @@ describe('App', () => {
     const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup)
 
     render(<App />)
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    await user.click(within(telegramSection).getByRole('button', { name: /this phone/i }))
 
     await user.click(
-      await screen.findByRole('button', { name: /connect telegram alerts/i })
+      await within(telegramSection).findByRole('button', { name: /connect telegram alerts/i })
     )
 
     expect(openSpy).toHaveBeenCalledWith('', '_blank', 'noopener,noreferrer')
@@ -883,8 +993,10 @@ describe('App', () => {
     vi.spyOn(window, 'open').mockReturnValueOnce(null)
 
     render(<App />)
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    await user.click(within(telegramSection).getByRole('button', { name: /this phone/i }))
     await user.click(
-      await screen.findByRole('button', { name: /connect telegram alerts/i })
+      await within(telegramSection).findByRole('button', { name: /connect telegram alerts/i })
     )
 
     expect(localStorage.getItem(TELEGRAM_LINK_ATTEMPT_KEY)).toBe('attempt-1')
@@ -929,8 +1041,10 @@ describe('App', () => {
     } as unknown as Window)
 
     render(<App />)
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    await user.click(within(telegramSection).getByRole('button', { name: /this phone/i }))
     await user.click(
-      await screen.findByRole('button', { name: /connect telegram alerts/i })
+      await within(telegramSection).findByRole('button', { name: /connect telegram alerts/i })
     )
 
     expect(localStorage.getItem(TELEGRAM_LINK_FALLBACK_URL_KEY)).toBe(
@@ -971,8 +1085,10 @@ describe('App', () => {
     vi.spyOn(window, 'open').mockReturnValueOnce(null)
 
     render(<App />)
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    await user.click(within(telegramSection).getByRole('button', { name: /this phone/i }))
     await user.click(
-      await screen.findByRole('button', { name: /connect telegram alerts/i })
+      await within(telegramSection).findByRole('button', { name: /connect telegram alerts/i })
     )
 
     expect(screen.getByText('/start token-1')).toBeInTheDocument()
@@ -1079,6 +1195,7 @@ describe('App', () => {
     const telegramSection = await screen.findByRole('region', {
       name: /^telegram$/i,
     })
+    await user.click(within(telegramSection).getByRole('button', { name: /this phone/i }))
     expect(screen.queryByRole('region', { name: /telegram recipients/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('region', { name: /share access/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('region', { name: /accept shared invite/i })).not.toBeInTheDocument()
@@ -1160,6 +1277,7 @@ describe('App', () => {
     const telegramSection = await screen.findByRole('region', {
       name: /^telegram$/i,
     })
+    await user.click(within(telegramSection).getByRole('button', { name: /this phone/i }))
     await user.click(
       within(telegramSection).getByRole('button', { name: /re-run telegram onboarding/i })
     )
@@ -1265,15 +1383,23 @@ describe('App', () => {
       events: [[]],
     })
     vi.stubGlobal('fetch', fetchMock)
+    const originalClipboard = navigator.clipboard
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    })
 
     render(<App />)
 
     const telegramSection = await screen.findByRole('region', {
       name: /^telegram$/i,
     })
-    await user.click(
-      within(telegramSection).getByRole('button', { name: /another phone/i })
-    )
+    const inviteHeadingsBeforeCreate = within(telegramSection).getAllByRole('heading', { level: 3 })
+    expect(inviteHeadingsBeforeCreate.map((heading) => heading.textContent)).toEqual([
+      'Share access',
+      'Link another phone',
+    ])
     await user.click(
       within(telegramSection).getByRole('button', { name: /create share invite/i })
     )
@@ -1291,6 +1417,13 @@ describe('App', () => {
       expect(within(telegramSection).getByText('share-code-1')).toBeInTheDocument()
       expect(within(telegramSection).getByText('Pending')).toBeInTheDocument()
     })
+    expect(writeText).toHaveBeenCalledWith('share-code-1')
+    expect(
+      within(telegramSection).getAllByText(/share this code with the other phone, then open telegram there and accept the invite/i).length
+    ).toBeGreaterThan(0)
+    expect(
+      within(telegramSection).getByText(/step 1: create a share invite\. step 2: send the code to the other phone\. step 3: paste the code below on that phone and tap accept invite/i)
+    ).toBeInTheDocument()
 
     await user.click(
       within(telegramSection).getByRole('button', { name: /revoke invite invite-1/i })
@@ -1304,6 +1437,11 @@ describe('App', () => {
     )
     await waitFor(() => {
       expect(within(telegramSection).getByText('Revoked')).toBeInTheDocument()
+    })
+
+    Object.defineProperty(navigator, 'clipboard', {
+      value: originalClipboard,
+      configurable: true,
     })
   })
 
@@ -1382,6 +1520,9 @@ describe('App', () => {
         }),
       })
     )
+    expect(
+      within(telegramSection).getByRole('button', { name: /check telegram status/i })
+    ).toBeInTheDocument()
     expect(openSpy).toHaveBeenCalledWith(
       'https://t.me/pingwatch_bot?start=share-token-1',
       '_blank',

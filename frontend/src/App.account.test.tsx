@@ -106,8 +106,6 @@ describe('App account flows', () => {
       screen.getByRole('textbox', { name: /alert instruction 1/i }),
       'Alert if a person enters the office.'
     )
-    await user.click(screen.getByRole('checkbox', { name: /phone plugged in/i }))
-    await user.click(screen.getByRole('checkbox', { name: /camera aimed/i }))
 
     expect(startButton).toBeEnabled()
   })
