@@ -9,6 +9,9 @@ test('live flow without webServer config', async ({ page, request }) => {
     expect(response.ok()).toBeTruthy()
 
     await page.goto(frontendUrl)
+    await page.getByRole('textbox', { name: /alert instruction 1/i }).fill(
+      'Alert if a person enters the office.'
+    )
     await page.getByRole('button', { name: 'Start monitoring' }).click()
     await expect(page.getByText('Active')).toBeVisible()
 

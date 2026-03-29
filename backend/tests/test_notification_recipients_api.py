@@ -1,4 +1,5 @@
 import pytest
+import httpx
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
@@ -237,3 +238,76 @@ async def test_recipient_management_enforces_device_ownership(monkeypatch):
 
     assert remove_response.status_code == 404
     assert remove_response.json() == {"detail": "device not found"}
+
+
+@pytest.mark.anyio
+async def test_owner_can_send_test_telegram_alert_to_subscribed_recipients(monkeypatch):
+    monkeypatch.setenv("AUTH_REQUIRED", "true")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+
+    sent_messages: list[dict[str, object]] = []
+
+    def mock_post(url: str, *, json: dict, timeout: float):
+        assert timeout > 0
+        sent_messages.append({"url": url, "json": json})
+        return type(
+            "_Resp",
+            (),
+            {
+                "status_code": 200,
+                "raise_for_status": staticmethod(lambda: None),
+            },
+        )()
+
+    monkeypatch.setattr(httpx, "post", mock_post)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        owner = await _dev_login(client, "owner@example.com")
+
+        with SessionLocal() as db:
+            register_device(db, device_id="dev-1", user_id=owner["user_id"])
+            register_device(db, device_id="dev-2", user_id=owner["user_id"])
+            link_device_telegram_chat(
+                db,
+                device_id="dev-1",
+                chat_id="111",
+                username="alice",
+                user_id=owner["user_id"],
+            )
+            link_device_telegram_chat(
+                db,
+                device_id="dev-2",
+                chat_id="222",
+                username="bob",
+                user_id=owner["user_id"],
+            )
+
+        recipients_response = await client.get(
+            "/notifications/recipients",
+            params={"device_id": "dev-1"},
+            headers=_auth_headers(owner["access_token"]),
+        )
+        bob_endpoint_id = next(
+            item["endpoint_id"]
+            for item in recipients_response.json()["recipients"]
+            if item["chat_id"] == "222"
+        )
+        await client.post(
+            "/notifications/recipients",
+            json={"device_id": "dev-1", "endpoint_id": bob_endpoint_id},
+            headers=_auth_headers(owner["access_token"]),
+        )
+
+        response = await client.post(
+            "/notifications/telegram/test",
+            json={"device_id": "dev-1"},
+            headers=_auth_headers(owner["access_token"]),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "delivered_count": 2}
+    assert len(sent_messages) == 2
+    assert all(item["url"].endswith("/bottoken/sendMessage") for item in sent_messages)
+    assert {item["json"]["chat_id"] for item in sent_messages} == {"111", "222"}

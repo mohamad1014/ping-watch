@@ -31,6 +31,131 @@
   gap: 2rem;
 }
 
+.panel {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.panel-heading-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.panel-title {
+  margin: 0;
+  font-size: 1.12rem;
+}
+
+.panel-toggle {
+  padding: 0.6rem 1rem;
+  border-radius: 999px;
+  background: #f3eee7;
+  color: #3f3429;
+  box-shadow: none;
+}
+
+.onboarding-card {
+  padding: 1.5rem;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(255, 154, 110, 0.28), transparent 36%),
+    linear-gradient(135deg, #fff7ef 0%, #f4eee6 100%);
+  border: 1px solid #ead8c4;
+  box-shadow: 0 18px 50px rgba(86, 55, 25, 0.08);
+  display: grid;
+  gap: 1.35rem;
+}
+
+.onboarding-intro {
+  margin: 0;
+  max-width: 42rem;
+  color: #5e4a35;
+}
+
+.mode-toggle {
+  display: inline-flex;
+  padding: 0.3rem;
+  border-radius: 999px;
+  background: rgba(73, 46, 23, 0.08);
+  gap: 0.35rem;
+}
+
+.mode-toggle-inline {
+  width: fit-content;
+}
+
+.mode-toggle-button {
+  padding: 0.75rem 1.1rem;
+  background: transparent;
+  color: #5b4732;
+  box-shadow: none;
+}
+
+.mode-toggle-button.active {
+  background: #1a1714;
+  color: #f8f0e6;
+  box-shadow: 0 10px 24px rgba(26, 23, 20, 0.18);
+}
+
+.onboarding-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.95rem;
+}
+
+.onboarding-step {
+  min-height: 100%;
+  padding: 1rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(121, 89, 52, 0.12);
+  display: grid;
+  gap: 0.55rem;
+}
+
+.onboarding-step h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.onboarding-step p {
+  margin: 0;
+  color: #5e4a35;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.onboarding-step-number {
+  display: inline-flex;
+  width: fit-content;
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  background: #1a1714;
+  color: #f8f0e6;
+  letter-spacing: 0.12em;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
+.onboarding-step-note {
+  background: rgba(31, 21, 14, 0.92);
+}
+
+.onboarding-step-note h3,
+.onboarding-step-note p {
+  color: #f8f0e6;
+}
+
 .account-card {
   padding: 1.25rem;
   border-radius: 18px;
@@ -114,10 +239,55 @@
 }
 
 .analysis-prompt-section {
+  display: grid;
+  gap: 1rem;
   padding: 1.25rem;
   border-radius: 18px;
   background: #f8f6f3;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
+}
+
+.analysis-prompt-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.analysis-prompt-copy {
+  margin: 0;
+  max-width: 42rem;
+  font-size: 0.92rem;
+  color: #5f4521;
+}
+
+.analysis-prompt-copy-group {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.analysis-prompt-examples {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding-left: 1.15rem;
+  color: #75562c;
+  font-size: 0.9rem;
+}
+
+.analysis-prompt-list {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.analysis-prompt-item {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.95rem 1rem;
+  border-radius: 16px;
+  background: #fff;
+  border: 1px solid #e8dfd2;
 }
 
 .analysis-prompt-label {
@@ -126,6 +296,10 @@
   gap: 0.5rem;
   font-size: 0.9rem;
   font-weight: 500;
+}
+
+.analysis-prompt-remove {
+  justify-self: flex-start;
 }
 
 .analysis-prompt-input {
@@ -156,15 +330,150 @@
 }
 
 .telegram-onboarding {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
   gap: 0.9rem;
   padding: 1rem 1.2rem;
   border-radius: 14px;
   background: #fff0d8;
   border: 1px solid #f2d8aa;
+}
+
+.telegram-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.telegram-path-picker {
+  display: inline-flex;
+  gap: 0.55rem;
+  padding: 0.35rem;
+  width: fit-content;
+  border-radius: 999px;
+  background: rgba(220, 204, 181, 0.28);
+}
+
+.telegram-path-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.7rem 1rem;
+  background: transparent;
+  color: #604628;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, box-shadow 160ms ease;
+}
+
+.telegram-path-button.active {
+  background: #fff;
+  color: #1f2f48;
+  box-shadow: 0 10px 24px rgba(96, 70, 40, 0.12);
+}
+
+.telegram-path-button:focus-visible {
+  outline: 2px solid #ff7a59;
+  outline-offset: 2px;
+}
+
+.telegram-subsection-header,
+.share-access-header {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.telegram-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.8rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.telegram-health-dot {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  box-shadow: 0 0 0 0.18rem rgba(0, 0, 0, 0.08);
+}
+
+.telegram-health-connected {
+  background: #e5f7e8;
+  color: #1f6a35;
+}
+
+.telegram-health-connected .telegram-health-dot {
+  background: #2faf52;
+}
+
+.telegram-health-checking {
+  background: #fff4d8;
+  color: #805b10;
+}
+
+.telegram-health-checking .telegram-health-dot {
+  background: #e4ab16;
+}
+
+.telegram-health-attention {
+  background: #ffe3e0;
+  color: #9d3529;
+}
+
+.telegram-health-attention .telegram-health-dot {
+  background: #d44b3d;
+}
+
+.telegram-subsection {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.telegram-checklist {
+  list-style: none;
+  display: grid;
+  gap: 0.55rem;
+  padding: 0;
+  margin: 0;
+}
+
+.telegram-checklist-item {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-size: 0.9rem;
+  color: #6e4b27;
+}
+
+.telegram-checklist-indicator {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  background: #d46f61;
+  box-shadow: 0 0 0 0.18rem rgba(212, 111, 97, 0.18);
+}
+
+.telegram-checklist-item.is-complete {
+  color: #275f39;
+}
+
+.telegram-checklist-item.is-complete .telegram-checklist-indicator {
+  background: #2faf52;
+  box-shadow: 0 0 0 0.18rem rgba(47, 175, 82, 0.18);
+}
+
+.telegram-subsection-header h3,
+.telegram-recipients-header h3,
+.share-access-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.telegram-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
 }
 
 .telegram-onboarding-copy {
@@ -175,6 +484,11 @@
 
 .telegram-onboarding-command {
   flex-basis: 100%;
+}
+
+.telegram-test-alert-message {
+  color: #275f39;
+  font-weight: 500;
 }
 
 .telegram-onboarding-command code {
@@ -240,6 +554,27 @@
   margin: 0;
   font-size: 0.9rem;
   color: #6a5c48;
+}
+
+.monitoring-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.monitoring-callout {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.95rem 1rem;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.monitoring-callout-copy {
+  margin: 0;
+  color: #f5f2ed;
+  font-size: 0.95rem;
+  line-height: 1.5;
 }
 
 .share-access {
@@ -317,6 +652,21 @@ button.primary {
   background: #ff7a59;
   color: #fff;
   box-shadow: 0 12px 24px rgba(255, 122, 89, 0.3);
+}
+
+@media (max-width: 720px) {
+  .onboarding-card {
+    padding: 1.2rem;
+  }
+
+  .mode-toggle {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .mode-toggle-button {
+    flex: 1;
+  }
 }
 
 button.secondary {

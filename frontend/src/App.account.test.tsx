@@ -102,6 +102,11 @@ describe('App account flows', () => {
       expect(screen.getByText(/signed in as owner@example\.com/i)).toBeInTheDocument()
     })
 
+    await user.type(
+      screen.getByRole('textbox', { name: /alert instruction 1/i }),
+      'Alert if a person enters the office.'
+    )
+
     expect(startButton).toBeEnabled()
   })
 })
