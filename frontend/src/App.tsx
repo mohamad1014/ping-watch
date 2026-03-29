@@ -341,6 +341,9 @@ function App() {
   const [inviteAcceptedMessage, setInviteAcceptedMessage] = useState<string | null>(null)
   const [telegramTestAlertMessage, setTelegramTestAlertMessage] = useState<string | null>(null)
   const [sendingTelegramTestAlert, setSendingTelegramTestAlert] = useState(false)
+  const [isPhonePluggedInConfirmed, setIsPhonePluggedInConfirmed] = useState(false)
+  const [isCameraAimedConfirmed, setIsCameraAimedConfirmed] = useState(false)
+  const [showAlertPreview, setShowAlertPreview] = useState(false)
   const [recipientSharedDeviceId, setRecipientSharedDeviceId] = useState<string | null>(
     () => readStoredTelegramValue(RECIPIENT_SHARED_DEVICE_ID_KEY)
   )
@@ -1535,6 +1538,11 @@ function App() {
     || lastEvent?.alert_reason?.trim()
     || null
   const hasSubscribedTelegramRecipient = telegramRecipients.some((recipient) => recipient.subscribed)
+  const telegramLinkedForMonitoring = requiresAccountSignIn
+    ? false
+    : telegramReadiness?.enabled === true
+    ? telegramReadiness.ready
+    : true
   const telegramChecklist = [
     {
       label: 'Bot linked',
@@ -1547,6 +1555,76 @@ function App() {
     {
       label: 'Ready to monitor',
       done: Boolean(telegramReadiness?.ready),
+    },
+  ]
+  const deviceTelegramSummary = checkingTelegramReadiness
+    ? {
+      tone: 'checking',
+      label: 'Checking setup',
+      summary: 'Checking whether this phone is linked to Telegram alerts.',
+      nextAction: 'Next: wait a moment, or tap Check Telegram status if the bot just replied.',
+    }
+    : telegramReadiness?.ready
+    ? {
+      tone: 'ready',
+      label: 'Ready',
+      summary: 'This phone is ready to receive Telegram alerts.',
+      nextAction: 'Next: send a test alert or start monitoring.',
+    }
+    : isWaitingForTelegramConnect
+    ? {
+      tone: 'checking',
+      label: 'Waiting for Telegram',
+      summary: 'This phone still needs the Telegram confirmation step.',
+      nextAction: 'Next: finish the /start step in Telegram, then return here.',
+    }
+    : {
+      tone: 'attention',
+      label: 'Needs setup',
+      summary: 'This phone is not ready to receive Telegram alerts yet.',
+      nextAction: 'Next: tap Connect Telegram alerts, then send /start in the bot chat.',
+    }
+  const anotherPhoneLinked = isRecipientOnlyMode
+    || Boolean(inviteAcceptedMessage)
+    || notificationInvites.some((invite) => invite.status === 'pending' || invite.status === 'accepted')
+    || Boolean(latestInviteCode)
+  const anotherPhoneSummary = anotherPhoneLinked
+    ? {
+      tone: 'ready',
+      label: 'Invite ready',
+      summary: isRecipientOnlyMode
+        ? 'This phone is connected to shared Telegram alerts.'
+        : 'Another phone can now be linked to Telegram alerts.',
+      nextAction: isRecipientOnlyMode
+        ? 'Next: wait for the device owner to start monitoring.'
+        : 'Next: open Telegram on the other phone and accept the invite code.',
+    }
+    : {
+      tone: 'attention',
+      label: 'Needs setup',
+      summary: 'Another phone is not linked yet.',
+      nextAction: 'Next: create a share invite here, then open it on the other phone and accept it in Telegram.',
+    }
+  const monitoringChecklist = [
+    {
+      label: 'Telegram linked',
+      done: telegramLinkedForMonitoring,
+      note: telegramLinkedForMonitoring ? 'Alerts have somewhere to go.' : 'Finish Telegram setup first.',
+    },
+    {
+      label: 'At least one instruction added',
+      done: hasAlertInstructions,
+      note: hasAlertInstructions ? 'Alert wording is ready.' : 'Add at least one short alert instruction.',
+    },
+    {
+      label: 'Phone plugged in',
+      done: isPhonePluggedInConfirmed,
+      note: isPhonePluggedInConfirmed ? 'Power looks covered.' : 'Keep the phone charging for long sessions.',
+    },
+    {
+      label: 'Camera aimed',
+      done: isCameraAimedConfirmed,
+      note: isCameraAimedConfirmed ? 'View is confirmed.' : 'Point the camera at the area you want to watch.',
     },
   ]
   const setMode = (mode: FrontendMode) => {
@@ -1701,6 +1779,13 @@ function App() {
                     : 'Connect Telegram and send /start to your bot before monitoring.'}
                 </p>
               </div>
+              <div className={`telegram-empty-state telegram-empty-state-${deviceTelegramSummary.tone}`}>
+                <div className="telegram-empty-state-header">
+                  <span className="telegram-empty-state-badge">{deviceTelegramSummary.label}</span>
+                  <p className="telegram-empty-state-summary">{deviceTelegramSummary.summary}</p>
+                </div>
+                <p className="telegram-empty-state-next">{deviceTelegramSummary.nextAction}</p>
+              </div>
               <ul className="telegram-checklist" aria-label="Telegram setup checklist">
                 {telegramChecklist.map((item) => (
                   <li
@@ -1744,27 +1829,10 @@ function App() {
                     {checkingTelegramReadiness ? 'Checking...' : 'Check Telegram status'}
                   </button>
                 )}
-                {telegramReadiness?.ready && !isRecipientOnlyMode && (
-                  <button
-                    className="secondary"
-                    type="button"
-                    onClick={() => {
-                      void handleSendTelegramTestAlert()
-                    }}
-                    disabled={sendingTelegramTestAlert}
-                  >
-                    {sendingTelegramTestAlert ? 'Sending test alert...' : 'Test Telegram alert'}
-                  </button>
-                )}
               </div>
               {isWaitingForTelegramConnect && telegramFallbackCommand && (
                 <p className="telegram-onboarding-copy telegram-onboarding-command">
                   If Telegram opens without payload, send <code>{telegramFallbackCommand}</code> in the bot chat.
-                </p>
-              )}
-              {telegramTestAlertMessage && (
-                <p className="telegram-onboarding-copy telegram-test-alert-message">
-                  {telegramTestAlertMessage}
                 </p>
               )}
             </div>
@@ -1847,6 +1915,13 @@ function App() {
                     Paste an invite code from a device owner to route shared alerts to your Telegram account.
                   </p>
                 </div>
+              </div>
+              <div className={`telegram-empty-state telegram-empty-state-${anotherPhoneSummary.tone}`}>
+                <div className="telegram-empty-state-header">
+                  <span className="telegram-empty-state-badge">{anotherPhoneSummary.label}</span>
+                  <p className="telegram-empty-state-summary">{anotherPhoneSummary.summary}</p>
+                </div>
+                <p className="telegram-empty-state-next">{anotherPhoneSummary.nextAction}</p>
               </div>
               <div className="share-access-controls">
                 <label className="account-field">
@@ -1968,7 +2043,7 @@ function App() {
                 </p>
                 <ul className="analysis-prompt-examples" aria-label="Alert instruction examples">
                   <li>Alert if someone opens the office door.</li>
-                  <li>Alert if someone breaks into my green toyota car.</li>
+                  <li>Alert if motion happens near the stock shelf after 10 PM.</li>
                   <li>Alert if a person stands near the front desk for more than a minute.</li>
                 </ul>
               </div>
@@ -2115,6 +2190,84 @@ function App() {
                 </>
               )}
             </div>
+            <div className="monitoring-readiness-card">
+              <div className="monitoring-readiness-header">
+                <div>
+                  <h3>Pre-start checklist</h3>
+                  <p>Confirm the setup below so this phone is ready before you arm it.</p>
+                </div>
+              </div>
+              <ul className="monitoring-readiness-list" aria-label="Monitoring readiness checklist">
+                {monitoringChecklist.map((item) => (
+                  <li
+                    key={item.label}
+                    className={`monitoring-readiness-item${item.done ? ' is-complete' : ''}`}
+                  >
+                    <span className="monitoring-readiness-indicator" aria-hidden="true" />
+                    <div className="monitoring-readiness-copy">
+                      <span className="monitoring-readiness-label">{item.label}</span>
+                      <span className="monitoring-readiness-note">{item.note}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <div className="monitoring-confirmations">
+                <label className="monitoring-confirmation">
+                  <input
+                    type="checkbox"
+                    checked={isPhonePluggedInConfirmed}
+                    onChange={(event) => setIsPhonePluggedInConfirmed(event.target.checked)}
+                  />
+                  <span>Phone plugged in</span>
+                </label>
+                <label className="monitoring-confirmation">
+                  <input
+                    type="checkbox"
+                    checked={isCameraAimedConfirmed}
+                    onChange={(event) => setIsCameraAimedConfirmed(event.target.checked)}
+                  />
+                  <span>Camera aimed</span>
+                </label>
+              </div>
+              <div className="monitoring-preview-actions">
+                {telegramReadiness?.ready && (
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() => {
+                      void handleSendTelegramTestAlert()
+                    }}
+                    disabled={sendingTelegramTestAlert}
+                  >
+                    {sendingTelegramTestAlert ? 'Sending test alert...' : 'Send test alert'}
+                  </button>
+                )}
+                <button
+                  className="secondary"
+                  type="button"
+                  onClick={() => setShowAlertPreview((current) => !current)}
+                  disabled={!hasAlertInstructions}
+                >
+                  {showAlertPreview ? 'Hide alert preview' : 'Preview how alerts will be described'}
+                </button>
+              </div>
+              {telegramTestAlertMessage && (
+                <p className="monitoring-inline-message">{telegramTestAlertMessage}</p>
+              )}
+              {showAlertPreview && hasAlertInstructions && (
+                <div className="monitoring-preview-card" aria-label="Preview alert wording">
+                  <span className="monitoring-preview-eyebrow">Preview alert wording</span>
+                  <p className="monitoring-preview-copy">
+                    Ping Watch can send alerts like these when it notices activity:
+                  </p>
+                  <ul className="monitoring-preview-list">
+                    {normalizedAlertInstructions.map((instruction) => (
+                      <li key={instruction}>{instruction}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
             <div className="controls">
             <button
               className="primary"
@@ -2126,6 +2279,8 @@ function App() {
                 || isAuthenticating
                 || requiresTelegramOnboarding
                 || !hasAlertInstructions
+                || !isPhonePluggedInConfirmed
+                || !isCameraAimedConfirmed
               }
             >
               Start monitoring

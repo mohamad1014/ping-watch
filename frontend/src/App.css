@@ -430,6 +430,192 @@
   gap: 0.85rem;
 }
 
+.telegram-empty-state {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.95rem 1rem;
+  border-radius: 14px;
+  border: 1px solid transparent;
+}
+
+.telegram-empty-state-ready {
+  background: #eff9f1;
+  border-color: #cbe9d2;
+}
+
+.telegram-empty-state-checking {
+  background: #fff6dd;
+  border-color: #f3dc8a;
+}
+
+.telegram-empty-state-attention {
+  background: #fff1ee;
+  border-color: #f3c2ba;
+}
+
+.telegram-empty-state-header {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.telegram-empty-state-badge {
+  width: fit-content;
+  padding: 0.28rem 0.6rem;
+  border-radius: 999px;
+  background: rgba(26, 23, 20, 0.08);
+  color: #4a3927;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.telegram-empty-state-summary,
+.telegram-empty-state-next {
+  margin: 0;
+  color: #4f3a14;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.monitoring-readiness-card {
+  display: grid;
+  gap: 1rem;
+  padding: 1.2rem;
+  border-radius: 18px;
+  background: #f7f1e8;
+  border: 1px solid #e6d7c6;
+}
+
+.monitoring-readiness-header {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.monitoring-readiness-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.monitoring-readiness-header p {
+  margin: 0;
+  color: #6a5c48;
+  font-size: 0.92rem;
+}
+
+.monitoring-readiness-list {
+  list-style: none;
+  display: grid;
+  gap: 0.7rem;
+  padding: 0;
+  margin: 0;
+}
+
+.monitoring-readiness-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.7rem;
+  align-items: start;
+}
+
+.monitoring-readiness-indicator {
+  width: 0.85rem;
+  height: 0.85rem;
+  margin-top: 0.25rem;
+  border-radius: 50%;
+  background: #d46f61;
+  box-shadow: 0 0 0 0.18rem rgba(212, 111, 97, 0.18);
+}
+
+.monitoring-readiness-item.is-complete .monitoring-readiness-indicator {
+  background: #2faf52;
+  box-shadow: 0 0 0 0.18rem rgba(47, 175, 82, 0.18);
+}
+
+.monitoring-readiness-copy {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.monitoring-readiness-label {
+  font-weight: 600;
+  color: #2e251d;
+}
+
+.monitoring-readiness-note {
+  color: #6a5c48;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.monitoring-confirmations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.monitoring-confirmation {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.8rem 0.95rem;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid #e2d7c9;
+  color: #3e3021;
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+
+.monitoring-confirmation input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: #ff7a59;
+}
+
+.monitoring-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.monitoring-inline-message {
+  margin: 0;
+  color: #275f39;
+  font-weight: 500;
+}
+
+.monitoring-preview-card {
+  display: grid;
+  gap: 0.55rem;
+  padding: 1rem;
+  border-radius: 16px;
+  background: #fff;
+  border: 1px solid #e8ddd0;
+}
+
+.monitoring-preview-eyebrow {
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #805b10;
+}
+
+.monitoring-preview-copy {
+  margin: 0;
+  color: #4f3a14;
+  line-height: 1.5;
+}
+
+.monitoring-preview-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.35rem;
+  color: #3e3021;
+}
+
 .telegram-checklist {
   list-style: none;
   display: grid;
@@ -655,6 +841,15 @@ button.primary {
 }
 
 @media (max-width: 720px) {
+  .app {
+    padding: 2.2rem 1rem 3rem;
+    gap: 2rem;
+  }
+
+  .app-main {
+    gap: 1.4rem;
+  }
+
   .onboarding-card {
     padding: 1.2rem;
   }
@@ -666,6 +861,40 @@ button.primary {
 
   .mode-toggle-button {
     flex: 1;
+  }
+
+  .telegram-panel,
+  .monitoring-panel,
+  .analysis-prompt-section {
+    gap: 0.85rem;
+  }
+
+  .telegram-path-picker {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .telegram-path-button {
+    flex: 1;
+    text-align: center;
+  }
+
+  .telegram-onboarding,
+  .telegram-recipients,
+  .share-access,
+  .monitoring-readiness-card,
+  .analysis-prompt-section {
+    padding: 1rem;
+    border-radius: 16px;
+  }
+
+  .controls button,
+  .telegram-actions button,
+  .telegram-actions a,
+  .monitoring-preview-actions button {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
   }
 }
 
@@ -988,6 +1217,18 @@ button:not(:disabled):hover {
 }
 
 @media (max-width: 640px) {
+  .app-header {
+    gap: 0.45rem;
+  }
+
+  .app-header h1 {
+    font-size: clamp(1.8rem, 1.5rem + 2vw, 2.35rem);
+  }
+
+  .app-tagline {
+    font-size: 0.96rem;
+  }
+
   .account-controls {
     align-items: stretch;
   }
@@ -996,9 +1237,31 @@ button:not(:disabled):hover {
     width: 100%;
   }
 
+  .status-card {
+    padding: 1rem;
+    border-radius: 16px;
+  }
+
   .status-row {
     flex-direction: column;
     align-items: flex-start;
+    gap: 0.3rem;
+  }
+
+  .analysis-prompt-item,
+  .share-access-controls,
+  .telegram-recipients-header,
+  .share-access-header {
+    grid-auto-flow: row;
+  }
+
+  .monitoring-confirmations {
+    flex-direction: column;
+  }
+
+  .monitoring-confirmation {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .events-header {

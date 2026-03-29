@@ -104,6 +104,11 @@ Update it after each meaningful step so the repo always reflects:
   - rewrote onboarding and Telegram copy to be more direct about alert destinations, alert-writing, and physical placement
   - added multiple visible example alert instructions to help users write clearer prompts
   - updated frontend and E2E coverage for the new headline and copy, then reran full unit, integration, and E2E gates successfully
+- Telegram empty states and monitoring readiness polish completed:
+  - added path-specific Telegram summary cards with clear next actions for linking this phone or another phone
+  - added a final pre-start checklist with explicit plug-in and camera-aim confirmations plus an alert preview flow
+  - moved the Telegram test action into monitoring readiness and tightened mobile spacing for the owner flow
+  - updated frontend account and E2E coverage, then reran full unit, integration, and E2E gates successfully
 
 ## In Progress
 

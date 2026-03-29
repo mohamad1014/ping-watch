@@ -51,6 +51,8 @@ const addRequiredAlertInstruction = async (page) => {
   await page.getByRole('textbox', { name: /alert instruction 1/i }).fill(
     'Alert if a person enters the office.'
   )
+  await page.getByRole('checkbox', { name: /phone plugged in/i }).check()
+  await page.getByRole('checkbox', { name: /camera aimed/i }).check()
 }
 
 const loginViaApi = async (request, email: string): Promise<AuthResponse> => {

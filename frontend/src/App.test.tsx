@@ -43,6 +43,14 @@ const addRequiredAlertInstruction = async (user: ReturnType<typeof userEvent.set
   const firstInstruction = await screen.findByLabelText(/alert instruction 1/i)
   await user.clear(firstInstruction)
   await user.type(firstInstruction, 'Alert if a person enters the office.')
+  const phonePluggedInCheckbox = screen.queryByRole('checkbox', { name: /phone plugged in/i }) as HTMLInputElement | null
+  if (phonePluggedInCheckbox && !phonePluggedInCheckbox.checked) {
+    await user.click(phonePluggedInCheckbox)
+  }
+  const cameraAimedCheckbox = screen.queryByRole('checkbox', { name: /camera aimed/i }) as HTMLInputElement | null
+  if (cameraAimedCheckbox && !cameraAimedCheckbox.checked) {
+    await user.click(cameraAimedCheckbox)
+  }
 }
 
 type RecipientApiResponse = {
@@ -374,6 +382,53 @@ describe('App', () => {
     expect(within(telegramSection).queryByText(/connect telegram and send \/start to your bot before monitoring/i)).not.toBeInTheDocument()
   })
 
+  it('shows a short telegram summary and next action for each setup path', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: false,
+        status: 'needs_user_action',
+        reason: 'Open Telegram and send /start to your bot, then return.',
+        connect_url: null,
+      }],
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [],
+        }],
+      },
+      invites: {
+        lists: [{
+          device_id: 'device-1',
+          invites: [],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    expect(
+      within(telegramSection).getByText(/this phone is not ready to receive telegram alerts yet/i)
+    ).toBeInTheDocument()
+    expect(
+      within(telegramSection).getByText(/next: tap connect telegram alerts, then send \/start in the bot chat/i)
+    ).toBeInTheDocument()
+
+    await user.click(within(telegramSection).getByRole('button', { name: /another phone/i }))
+
+    expect(within(telegramSection).getByText(/another phone is not linked yet/i)).toBeInTheDocument()
+    expect(
+      within(telegramSection).getByText(/next: create a share invite here, then open it on the other phone and accept it in telegram/i)
+    ).toBeInTheDocument()
+  })
+
   it('shows onboarding guidance for device owners', async () => {
     render(<App />)
 
@@ -407,6 +462,9 @@ describe('App', () => {
 
     const firstInstruction = await screen.findByRole('textbox', { name: /alert instruction 1/i })
     await user.type(firstInstruction, 'Alert if a person enters the office.')
+    expect(startButton).toBeDisabled()
+    await user.click(screen.getByRole('checkbox', { name: /phone plugged in/i }))
+    await user.click(screen.getByRole('checkbox', { name: /camera aimed/i }))
     expect(startButton).toBeEnabled()
 
     await user.click(screen.getByRole('button', { name: /add instruction/i }))
@@ -429,6 +487,60 @@ describe('App', () => {
         }),
       })
     )
+  })
+
+  it('shows a final readiness checklist and preview flow before start', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: true,
+        status: 'ready',
+        reason: null,
+      }],
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [{
+            endpoint_id: 'endpoint-1',
+            provider: 'telegram',
+            chat_id: '111',
+            telegram_username: 'alice',
+            linked_at: '2026-03-01T10:00:00Z',
+            subscribed: true,
+          }],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    const firstInstruction = await screen.findByLabelText(/alert instruction 1/i)
+    await user.clear(firstInstruction)
+    await user.type(firstInstruction, 'Alert if a person enters the office.')
+
+    expect(screen.getByText(/telegram linked/i)).toBeInTheDocument()
+    expect(screen.getByText(/at least one instruction added/i)).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /phone plugged in/i })).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /camera aimed/i })).not.toBeChecked()
+
+    const startButton = screen.getByRole('button', { name: /start monitoring/i })
+    expect(startButton).toBeDisabled()
+    expect(screen.getByRole('button', { name: /send test alert/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /preview how alerts will be described/i }))
+
+    expect(screen.getByText(/preview alert wording/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/alert if a person enters the office/i).length).toBeGreaterThan(0)
+
+    await user.click(screen.getByRole('checkbox', { name: /phone plugged in/i }))
+    await user.click(screen.getByRole('checkbox', { name: /camera aimed/i }))
+
+    expect(startButton).toBeEnabled()
   })
 
   it('lets panels be minimized from their section header', async () => {
@@ -559,7 +671,7 @@ describe('App', () => {
     expect(screen.getByText(/bot linked/i)).toBeInTheDocument()
     expect(screen.getByText(/recipient added/i)).toBeInTheDocument()
     expect(screen.getByText(/ready to monitor/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /test telegram alert/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /send test alert/i })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /start monitoring/i }))
     expect(fetchMock).toHaveBeenCalledWith(
@@ -605,7 +717,7 @@ describe('App', () => {
 
     render(<App />)
 
-    await user.click(await screen.findByRole('button', { name: /test telegram alert/i }))
+    await user.click(await screen.findByRole('button', { name: /send test alert/i }))
 
     expect(fetchMock).toHaveBeenCalledWith(
       'http://localhost:8000/notifications/telegram/test',
@@ -616,7 +728,7 @@ describe('App', () => {
         }),
       })
     )
-    expect(await screen.findByText(/test alert sent to 2 telegram recipients/i)).toBeInTheDocument()
+    expect((await screen.findAllByText(/test alert sent to 2 telegram recipients/i)).length).toBeGreaterThan(0)
   })
 
   it('shows a backup Telegram link when popup is blocked', async () => {

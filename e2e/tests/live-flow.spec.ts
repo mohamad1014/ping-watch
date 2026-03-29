@@ -12,6 +12,8 @@ test('live flow without webServer config', async ({ page, request }) => {
     await page.getByRole('textbox', { name: /alert instruction 1/i }).fill(
       'Alert if a person enters the office.'
     )
+    await page.getByRole('checkbox', { name: /phone plugged in/i }).check()
+    await page.getByRole('checkbox', { name: /camera aimed/i }).check()
     await page.getByRole('button', { name: 'Start monitoring' }).click()
     await expect(page.getByText('Active')).toBeVisible()
 
