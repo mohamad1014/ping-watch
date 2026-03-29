@@ -94,6 +94,15 @@ class TelegramTargetsResponse(BaseModel):
     recipients: list[TelegramRecipientTargetResponse]
 
 
+class TelegramTestAlertRequest(BaseModel):
+    device_id: str
+
+
+class TelegramTestAlertResponse(BaseModel):
+    ok: bool
+    delivered_count: int
+
+
 class TelegramWebhookResponse(BaseModel):
     ok: bool = True
 
@@ -556,15 +565,6 @@ def _process_start_token(
         chat_id=chat_id_text,
         username=username,
     )
-    if invite is not None:
-        endpoint = get_notification_endpoint_by_telegram_chat(db, chat_id_text)
-        if endpoint is not None:
-            mark_notification_invite_accepted(
-                db,
-                invite,
-                recipient_user_id=attempt.user_id,
-                endpoint=endpoint,
-            )
     logger.info(
         "Linked Telegram chat %s to device %s via attempt %s",
         chat_id_text,
@@ -1173,6 +1173,45 @@ def telegram_targets(
         device_id=device_id,
         recipients=recipients,
     )
+
+
+@router.post("/telegram/test")
+def send_telegram_test_alert(
+    payload: TelegramTestAlertRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> TelegramTestAlertResponse:
+    user_id = get_request_user_id(request, require_when_auth_enabled=True)
+    token = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        raise HTTPException(status_code=503, detail="telegram bot token is not configured")
+
+    device = _require_owned_device(db=db, device_id=payload.device_id, user_id=user_id)
+    recipients = [
+        endpoint
+        for endpoint, subscribed in list_notification_recipient_states_for_device(
+            db,
+            device=device,
+            user_id=user_id,
+        )
+        if subscribed
+    ]
+    if not recipients:
+        raise HTTPException(status_code=409, detail="no telegram recipients configured")
+
+    message = (
+        "Ping Watch test alert\n\n"
+        f"Device {payload.device_id} is connected and ready to send Telegram notifications."
+    )
+    for endpoint in recipients:
+        _send_telegram_message(token, endpoint.chat_id, message)
+
+    logger.info(
+        "Sent Telegram test alert for device %s to %s recipients",
+        payload.device_id,
+        len(recipients),
+    )
+    return TelegramTestAlertResponse(ok=True, delivered_count=len(recipients))
 
 
 @router.get("/invites")

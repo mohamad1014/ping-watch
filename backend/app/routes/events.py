@@ -6,17 +6,19 @@ import anyio
 import hashlib
 import logging
 import os
+import secrets
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from app.azurite_sas import (
+    blob_exists,
     build_blob_name,
     build_blob_url,
     ensure_container_exists,
     generate_blob_upload_sas,
     load_config,
 )
-from app.auth import get_request_user_id
+from app.auth import get_request_user_id, worker_api_token
 from app.db import get_db
 from app.queue import enqueue_inference_job
 from app.store import (
@@ -37,6 +39,19 @@ from app.store import (
 
 router = APIRouter(prefix="/events", tags=["events"])
 logger = logging.getLogger(__name__)
+
+
+def _require_worker_api_token(request: Request) -> None:
+    expected = worker_api_token()
+    if not expected:
+        return
+
+    authorization = (request.headers.get("authorization") or "").strip()
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(status_code=401, detail="invalid worker token")
+    if not secrets.compare_digest(token, expected):
+        raise HTTPException(status_code=401, detail="invalid worker token")
 
 
 class CreateEventRequest(BaseModel):
@@ -122,6 +137,28 @@ def _build_local_upload_info(request: Request, event_id: str, blob_name: str) ->
         "clip_blob_name": blob_name,
         "clip_uri": f"local://{blob_name}",
     }
+
+
+def _uploaded_clip_exists(record) -> bool:
+    blob_name = record.clip_blob_name
+    if not blob_name:
+        return False
+
+    if record.clip_container == "local":
+        upload_root = _get_local_upload_dir().resolve()
+        target_path = (upload_root / blob_name).resolve()
+        try:
+            target_path.relative_to(upload_root)
+        except ValueError:
+            return False
+        return target_path.is_file()
+
+    try:
+        config = load_config()
+    except RuntimeError:
+        return False
+
+    return blob_exists(config, blob_name)
 
 
 @router.post("")
@@ -266,6 +303,12 @@ async def finalize_upload_endpoint(
     db: Session = Depends(get_db),
 ):
     user_id = get_request_user_id(request, require_when_auth_enabled=True)
+    existing = get_event(db, event_id, user_id=user_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="event not found")
+    if not _uploaded_clip_exists(existing):
+        raise HTTPException(status_code=409, detail="clip upload not found")
+
     record = mark_event_clip_uploaded(db, event_id, payload.etag, user_id=user_id)
     if record is None:
         raise HTTPException(status_code=404, detail="event not found")
@@ -314,8 +357,12 @@ async def list_events_endpoint(
 
 @router.post("/{event_id}/summary")
 async def update_event_summary_endpoint(
-    event_id: str, payload: EventSummaryRequest, db: Session = Depends(get_db)
+    event_id: str,
+    payload: EventSummaryRequest,
+    request: Request,
+    db: Session = Depends(get_db),
 ):
+    _require_worker_api_token(request)
     record = update_event_summary(
         db,
         event_id,
@@ -337,8 +384,12 @@ async def update_event_summary_endpoint(
 
 @router.post("/{event_id}/failure")
 async def update_event_failure_endpoint(
-    event_id: str, payload: EventFailureRequest, db: Session = Depends(get_db)
+    event_id: str,
+    payload: EventFailureRequest,
+    request: Request,
+    db: Session = Depends(get_db),
 ):
+    _require_worker_api_token(request)
     record = update_event_failure(
         db,
         event_id,
@@ -354,8 +405,10 @@ async def update_event_failure_endpoint(
 async def create_notification_attempt_endpoint(
     event_id: str,
     payload: NotificationAttemptRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    _require_worker_api_token(request)
     record = create_notification_attempt(
         db,
         event_id=event_id,

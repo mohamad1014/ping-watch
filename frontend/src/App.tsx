@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import './App.css'
 import {
   acceptNotificationInvite,
@@ -15,6 +15,7 @@ import {
   type NotificationInvite,
   revokeNotificationInvite,
   removeNotificationRecipient,
+  sendTelegramTestAlert,
   getTelegramLinkStatus,
   getTelegramReadiness,
   loginWithEmail,
@@ -64,12 +65,15 @@ const statusLabels = {
 
 type SessionStatus = keyof typeof statusLabels
 type CaptureStatus = 'idle' | 'active' | 'error'
+type FrontendMode = 'user' | 'dev'
+type TelegramSetupPath = 'device' | 'invite'
 type QueuedClip = {
   data: ClipCompleteData
   sessionId: string
   deviceId: string
 }
 
+const FRONTEND_MODE_KEY = 'ping-watch:frontend-mode'
 const TELEGRAM_LINK_ATTEMPT_KEY = 'ping-watch:telegram-link-attempt-id'
 const TELEGRAM_LINK_ATTEMPT_DEVICE_ID_KEY = 'ping-watch:telegram-link-attempt-device-id'
 const TELEGRAM_LINK_FLOW_KEY = 'ping-watch:telegram-link-flow'
@@ -220,10 +224,82 @@ const formatInviteRecipient = (invite: NotificationInvite) =>
 const formatInviteActionName = (invite: NotificationInvite) =>
   `Revoke invite ${invite.inviteId}`
 
+const createEmptyAlertInstructions = () => ['']
+
+const readStoredFrontendMode = (): FrontendMode => {
+  try {
+    return localStorage.getItem(FRONTEND_MODE_KEY) === 'dev' ? 'dev' : 'user'
+  } catch {
+    return 'user'
+  }
+}
+
+const writeStoredFrontendMode = (mode: FrontendMode) => {
+  try {
+    localStorage.setItem(FRONTEND_MODE_KEY, mode)
+  } catch {
+    // Ignore storage errors and continue with in-memory state.
+  }
+}
+
+type CollapsiblePanelProps = {
+  title: string
+  children: ReactNode
+  defaultOpen?: boolean
+  className?: string
+  contentClassName?: string
+  headerContent?: ReactNode
+  collapsible?: boolean
+}
+
+function CollapsiblePanel({
+  title,
+  children,
+  defaultOpen = true,
+  className,
+  contentClassName,
+  headerContent,
+  collapsible = true,
+}: CollapsiblePanelProps) {
+  const [isOpen, setIsOpen] = useState(defaultOpen)
+  const titleId = useId()
+  const contentId = useId()
+  const isVisible = collapsible ? isOpen : true
+
+  return (
+    <section className={`panel${className ? ` ${className}` : ''}`} aria-labelledby={titleId}>
+      <div className="panel-header">
+        <div className="panel-heading-group">
+          <h2 id={titleId} className="panel-title">{title}</h2>
+          {headerContent}
+        </div>
+        {collapsible && (
+          <button
+            type="button"
+            className="panel-toggle"
+            aria-expanded={isOpen}
+            aria-controls={contentId}
+            aria-label={`Toggle ${title}`}
+            onClick={() => setIsOpen((value) => !value)}
+          >
+            {isOpen ? 'Minimize' : 'Expand'}
+          </button>
+        )}
+      </div>
+      {isVisible && (
+        <div id={contentId} className={contentClassName}>
+          {children}
+        </div>
+      )}
+    </section>
+  )
+}
+
 function App() {
   const [authSession, setAuthSession] = useState<AuthSession>(() => getAuthSession())
   const [accountEmail, setAccountEmail] = useState(() => getAuthSession().email ?? '')
   const [isAuthenticating, setIsAuthenticating] = useState(false)
+  const [frontendMode, setFrontendMode] = useState<FrontendMode>(() => readStoredFrontendMode())
 
   // Session state
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('idle')
@@ -233,7 +309,7 @@ function App() {
   const [isForceStopping, setIsForceStopping] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copiedEventId, setCopiedEventId] = useState<string | null>(null)
-  const [analysisPrompt, setAnalysisPrompt] = useState('')
+  const [alertInstructions, setAlertInstructions] = useState<string[]>(createEmptyAlertInstructions)
   const [telegramReadiness, setTelegramReadiness] = useState<TelegramReadinessResponse | null>(null)
   const [checkingTelegramReadiness, setCheckingTelegramReadiness] = useState(false)
   const [isWaitingForTelegramConnect, setIsWaitingForTelegramConnect] = useState(
@@ -263,9 +339,15 @@ function App() {
   const [latestInviteCode, setLatestInviteCode] = useState<string | null>(null)
   const [inviteCodeInput, setInviteCodeInput] = useState('')
   const [inviteAcceptedMessage, setInviteAcceptedMessage] = useState<string | null>(null)
+  const [telegramTestAlertMessage, setTelegramTestAlertMessage] = useState<string | null>(null)
+  const [sendingTelegramTestAlert, setSendingTelegramTestAlert] = useState(false)
+  const [isPhonePluggedInConfirmed, setIsPhonePluggedInConfirmed] = useState(false)
+  const [isCameraAimedConfirmed, setIsCameraAimedConfirmed] = useState(false)
+  const [showAlertPreview, setShowAlertPreview] = useState(false)
   const [recipientSharedDeviceId, setRecipientSharedDeviceId] = useState<string | null>(
     () => readStoredTelegramValue(RECIPIENT_SHARED_DEVICE_ID_KEY)
   )
+  const [telegramSetupPath, setTelegramSetupPath] = useState<TelegramSetupPath>('device')
 
   // Clips state
   const [clips, setClips] = useState<StoredClip[]>([])
@@ -326,6 +408,11 @@ function App() {
   }, [clips])
   const requiresAccountSignIn =
     authSession.authRequired && !authSession.authenticated && !authSession.autoLogin
+  const normalizedAlertInstructions = useMemo(
+    () => alertInstructions.map((instruction) => instruction.trim()).filter(Boolean),
+    [alertInstructions]
+  )
+  const hasAlertInstructions = normalizedAlertInstructions.length > 0
   const requiresTelegramOnboarding = checkingTelegramReadiness
     || requiresAccountSignIn
     || (telegramReadiness?.enabled === true && telegramReadiness.ready === false)
@@ -747,12 +834,16 @@ function App() {
       setError('Sign in before starting monitoring.')
       return
     }
+    if (!hasAlertInstructions) {
+      setError('Add at least one alert instruction before starting monitoring.')
+      return
+    }
     setIsBusy(true)
     setError(null)
 
     try {
       const resolvedDeviceId = await ensureResolvedDeviceId()
-      const session = await startSession(resolvedDeviceId, analysisPrompt || undefined)
+      const session = await startSession(resolvedDeviceId, normalizedAlertInstructions)
       setSessionId(session.session_id)
       sessionIdRef.current = session.session_id
       deviceIdRef.current = session.device_id
@@ -780,6 +871,24 @@ function App() {
     } finally {
       setIsBusy(false)
     }
+  }
+
+  const handleAlertInstructionChange = (index: number, value: string) => {
+    setAlertInstructions((current) => current.map((instruction, itemIndex) => (
+      itemIndex === index ? value : instruction
+    )))
+  }
+
+  const handleAddAlertInstruction = () => {
+    setAlertInstructions((current) => [...current, ''])
+  }
+
+  const handleRemoveAlertInstruction = (index: number) => {
+    setAlertInstructions((current) => {
+      if (current.length === 1) return createEmptyAlertInstructions()
+      const nextInstructions = current.filter((_, itemIndex) => itemIndex !== index)
+      return nextInstructions.length > 0 ? nextInstructions : createEmptyAlertInstructions()
+    })
   }
 
   const refreshTelegramReadiness = useCallback(async () => {
@@ -1015,6 +1124,29 @@ function App() {
       setError('Unable to accept that shared invite.')
     }
   }, [beginTelegramLinkFlow, inviteCodeInput])
+
+  const handleSendTelegramTestAlert = useCallback(async () => {
+    const resolvedDeviceId = await ensureDeviceId()
+    setTelegramTestAlertMessage(null)
+    setSendingTelegramTestAlert(true)
+    setError(null)
+    try {
+      const response = await sendTelegramTestAlert(resolvedDeviceId)
+      setTelegramTestAlertMessage(
+        response.deliveredCount === 1
+          ? 'Test alert sent to 1 Telegram recipient.'
+          : `Test alert sent to ${response.deliveredCount} Telegram recipients.`
+      )
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setError('Add at least one Telegram recipient before sending a test alert.')
+      } else {
+        setError('Unable to send a Telegram test alert.')
+      }
+    } finally {
+      setSendingTelegramTestAlert(false)
+    }
+  }, [])
 
   const handleConnectTelegram = async () => {
     setError(null)
@@ -1384,19 +1516,172 @@ function App() {
     return 'Capture idle'
   })()
   const isRecipientOnlyMode = Boolean(recipientSharedDeviceId)
+  const selectedTelegramSetupPath = isRecipientOnlyMode ? 'invite' : telegramSetupPath
+  const isDevMode = frontendMode === 'dev'
+  const monitoringStatusLabel = statusLabels[sessionStatus]
+  const telegramStatusLabel = checkingTelegramReadiness
+    ? 'Checking Telegram'
+    : telegramReadiness?.ready
+    ? 'Telegram connected'
+    : telegramReadiness?.enabled
+    ? 'Telegram setup needed'
+    : 'Telegram optional'
+  const telegramStatusTone = checkingTelegramReadiness
+    ? 'checking'
+    : telegramReadiness?.ready
+    ? 'connected'
+    : isWaitingForTelegramConnect
+    ? 'checking'
+    : 'attention'
+  const lastEventLabel = lastEvent ? lastEvent.event_id : 'No events yet'
+  const latestEventSummary = lastEvent?.summary?.trim()
+    || lastEvent?.alert_reason?.trim()
+    || null
+  const hasSubscribedTelegramRecipient = telegramRecipients.some((recipient) => recipient.subscribed)
+  const telegramLinkedForMonitoring = requiresAccountSignIn
+    ? false
+    : telegramReadiness?.enabled === true
+    ? telegramReadiness.ready
+    : true
+  const telegramChecklist = [
+    {
+      label: 'Bot linked',
+      done: Boolean(telegramReadiness?.ready),
+    },
+    {
+      label: 'Recipient added',
+      done: Boolean(telegramReadiness?.ready || hasSubscribedTelegramRecipient),
+    },
+    {
+      label: 'Ready to monitor',
+      done: Boolean(telegramReadiness?.ready),
+    },
+  ]
+  const deviceTelegramSummary = checkingTelegramReadiness
+    ? {
+      tone: 'checking',
+      label: 'Checking setup',
+      summary: 'Checking whether this phone is linked to Telegram alerts.',
+      nextAction: 'Next: wait a moment, or tap Check Telegram status if the bot just replied.',
+    }
+    : telegramReadiness?.ready
+    ? {
+      tone: 'ready',
+      label: 'Ready',
+      summary: 'This phone is ready to receive Telegram alerts.',
+      nextAction: 'Next: send a test alert or start monitoring.',
+    }
+    : isWaitingForTelegramConnect
+    ? {
+      tone: 'checking',
+      label: 'Waiting for Telegram',
+      summary: 'This phone still needs the Telegram confirmation step.',
+      nextAction: 'Next: finish the /start step in Telegram, then return here.',
+    }
+    : {
+      tone: 'attention',
+      label: 'Needs setup',
+      summary: 'This phone is not ready to receive Telegram alerts yet.',
+      nextAction: 'Next: tap Connect Telegram alerts, then send /start in the bot chat.',
+    }
+  const anotherPhoneLinked = isRecipientOnlyMode
+    || Boolean(inviteAcceptedMessage)
+    || notificationInvites.some((invite) => invite.status === 'pending' || invite.status === 'accepted')
+    || Boolean(latestInviteCode)
+  const anotherPhoneSummary = anotherPhoneLinked
+    ? {
+      tone: 'ready',
+      label: 'Invite ready',
+      summary: isRecipientOnlyMode
+        ? 'This phone is connected to shared Telegram alerts.'
+        : 'Another phone can now be linked to Telegram alerts.',
+      nextAction: isRecipientOnlyMode
+        ? 'Next: wait for the device owner to start monitoring.'
+        : 'Next: open Telegram on the other phone and accept the invite code.',
+    }
+    : {
+      tone: 'attention',
+      label: 'Needs setup',
+      summary: 'Another phone is not linked yet.',
+      nextAction: 'Next: create a share invite here, then open it on the other phone and accept it in Telegram.',
+    }
+  const monitoringChecklist = [
+    {
+      label: 'Telegram linked',
+      done: telegramLinkedForMonitoring,
+      note: telegramLinkedForMonitoring ? 'Alerts have somewhere to go.' : 'Finish Telegram setup first.',
+    },
+    {
+      label: 'At least one instruction added',
+      done: hasAlertInstructions,
+      note: hasAlertInstructions ? 'Alert wording is ready.' : 'Add at least one short alert instruction.',
+    },
+    {
+      label: 'Phone plugged in',
+      done: isPhonePluggedInConfirmed,
+      note: isPhonePluggedInConfirmed ? 'Power looks covered.' : 'Keep the phone charging for long sessions.',
+    },
+    {
+      label: 'Camera aimed',
+      done: isCameraAimedConfirmed,
+      note: isCameraAimedConfirmed ? 'View is confirmed.' : 'Point the camera at the area you want to watch.',
+    },
+  ]
+  const setMode = (mode: FrontendMode) => {
+    setFrontendMode(mode)
+    writeStoredFrontendMode(mode)
+  }
+
+  useEffect(() => {
+    if (isRecipientOnlyMode) {
+      setTelegramSetupPath('invite')
+    }
+  }, [isRecipientOnlyMode])
 
   return (
     <div className="app">
       <header className="app-header">
-        <h1>Ping Watch</h1>
-        <p className="app-tagline">Phone-as-sensor monitoring</p>
+        <h1>Watch a space and send alerts to Telegram</h1>
+        <p className="app-tagline">
+          Use this phone as a simple camera monitor for a room, door, desk, or entryway.
+        </p>
       </header>
 
       <main className="app-main">
+        {!isRecipientOnlyMode && (
+          <CollapsiblePanel title="How this works" contentClassName="onboarding-card">
+            <p className="onboarding-intro">
+              Set it up once, then come back here any time you want to turn monitoring on, review events, or check saved clips.
+            </p>
+            <div className="onboarding-grid">
+              <article className="onboarding-step">
+                <span className="onboarding-step-number">01</span>
+                <h3>Choose where alerts should go</h3>
+                <p>
+                  Connect this phone if it should receive alerts, or choose another phone if alerts should go somewhere else.
+                </p>
+              </article>
+              <article className="onboarding-step">
+                <span className="onboarding-step-number">02</span>
+                <h3>Write the alerts you want</h3>
+                <p>
+                  Add short instructions like a person entering a room, motion after hours, or someone approaching a desk.
+                </p>
+              </article>
+              <article className="onboarding-step">
+                <span className="onboarding-step-number">03</span>
+                <h3>Place this phone and start monitoring</h3>
+                <p>
+                  Point the camera at the area you care about, keep the phone charging, then start monitoring from this page.
+                </p>
+              </article>
+            </div>
+          </CollapsiblePanel>
+        )}
+
         {authSession.authRequired && (
-          <section className="account-card" aria-label="Account access">
+          <CollapsiblePanel title="Account" contentClassName="account-card">
             <div className="account-header">
-              <h2>Account</h2>
               <p>
                 {authSession.authenticated
                   ? `Signed in as ${authSession.email ?? authSession.userId ?? 'current user'}`
@@ -1434,348 +1719,598 @@ function App() {
                 </button>
               )}
             </div>
-          </section>
+          </CollapsiblePanel>
         )}
 
-        {!isRecipientOnlyMode && (
-          <section className="status-card" aria-label="Session status">
-          <div className="status-row">
-            <span className="status-label">Session</span>
-            <span className="status-value">{statusLabels[sessionStatus]}</span>
-          </div>
-          <div className="status-row">
-            <span className="status-label">Capture</span>
-            <span className="status-value">{captureLabel}</span>
-          </div>
-          <div className="status-row">
-            <span className="status-label">Current clip</span>
-            <span className="status-value">#{currentClipIndex}</span>
-          </div>
-          <div className="status-row">
-            <span className="status-label">Benchmark</span>
-            <span className="status-value">{benchmarkClipId ? 'Clip #0' : 'Not set'}</span>
-          </div>
-          <div className="status-row">
-            <span className="status-label">Session stats</span>
-            <span className="status-value">
-              Stored: {sessionCounts.stored} / Discarded: {sessionCounts.discarded}
-            </span>
-          </div>
-          <div className="status-row">
-            <span className="status-label">Queued clips</span>
-            <span className="status-value status-queue">
-              {queuedClipsRemaining} remaining
-              <button
-                className="secondary status-inline-action"
-                type="button"
-                onClick={handleForceStop}
-                disabled={!sessionId || isForceStopping}
-              >
-                Force stop
-              </button>
-            </span>
-          </div>
-          <div className="status-row">
-            <span className="status-label">Motion / Audio</span>
-            <span className="status-value">
-              {motionDetection.currentScore.toFixed(3)} / {audioDetection.currentScore.toFixed(3)}
-            </span>
-          </div>
-          <div className="status-row">
-            <span className="status-label">Last event</span>
-            <span className="status-value">{lastEvent ? lastEvent.event_id : 'No events yet'}</span>
-          </div>
-          </section>
-        )}
-
-        {!isRecipientOnlyMode && (
-          <section className="analysis-prompt-section" aria-label="Alert instructions">
-          <label className="analysis-prompt-label">
-            <span>Alert instructions</span>
-            <textarea
-              className="analysis-prompt-input"
-              placeholder="Example: Alert me if a person enters through the front door between 10 PM and 6 AM. Ignore TV motion."
-              value={analysisPrompt}
-              onChange={(e) => setAnalysisPrompt(e.target.value)}
-              disabled={sessionStatus === 'active'}
-              rows={3}
-            />
-          </label>
-          </section>
-        )}
-
-        {(checkingTelegramReadiness || telegramReadiness?.enabled) && (
-          <section className="telegram-onboarding" aria-label="Telegram onboarding">
-            <p className="telegram-onboarding-copy">
-              {checkingTelegramReadiness
-                ? 'Checking Telegram readiness...'
-                : telegramReadiness?.ready
-                ? 'Telegram alerts are connected.'
-                : isWaitingForTelegramConnect
-                ? 'Waiting for Telegram confirmation. Keep this page open and we will detect the link automatically.'
-                : 'Connect Telegram and send /start to your bot before monitoring.'}
-            </p>
-            {telegramReadiness?.reason && !telegramReadiness.ready && (
-              <p className="telegram-onboarding-copy">{telegramReadiness.reason}</p>
-            )}
-            <button
-              className="secondary"
-              type="button"
-              onClick={handleConnectTelegram}
-              disabled={checkingTelegramReadiness}
+        <CollapsiblePanel
+          title="Telegram"
+          contentClassName="telegram-panel"
+          headerContent={(
+            <span
+              className={`telegram-health telegram-health-${telegramStatusTone}`}
+              aria-label={`Telegram status: ${
+                telegramStatusTone === 'connected'
+                  ? 'connected'
+                  : telegramStatusTone === 'checking'
+                  ? 'checking'
+                  : 'action needed'
+              }`}
             >
-              Connect Telegram alerts
-            </button>
-            {telegramPopupFallbackUrl && (
-              <a
-                className="secondary"
-                href={telegramPopupFallbackUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Open Telegram link again
-              </a>
-            )}
-            {isWaitingForTelegramConnect && telegramFallbackCommand && (
-              <p className="telegram-onboarding-copy telegram-onboarding-command">
-                If Telegram opens without payload, send <code>{telegramFallbackCommand}</code> in the bot chat.
-              </p>
-            )}
-            {telegramReadiness && !telegramReadiness.ready && (
-              <button
-                className="secondary"
-                type="button"
-                onClick={handleCheckTelegramReadiness}
-                disabled={checkingTelegramReadiness}
-              >
-                {checkingTelegramReadiness ? 'Checking...' : 'Check Telegram status'}
-              </button>
-            )}
-          </section>
-        )}
-
-        {telegramReadiness?.enabled && !isRecipientOnlyMode && (
-          <section className="telegram-recipients" aria-label="Telegram recipients">
-            <div className="telegram-recipients-header">
-              <div>
-                <h2>Telegram recipients</h2>
-                <p className="telegram-recipient-meta">
-                  Manage which linked Telegram recipients receive alerts for this device.
-                </p>
-              </div>
-              <button
-                className="secondary"
-                type="button"
-                onClick={handleConnectTelegram}
-                disabled={checkingTelegramReadiness}
-              >
-                Re-run Telegram onboarding
-              </button>
-            </div>
-
-            {loadingTelegramRecipients ? (
-              <p className="telegram-recipient-meta">Loading recipients...</p>
-            ) : telegramRecipients.length === 0 ? (
-              <p className="telegram-recipient-meta">
-                No Telegram recipients are linked yet. Re-run onboarding to link another recipient.
-              </p>
-            ) : (
-              <ul className="telegram-recipient-list">
-                {telegramRecipients.map((recipient) => {
-                  const isUpdating = updatingRecipientEndpointId === recipient.endpointId
-                  return (
-                    <li key={recipient.endpointId} className="telegram-recipient-item">
-                      <div className="telegram-recipient-details">
-                        <span className="telegram-recipient-name">
-                          {formatRecipientHandle(recipient)}
-                        </span>
-                        <span className="telegram-recipient-meta">
-                          {recipient.subscribed ? 'Subscribed' : 'Not subscribed'}
-                        </span>
-                      </div>
-                      <button
-                        className="secondary"
-                        type="button"
-                        onClick={() => {
-                          void (
-                            recipient.subscribed
-                              ? handleRemoveRecipient(recipient)
-                              : handleAddRecipient(recipient)
-                          )
-                        }}
-                        disabled={isUpdating}
-                        aria-label={formatRecipientActionName(
-                          recipient.subscribed ? 'remove' : 'add',
-                          recipient
-                        )}
-                      >
-                        {recipient.subscribed ? 'Remove' : 'Add'}
-                      </button>
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
-          </section>
-        )}
-
-        <section className="share-access" aria-label="Accept shared invite">
-          <div className="share-access-header">
-            <div>
-              <h2>Accept shared invite</h2>
-              <p className="telegram-recipient-meta">
-                Paste an invite code from a device owner to route shared alerts to your Telegram account.
-              </p>
-            </div>
-          </div>
-          <div className="share-access-controls">
-            <label className="account-field">
-              <span>Invite code</span>
-              <input
-                type="text"
-                value={inviteCodeInput}
-                onChange={(event) => setInviteCodeInput(event.target.value)}
-                aria-label="Invite code"
-                placeholder="share-code"
-              />
-            </label>
-            <button
-              className="secondary"
-              type="button"
-              onClick={() => {
-                void handleAcceptInvite()
-              }}
-            >
-              Accept invite
-            </button>
-          </div>
-          {inviteAcceptedMessage && (
-            <p className="telegram-recipient-meta">{inviteAcceptedMessage}</p>
+              <span className="telegram-health-dot" aria-hidden="true" />
+              {telegramStatusLabel}
+            </span>
           )}
-        </section>
-
-        {isRecipientOnlyMode && (
-          <section className="share-access" aria-label="Shared alert access">
-            <div className="share-access-header">
-              <div>
-                <h2>Shared alert access</h2>
-                <p className="telegram-recipient-meta">
-                  This browser is connected as a Telegram recipient for a shared device.
-                </p>
-              </div>
-            </div>
-            <p className="telegram-recipient-meta">
-              Device owners start monitoring. You will receive alerts in Telegram for the shared device.
-            </p>
-          </section>
-        )}
-
-        {telegramReadiness?.enabled && !isRecipientOnlyMode && (
-          <section className="share-access" aria-label="Share access">
-            <div className="share-access-header">
-              <div>
-                <h2>Share access</h2>
-                <p className="telegram-recipient-meta">
-                  Generate time-limited invites so other Telegram recipients can subscribe safely.
-                </p>
-              </div>
+        >
+          {!isRecipientOnlyMode && (
+            <div className="telegram-path-picker" role="group" aria-label="Telegram setup path">
               <button
-                className="secondary"
                 type="button"
-                onClick={() => {
-                  void handleCreateInvite()
-                }}
-                disabled={updatingInviteId === 'creating'}
+                className={`telegram-path-button${selectedTelegramSetupPath === 'device' ? ' active' : ''}`}
+                aria-pressed={selectedTelegramSetupPath === 'device'}
+                onClick={() => setTelegramSetupPath('device')}
               >
-                Create share invite
+                This phone
+              </button>
+              <button
+                type="button"
+                className={`telegram-path-button${selectedTelegramSetupPath === 'invite' ? ' active' : ''}`}
+                aria-pressed={selectedTelegramSetupPath === 'invite'}
+                onClick={() => setTelegramSetupPath('invite')}
+              >
+                Another phone
               </button>
             </div>
-            {latestInviteCode && (
-              <p className="share-access-code">
-                <span>Latest invite code</span>
-                <code>{latestInviteCode}</code>
-              </p>
-            )}
-            {loadingNotificationInvites ? (
-              <p className="telegram-recipient-meta">Loading share invites...</p>
-            ) : notificationInvites.length === 0 ? (
-              <p className="telegram-recipient-meta">
-                No share invites yet. Create one when you want to grant Telegram access.
-              </p>
-            ) : (
-              <ul className="telegram-recipient-list">
-                {notificationInvites.map((invite) => {
-                  const isUpdating = updatingInviteId === invite.inviteId
-                  return (
-                    <li key={invite.inviteId} className="telegram-recipient-item">
-                      <div className="telegram-recipient-details">
-                        <span className="telegram-recipient-name">
-                          {formatInviteStatus(invite.status)}
-                        </span>
-                        <span className="telegram-recipient-meta">
-                          {formatInviteRecipient(invite) ?? invite.inviteId}
-                        </span>
-                      </div>
-                      {invite.status !== 'revoked' && invite.status !== 'expired' && (
+          )}
+
+          {!isRecipientOnlyMode && selectedTelegramSetupPath === 'device' && (
+            <div className="telegram-subsection telegram-onboarding">
+              <div className="telegram-subsection-header">
+                <h3>Link this phone</h3>
+                <p className="telegram-onboarding-copy">
+                  Choose this if the monitoring phone should also receive Telegram alerts.
+                </p>
+                <p className="telegram-onboarding-copy">
+                  {checkingTelegramReadiness
+                    ? 'Checking Telegram readiness...'
+                    : telegramReadiness?.ready
+                    ? 'Telegram alerts are connected.'
+                    : isWaitingForTelegramConnect
+                    ? 'Waiting for Telegram confirmation. Keep this page open and we will detect the link automatically.'
+                    : 'Connect Telegram and send /start to your bot before monitoring.'}
+                </p>
+              </div>
+              <div className={`telegram-empty-state telegram-empty-state-${deviceTelegramSummary.tone}`}>
+                <div className="telegram-empty-state-header">
+                  <span className="telegram-empty-state-badge">{deviceTelegramSummary.label}</span>
+                  <p className="telegram-empty-state-summary">{deviceTelegramSummary.summary}</p>
+                </div>
+                <p className="telegram-empty-state-next">{deviceTelegramSummary.nextAction}</p>
+              </div>
+              <ul className="telegram-checklist" aria-label="Telegram setup checklist">
+                {telegramChecklist.map((item) => (
+                  <li
+                    key={item.label}
+                    className={`telegram-checklist-item${item.done ? ' is-complete' : ''}`}
+                  >
+                    <span className="telegram-checklist-indicator" aria-hidden="true" />
+                    <span>{item.label}</span>
+                  </li>
+                ))}
+              </ul>
+              {telegramReadiness?.reason && !telegramReadiness.ready && (
+                <p className="telegram-onboarding-copy">{telegramReadiness.reason}</p>
+              )}
+              <div className="telegram-actions">
+                <button
+                  className="secondary"
+                  type="button"
+                  onClick={handleConnectTelegram}
+                  disabled={checkingTelegramReadiness}
+                >
+                  Connect Telegram alerts
+                </button>
+                {telegramPopupFallbackUrl && (
+                  <a
+                    className="secondary"
+                    href={telegramPopupFallbackUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Open Telegram link again
+                  </a>
+                )}
+                {telegramReadiness && !telegramReadiness.ready && (
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={handleCheckTelegramReadiness}
+                    disabled={checkingTelegramReadiness}
+                  >
+                    {checkingTelegramReadiness ? 'Checking...' : 'Check Telegram status'}
+                  </button>
+                )}
+              </div>
+              {isWaitingForTelegramConnect && telegramFallbackCommand && (
+                <p className="telegram-onboarding-copy telegram-onboarding-command">
+                  If Telegram opens without payload, send <code>{telegramFallbackCommand}</code> in the bot chat.
+                </p>
+              )}
+            </div>
+          )}
+
+          {telegramReadiness?.enabled && !isRecipientOnlyMode && selectedTelegramSetupPath === 'device' && (
+            <div className="telegram-subsection telegram-recipients">
+              <div className="telegram-recipients-header">
+                <div>
+                  <h3>Recipients</h3>
+                  <p className="telegram-recipient-meta">
+                    Manage which linked Telegram recipients receive alerts for this device.
+                  </p>
+                </div>
+                <button
+                  className="secondary"
+                  type="button"
+                  onClick={handleConnectTelegram}
+                  disabled={checkingTelegramReadiness}
+                >
+                  Re-run Telegram onboarding
+                </button>
+              </div>
+
+              {loadingTelegramRecipients ? (
+                <p className="telegram-recipient-meta">Loading recipients...</p>
+              ) : telegramRecipients.length === 0 ? (
+                <p className="telegram-recipient-meta">
+                  No Telegram recipients are linked yet. Re-run onboarding to link another recipient.
+                </p>
+              ) : (
+                <ul className="telegram-recipient-list">
+                  {telegramRecipients.map((recipient) => {
+                    const isUpdating = updatingRecipientEndpointId === recipient.endpointId
+                    return (
+                      <li key={recipient.endpointId} className="telegram-recipient-item">
+                        <div className="telegram-recipient-details">
+                          <span className="telegram-recipient-name">
+                            {formatRecipientHandle(recipient)}
+                          </span>
+                          <span className="telegram-recipient-meta">
+                            {recipient.subscribed ? 'Subscribed' : 'Not subscribed'}
+                          </span>
+                        </div>
                         <button
                           className="secondary"
                           type="button"
                           onClick={() => {
-                            void handleRevokeInvite(invite)
+                            void (
+                              recipient.subscribed
+                                ? handleRemoveRecipient(recipient)
+                                : handleAddRecipient(recipient)
+                            )
                           }}
                           disabled={isUpdating}
-                          aria-label={formatInviteActionName(invite)}
+                          aria-label={formatRecipientActionName(
+                            recipient.subscribed ? 'remove' : 'add',
+                            recipient
+                          )}
                         >
-                          Revoke
+                          {recipient.subscribed ? 'Remove' : 'Add'}
                         </button>
-                      )}
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
-          </section>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {selectedTelegramSetupPath === 'invite' && (
+            <div className="telegram-subsection share-access">
+              <div className="share-access-header">
+                <div>
+                  <h3>Link another phone</h3>
+                  <p className="telegram-recipient-meta">
+                    Choose this if alerts should go to a different phone or another person's Telegram account.
+                  </p>
+                  <p className="telegram-recipient-meta">
+                    Paste an invite code from a device owner to route shared alerts to your Telegram account.
+                  </p>
+                </div>
+              </div>
+              <div className={`telegram-empty-state telegram-empty-state-${anotherPhoneSummary.tone}`}>
+                <div className="telegram-empty-state-header">
+                  <span className="telegram-empty-state-badge">{anotherPhoneSummary.label}</span>
+                  <p className="telegram-empty-state-summary">{anotherPhoneSummary.summary}</p>
+                </div>
+                <p className="telegram-empty-state-next">{anotherPhoneSummary.nextAction}</p>
+              </div>
+              <div className="share-access-controls">
+                <label className="account-field">
+                  <span>Invite code</span>
+                  <input
+                    type="text"
+                    value={inviteCodeInput}
+                    onChange={(event) => setInviteCodeInput(event.target.value)}
+                    aria-label="Invite code"
+                    placeholder="share-code"
+                  />
+                </label>
+                <button
+                  className="secondary"
+                  type="button"
+                  onClick={() => {
+                    void handleAcceptInvite()
+                  }}
+                >
+                  Accept invite
+                </button>
+              </div>
+              {inviteAcceptedMessage && (
+                <p className="telegram-recipient-meta">{inviteAcceptedMessage}</p>
+              )}
+            </div>
+          )}
+
+          {isRecipientOnlyMode && (
+            <div className="telegram-subsection share-access">
+              <div className="share-access-header">
+                <div>
+                  <h3>Shared alert access</h3>
+                  <p className="telegram-recipient-meta">
+                    This browser is connected as a Telegram recipient for a shared device.
+                  </p>
+                </div>
+              </div>
+              <p className="telegram-recipient-meta">
+                Device owners start monitoring. You will receive alerts in Telegram for the shared device.
+              </p>
+            </div>
+          )}
+
+          {telegramReadiness?.enabled && !isRecipientOnlyMode && selectedTelegramSetupPath === 'invite' && (
+            <div className="telegram-subsection share-access">
+              <div className="share-access-header">
+                <div>
+                  <h3>Share access</h3>
+                  <p className="telegram-recipient-meta">
+                    Generate time-limited invites so other Telegram recipients can subscribe safely.
+                  </p>
+                </div>
+                <button
+                  className="secondary"
+                  type="button"
+                  onClick={() => {
+                    void handleCreateInvite()
+                  }}
+                  disabled={updatingInviteId === 'creating'}
+                >
+                  Create share invite
+                </button>
+              </div>
+              {latestInviteCode && (
+                <p className="share-access-code">
+                  <span>Latest invite code</span>
+                  <code>{latestInviteCode}</code>
+                </p>
+              )}
+              {loadingNotificationInvites ? (
+                <p className="telegram-recipient-meta">Loading share invites...</p>
+              ) : notificationInvites.length === 0 ? (
+                <p className="telegram-recipient-meta">
+                  No share invites yet. Create one when you want to grant Telegram access.
+                </p>
+              ) : (
+                <ul className="telegram-recipient-list">
+                  {notificationInvites.map((invite) => {
+                    const isUpdating = updatingInviteId === invite.inviteId
+                    return (
+                      <li key={invite.inviteId} className="telegram-recipient-item">
+                        <div className="telegram-recipient-details">
+                          <span className="telegram-recipient-name">
+                            {formatInviteStatus(invite.status)}
+                          </span>
+                          <span className="telegram-recipient-meta">
+                            {formatInviteRecipient(invite) ?? invite.inviteId}
+                          </span>
+                        </div>
+                        {invite.status !== 'revoked' && invite.status !== 'expired' && (
+                          <button
+                            className="secondary"
+                            type="button"
+                            onClick={() => {
+                              void handleRevokeInvite(invite)
+                            }}
+                            disabled={isUpdating}
+                            aria-label={formatInviteActionName(invite)}
+                          >
+                            Revoke
+                          </button>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </div>
+          )}
+        </CollapsiblePanel>
+
+        {!isRecipientOnlyMode && (
+          <CollapsiblePanel title="Alert instructions" contentClassName="analysis-prompt-section">
+            <div className="analysis-prompt-header">
+              <div className="analysis-prompt-copy-group">
+                <p className="analysis-prompt-copy">
+                  Required. Write one short sentence per instruction so alerts stay clear and specific.
+                </p>
+                <ul className="analysis-prompt-examples" aria-label="Alert instruction examples">
+                  <li>Alert if someone opens the office door.</li>
+                  <li>Alert if motion happens near the stock shelf after 10 PM.</li>
+                  <li>Alert if a person stands near the front desk for more than a minute.</li>
+                </ul>
+              </div>
+              <button
+                className="secondary"
+                type="button"
+                onClick={handleAddAlertInstruction}
+                disabled={sessionStatus === 'active'}
+              >
+                Add instruction
+              </button>
+            </div>
+            <div className="analysis-prompt-list">
+              {alertInstructions.map((instruction, index) => (
+                <div key={`alert-instruction-${index}`} className="analysis-prompt-item">
+                  <label className="analysis-prompt-label">
+                    <span>{`Alert instruction ${index + 1}`}</span>
+                    <textarea
+                      className="analysis-prompt-input"
+                      placeholder="Example: Alert me if a person enters through the front door."
+                      value={instruction}
+                      onChange={(event) => handleAlertInstructionChange(index, event.target.value)}
+                      disabled={sessionStatus === 'active'}
+                      rows={2}
+                    />
+                  </label>
+                  {alertInstructions.length > 1 && (
+                    <button
+                      className="secondary analysis-prompt-remove"
+                      type="button"
+                      onClick={() => handleRemoveAlertInstruction(index)}
+                      disabled={sessionStatus === 'active'}
+                      aria-label={`Remove alert instruction ${index + 1}`}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </CollapsiblePanel>
         )}
 
         {!isRecipientOnlyMode && (
-          <div className="controls">
-          <button
-            className="primary"
-            type="button"
-            onClick={handleStart}
-            disabled={
-              sessionStatus === 'active'
-              || isBusy
-              || isAuthenticating
-              || requiresTelegramOnboarding
-            }
-          >
-            Start monitoring
-          </button>
-          <button
-            className="secondary"
-            type="button"
-            onClick={handleStop}
-            disabled={sessionStatus !== 'active' || isBusy || isAuthenticating}
-          >
-            Stop
-          </button>
-          <button
-            className="secondary"
-            type="button"
-            onClick={handleUploadClips}
-            disabled={!sessionId || isBusy || isAuthenticating}
-          >
-            Upload stored clips
-          </button>
-          </div>
+          <CollapsiblePanel title="Monitoring controls" contentClassName="monitoring-panel" collapsible={false}>
+            <div className="status-card">
+              <div className="mode-toggle mode-toggle-inline" role="group" aria-label="Frontend mode">
+                <button
+                  type="button"
+                  className={`mode-toggle-button${!isDevMode ? ' active' : ''}`}
+                  aria-pressed={!isDevMode}
+                  onClick={() => setMode('user')}
+                >
+                  User mode
+                </button>
+                <button
+                  type="button"
+                  className={`mode-toggle-button${isDevMode ? ' active' : ''}`}
+                  aria-pressed={isDevMode}
+                  onClick={() => setMode('dev')}
+                >
+                  Dev mode
+                </button>
+              </div>
+              {!isDevMode ? (
+                <>
+                  <div className="status-row">
+                    <span className="status-label">Monitoring</span>
+                    <span className="status-value">{monitoringStatusLabel}</span>
+                  </div>
+                  <div className="status-row">
+                    <span className="status-label">Capture</span>
+                    <span className="status-value">{captureLabel}</span>
+                  </div>
+                  <div className="status-row">
+                    <span className="status-label">Alerts</span>
+                    <span className="status-value">{telegramStatusLabel}</span>
+                  </div>
+                  <div className="status-row">
+                    <span className="status-label">Last event</span>
+                    <span className="status-value">{lastEventLabel}</span>
+                  </div>
+                  {sessionStatus === 'active' && latestEventSummary && (
+                    <div className="monitoring-callout" aria-label="Latest event summary">
+                      <span className="status-label">Latest event summary</span>
+                      <p className="monitoring-callout-copy">{latestEventSummary}</p>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="status-row">
+                    <span className="status-label">Session</span>
+                    <span className="status-value">{statusLabels[sessionStatus]}</span>
+                  </div>
+                  <div className="status-row">
+                    <span className="status-label">Capture</span>
+                    <span className="status-value">{captureLabel}</span>
+                  </div>
+                  <div className="status-row">
+                    <span className="status-label">Current clip</span>
+                    <span className="status-value">#{currentClipIndex}</span>
+                  </div>
+                  <div className="status-row">
+                    <span className="status-label">Benchmark</span>
+                    <span className="status-value">{benchmarkClipId ? 'Clip #0' : 'Not set'}</span>
+                  </div>
+                  <div className="status-row">
+                    <span className="status-label">Session stats</span>
+                    <span className="status-value">
+                      Stored: {sessionCounts.stored} / Discarded: {sessionCounts.discarded}
+                    </span>
+                  </div>
+                  <div className="status-row">
+                    <span className="status-label">Queued clips</span>
+                    <span className="status-value status-queue">
+                      {queuedClipsRemaining} remaining
+                      <button
+                        className="secondary status-inline-action"
+                        type="button"
+                        onClick={handleForceStop}
+                        disabled={!sessionId || isForceStopping}
+                      >
+                        Force stop
+                      </button>
+                    </span>
+                  </div>
+                  <div className="status-row">
+                    <span className="status-label">Motion / Audio</span>
+                    <span className="status-value">
+                      {motionDetection.currentScore.toFixed(3)} / {audioDetection.currentScore.toFixed(3)}
+                    </span>
+                  </div>
+                  <div className="status-row">
+                    <span className="status-label">Last event</span>
+                    <span className="status-value">{lastEventLabel}</span>
+                  </div>
+                  {sessionStatus === 'active' && latestEventSummary && (
+                    <div className="monitoring-callout" aria-label="Latest event summary">
+                      <span className="status-label">Latest event summary</span>
+                      <p className="monitoring-callout-copy">{latestEventSummary}</p>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            <div className="monitoring-readiness-card">
+              <div className="monitoring-readiness-header">
+                <div>
+                  <h3>Pre-start checklist</h3>
+                  <p>Confirm the setup below so this phone is ready before you arm it.</p>
+                </div>
+              </div>
+              <ul className="monitoring-readiness-list" aria-label="Monitoring readiness checklist">
+                {monitoringChecklist.map((item) => (
+                  <li
+                    key={item.label}
+                    className={`monitoring-readiness-item${item.done ? ' is-complete' : ''}`}
+                  >
+                    <span className="monitoring-readiness-indicator" aria-hidden="true" />
+                    <div className="monitoring-readiness-copy">
+                      <span className="monitoring-readiness-label">{item.label}</span>
+                      <span className="monitoring-readiness-note">{item.note}</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <div className="monitoring-confirmations">
+                <label className="monitoring-confirmation">
+                  <input
+                    type="checkbox"
+                    checked={isPhonePluggedInConfirmed}
+                    onChange={(event) => setIsPhonePluggedInConfirmed(event.target.checked)}
+                  />
+                  <span>Phone plugged in</span>
+                </label>
+                <label className="monitoring-confirmation">
+                  <input
+                    type="checkbox"
+                    checked={isCameraAimedConfirmed}
+                    onChange={(event) => setIsCameraAimedConfirmed(event.target.checked)}
+                  />
+                  <span>Camera aimed</span>
+                </label>
+              </div>
+              <div className="monitoring-preview-actions">
+                {telegramReadiness?.ready && (
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() => {
+                      void handleSendTelegramTestAlert()
+                    }}
+                    disabled={sendingTelegramTestAlert}
+                  >
+                    {sendingTelegramTestAlert ? 'Sending test alert...' : 'Send test alert'}
+                  </button>
+                )}
+                <button
+                  className="secondary"
+                  type="button"
+                  onClick={() => setShowAlertPreview((current) => !current)}
+                  disabled={!hasAlertInstructions}
+                >
+                  {showAlertPreview ? 'Hide alert preview' : 'Preview how alerts will be described'}
+                </button>
+              </div>
+              {telegramTestAlertMessage && (
+                <p className="monitoring-inline-message">{telegramTestAlertMessage}</p>
+              )}
+              {showAlertPreview && hasAlertInstructions && (
+                <div className="monitoring-preview-card" aria-label="Preview alert wording">
+                  <span className="monitoring-preview-eyebrow">Preview alert wording</span>
+                  <p className="monitoring-preview-copy">
+                    Ping Watch can send alerts like these when it notices activity:
+                  </p>
+                  <ul className="monitoring-preview-list">
+                    {normalizedAlertInstructions.map((instruction) => (
+                      <li key={instruction}>{instruction}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+            <div className="controls">
+            <button
+              className="primary"
+              type="button"
+              onClick={handleStart}
+              disabled={
+                sessionStatus === 'active'
+                || isBusy
+                || isAuthenticating
+                || requiresTelegramOnboarding
+                || !hasAlertInstructions
+                || !isPhonePluggedInConfirmed
+                || !isCameraAimedConfirmed
+              }
+            >
+              Start monitoring
+            </button>
+            <button
+              className="secondary"
+              type="button"
+              onClick={handleStop}
+              disabled={sessionStatus !== 'active' || isBusy || isAuthenticating}
+            >
+              Stop
+            </button>
+            {isDevMode && (
+              <button
+                className="secondary"
+                type="button"
+                onClick={handleUploadClips}
+                disabled={!sessionId || isBusy || isAuthenticating}
+              >
+                Upload stored clips
+              </button>
+            )}
+            </div>
+          </CollapsiblePanel>
         )}
 
         {error && <p className="error-banner">{error}</p>}
 
-        {!isRecipientOnlyMode && (
-          <section className="clip-controls" aria-label="Sequential recording controls">
-          <h2>Recording Settings</h2>
+        {!isRecipientOnlyMode && isDevMode && (
+          <CollapsiblePanel title="Recording settings" contentClassName="clip-controls">
           <div className="motion-grid">
             <label className="motion-field">
               <span>Clip duration (s)</span>
@@ -1873,13 +2408,12 @@ function App() {
               </label>
             )}
           </div>
-          </section>
+          </CollapsiblePanel>
         )}
 
         {!isRecipientOnlyMode && (
-          <section className="events">
+          <CollapsiblePanel title="Recent events" contentClassName="events">
           <div className="events-header">
-            <h2>Recent events</h2>
             <span className="events-meta">{events.length} captured</span>
           </div>
           {events.length === 0 ? (
@@ -1933,13 +2467,12 @@ function App() {
               })}
             </ul>
           )}
-          </section>
+          </CollapsiblePanel>
         )}
 
         {!isRecipientOnlyMode && (
-          <section className="clip-timeline">
+          <CollapsiblePanel title="Stored clips" contentClassName="clip-timeline">
           <div className="clip-header">
-            <h2>Stored clips</h2>
             <span className="events-meta">
               {clips.length} stored · {clipStats.pending} pending
               {clipStats.failed ? ` · ${clipStats.failed} failed` : ''}
@@ -2023,7 +2556,7 @@ function App() {
               <video data-testid="clip-preview" src={selectedClipUrl} controls />
             </div>
           )}
-          </section>
+          </CollapsiblePanel>
         )}
       </main>
     </div>

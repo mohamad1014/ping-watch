@@ -6,6 +6,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.main import app
 from app.db import SessionLocal
+from app.routes import notifications as notification_routes
 from app.store import (
     get_device,
     get_notification_invite,
@@ -258,4 +259,77 @@ async def test_recipient_can_accept_notification_invite_via_telegram_and_owner_c
     assert revoked_targets_response.json()["recipients"] == [
         {"chat_id": "111", "telegram_username": "owner"}
     ]
-    assert any(item["url"].endswith("/bottoken/sendMessage") for item in sent_messages)
+
+
+@pytest.mark.anyio
+async def test_invite_acceptance_marks_accepted_only_once(monkeypatch):
+    monkeypatch.setenv("AUTH_REQUIRED", "true")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setenv("TELEGRAM_BOT_ONBOARDING_URL", "https://t.me/pingwatch_bot")
+
+    original = notification_routes.mark_notification_invite_accepted
+    acceptance_calls: list[str] = []
+
+    def counting_mark_notification_invite_accepted(*args, **kwargs):
+        acceptance_calls.append("called")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        notification_routes,
+        "mark_notification_invite_accepted",
+        counting_mark_notification_invite_accepted,
+    )
+
+    class _Resp:
+        status_code = 200
+        text = "{}"
+
+        @staticmethod
+        def json():
+            return {"ok": True}
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: _Resp())
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        owner = await _dev_login(client, "owner-single@example.com")
+        recipient = await _dev_login(client, "recipient-single@example.com")
+
+        with SessionLocal() as db:
+            register_device(db, device_id="owner-device-single", user_id=owner["user_id"])
+
+        create_response = await client.post(
+            "/notifications/invites",
+            json={"device_id": "owner-device-single"},
+            headers=_auth_headers(owner["access_token"]),
+        )
+        invite_code = create_response.json()["invite_code"]
+
+        accept_response = await client.post(
+            "/notifications/invites/accept",
+            json={"invite_code": invite_code},
+            headers=_auth_headers(recipient["access_token"]),
+        )
+        start_token = parse_qs(urlparse(accept_response.json()["connect_url"]).query)["start"][0]
+
+        webhook_response = await client.post(
+            "/notifications/telegram/webhook",
+            json={
+                "update_id": 7,
+                "message": {
+                    "text": f"/start {start_token}",
+                    "chat": {"id": 333},
+                    "from": {"username": "recipient-single"},
+                },
+            },
+        )
+
+    assert create_response.status_code == 200
+    assert accept_response.status_code == 200
+    assert webhook_response.status_code == 200
+    assert len(acceptance_calls) == 1

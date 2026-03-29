@@ -19,6 +19,20 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 class StartSessionRequest(BaseModel):
     device_id: str
     analysis_prompt: str | None = None
+    analysis_prompts: list[str] | None = None
+
+
+def normalize_analysis_prompt(
+    analysis_prompt: str | None,
+    analysis_prompts: list[str] | None,
+) -> str | None:
+    if analysis_prompts is not None:
+        normalized_prompts = [prompt.strip() for prompt in analysis_prompts if prompt.strip()]
+        return "\n".join(normalized_prompts) if normalized_prompts else None
+    if analysis_prompt is None:
+        return None
+    normalized_prompt = analysis_prompt.strip()
+    return normalized_prompt or None
 
 
 class StopSessionRequest(BaseModel):
@@ -32,10 +46,14 @@ async def start_session(
     db: Session = Depends(get_db),
 ):
     user_id = get_request_user_id(request, require_when_auth_enabled=True)
+    analysis_prompt = normalize_analysis_prompt(
+        payload.analysis_prompt,
+        payload.analysis_prompts,
+    )
     record = create_session(
         db,
         payload.device_id,
-        payload.analysis_prompt,
+        analysis_prompt,
         user_id=user_id,
     )
     if record is None:

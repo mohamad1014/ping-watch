@@ -22,6 +22,7 @@ const TELEGRAM_LINK_ATTEMPT_KEY = 'ping-watch:telegram-link-attempt-id'
 const TELEGRAM_LINK_FALLBACK_URL_KEY = 'ping-watch:telegram-link-fallback-url'
 const TELEGRAM_LINK_FALLBACK_COMMAND_KEY = 'ping-watch:telegram-link-fallback-command'
 const TELEGRAM_LINK_WAITING_KEY = 'ping-watch:telegram-link-waiting'
+const FRONTEND_MODE_KEY = 'ping-watch:frontend-mode'
 
 const buildResponse = (payload: unknown) =>
   Promise.resolve({
@@ -37,6 +38,20 @@ const buildUploadResponse = (etag: string) =>
     },
     json: async () => ({}),
   } as unknown as Response)
+
+const addRequiredAlertInstruction = async (user: ReturnType<typeof userEvent.setup>) => {
+  const firstInstruction = await screen.findByLabelText(/alert instruction 1/i)
+  await user.clear(firstInstruction)
+  await user.type(firstInstruction, 'Alert if a person enters the office.')
+  const phonePluggedInCheckbox = screen.queryByRole('checkbox', { name: /phone plugged in/i }) as HTMLInputElement | null
+  if (phonePluggedInCheckbox && !phonePluggedInCheckbox.checked) {
+    await user.click(phonePluggedInCheckbox)
+  }
+  const cameraAimedCheckbox = screen.queryByRole('checkbox', { name: /camera aimed/i }) as HTMLInputElement | null
+  if (cameraAimedCheckbox && !cameraAimedCheckbox.checked) {
+    await user.click(cameraAimedCheckbox)
+  }
+}
 
 type RecipientApiResponse = {
   endpoint_id: string
@@ -76,6 +91,7 @@ const createFetchMock = (routes: {
     add?: RecipientApiResponse[]
     remove?: { device_id: string, endpoint_id: string, removed: boolean }[]
   }
+  telegramTestAlert?: unknown[]
   start: unknown
   stop: unknown
   forceStop?: unknown
@@ -145,6 +161,12 @@ const createFetchMock = (routes: {
   const recipientRemoveQueue = routes.recipients?.remove?.length
     ? [...routes.recipients.remove]
     : []
+  const telegramTestAlertQueue = routes.telegramTestAlert?.length
+    ? [...routes.telegramTestAlert]
+    : [{
+      ok: true,
+      delivered_count: 1,
+    }]
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = input.toString()
 
@@ -209,6 +231,14 @@ const createFetchMock = (routes: {
     if (url.includes('/notifications/recipients') && init?.method === 'DELETE') {
       const payload =
         recipientRemoveQueue.length > 1 ? recipientRemoveQueue.shift() : recipientRemoveQueue[0]
+      return buildResponse(payload)
+    }
+
+    if (url.endsWith('/notifications/telegram/test') && init?.method === 'POST') {
+      const payload =
+        telegramTestAlertQueue.length > 1
+          ? telegramTestAlertQueue.shift()
+          : telegramTestAlertQueue[0]
       return buildResponse(payload)
     }
 
@@ -305,20 +335,242 @@ describe('App', () => {
     runtimeFlags.__PING_WATCH_CLIP_DURATION_MS__ = undefined
   })
 
-  it('shows the Ping Watch title', async () => {
+  it('shows a straightforward monitoring headline', async () => {
     render(<App />)
     expect(
-      await screen.findByRole('heading', { name: /ping watch/i })
+      await screen.findByRole('heading', { name: /watch a space and send alerts to telegram/i })
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/use this phone as a simple camera monitor for a room, door, desk, or entryway/i)
     ).toBeInTheDocument()
   })
 
-  it('shows alert instructions prompt copy', async () => {
+  it('shows alert instruction guidance with multiple examples', async () => {
     render(<App />)
 
-    expect(await screen.findByText(/alert instructions/i)).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /alert instructions/i })).toBeInTheDocument()
     expect(
-      screen.getByPlaceholderText(/alert me if a person enters through the front door/i)
+      screen.getByText(/write one short sentence per instruction so alerts stay clear and specific/i)
     ).toBeInTheDocument()
+    expect(
+      screen.getByPlaceholderText(/example: alert me if a person enters through the front door/i)
+    ).toBeInTheDocument()
+    expect(screen.getByText(/alert if someone opens the office door/i)).toBeInTheDocument()
+    expect(screen.getByText(/alert if motion happens near the stock shelf after 10 pm/i)).toBeInTheDocument()
+    expect(screen.getByText(/alert if a person stands near the front desk for more than a minute/i)).toBeInTheDocument()
+  })
+
+  it('lets the user choose between connecting this phone or another phone', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    const thisPhoneButton = within(telegramSection).getByRole('button', { name: /this phone/i })
+    const anotherPhoneButton = within(telegramSection).getByRole('button', { name: /another phone/i })
+
+    expect(thisPhoneButton).toHaveAttribute('aria-pressed', 'true')
+    expect(anotherPhoneButton).toHaveAttribute('aria-pressed', 'false')
+    expect(within(telegramSection).getByText(/choose this if the monitoring phone should also receive telegram alerts/i)).toBeInTheDocument()
+    expect(within(telegramSection).queryByText(/paste an invite code from a device owner/i)).not.toBeInTheDocument()
+
+    await user.click(anotherPhoneButton)
+
+    expect(thisPhoneButton).toHaveAttribute('aria-pressed', 'false')
+    expect(anotherPhoneButton).toHaveAttribute('aria-pressed', 'true')
+    expect(within(telegramSection).getByText(/choose this if alerts should go to a different phone or another person's telegram account/i)).toBeInTheDocument()
+    expect(within(telegramSection).getByText(/paste an invite code from a device owner/i)).toBeInTheDocument()
+    expect(within(telegramSection).queryByText(/connect telegram and send \/start to your bot before monitoring/i)).not.toBeInTheDocument()
+  })
+
+  it('shows a short telegram summary and next action for each setup path', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: false,
+        status: 'needs_user_action',
+        reason: 'Open Telegram and send /start to your bot, then return.',
+        connect_url: null,
+      }],
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [],
+        }],
+      },
+      invites: {
+        lists: [{
+          device_id: 'device-1',
+          invites: [],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    expect(
+      within(telegramSection).getByText(/this phone is not ready to receive telegram alerts yet/i)
+    ).toBeInTheDocument()
+    expect(
+      within(telegramSection).getByText(/next: tap connect telegram alerts, then send \/start in the bot chat/i)
+    ).toBeInTheDocument()
+
+    await user.click(within(telegramSection).getByRole('button', { name: /another phone/i }))
+
+    expect(within(telegramSection).getByText(/another phone is not linked yet/i)).toBeInTheDocument()
+    expect(
+      within(telegramSection).getByText(/next: create a share invite here, then open it on the other phone and accept it in telegram/i)
+    ).toBeInTheDocument()
+  })
+
+  it('shows onboarding guidance for device owners', async () => {
+    render(<App />)
+
+    const onboardingSection = await screen.findByRole('region', { name: /how this works/i })
+    expect(within(onboardingSection).getByText(/choose where alerts should go/i)).toBeInTheDocument()
+    expect(within(onboardingSection).getByText(/write the alerts you want/i)).toBeInTheDocument()
+    expect(within(onboardingSection).getByText(/place this phone and start monitoring/i)).toBeInTheDocument()
+    expect(within(onboardingSection).queryByText(/switch to dev mode only when you need to tune recording/i)).not.toBeInTheDocument()
+    expect(within(onboardingSection).queryByRole('button', { name: /user mode/i })).not.toBeInTheDocument()
+  })
+
+  it('requires at least one alert instruction and sends multiple instructions together', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      start: {
+        session_id: 'sess_1',
+        device_id: 'device-1',
+        status: 'active',
+        analysis_prompt: 'Alert if a person enters the office.\nAlert if motion happens after 10 PM.',
+      },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    const startButton = screen.getByRole('button', { name: /start monitoring/i })
+    expect(startButton).toBeDisabled()
+
+    const firstInstruction = await screen.findByRole('textbox', { name: /alert instruction 1/i })
+    await user.type(firstInstruction, 'Alert if a person enters the office.')
+    expect(startButton).toBeDisabled()
+    await user.click(screen.getByRole('checkbox', { name: /phone plugged in/i }))
+    await user.click(screen.getByRole('checkbox', { name: /camera aimed/i }))
+    expect(startButton).toBeEnabled()
+
+    await user.click(screen.getByRole('button', { name: /add instruction/i }))
+    const secondInstruction = screen.getByRole('textbox', { name: /alert instruction 2/i })
+    await user.type(secondInstruction, 'Alert if motion happens after 10 PM.')
+
+    await user.click(startButton)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/sessions/start',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          device_id: 'device-1',
+          analysis_prompt: null,
+          analysis_prompts: [
+            'Alert if a person enters the office.',
+            'Alert if motion happens after 10 PM.',
+          ],
+        }),
+      })
+    )
+  })
+
+  it('shows a final readiness checklist and preview flow before start', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: true,
+        status: 'ready',
+        reason: null,
+      }],
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [{
+            endpoint_id: 'endpoint-1',
+            provider: 'telegram',
+            chat_id: '111',
+            telegram_username: 'alice',
+            linked_at: '2026-03-01T10:00:00Z',
+            subscribed: true,
+          }],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+    const firstInstruction = await screen.findByLabelText(/alert instruction 1/i)
+    await user.clear(firstInstruction)
+    await user.type(firstInstruction, 'Alert if a person enters the office.')
+
+    expect(screen.getByText(/telegram linked/i)).toBeInTheDocument()
+    expect(screen.getByText(/at least one instruction added/i)).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /phone plugged in/i })).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /camera aimed/i })).not.toBeChecked()
+
+    const startButton = screen.getByRole('button', { name: /start monitoring/i })
+    expect(startButton).toBeDisabled()
+    expect(screen.getByRole('button', { name: /send test alert/i })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /preview how alerts will be described/i }))
+
+    expect(screen.getByText(/preview alert wording/i)).toBeInTheDocument()
+    expect(screen.getAllByText(/alert if a person enters the office/i).length).toBeGreaterThan(0)
+
+    await user.click(screen.getByRole('checkbox', { name: /phone plugged in/i }))
+    await user.click(screen.getByRole('checkbox', { name: /camera aimed/i }))
+
+    expect(startButton).toBeEnabled()
+  })
+
+  it('lets panels be minimized from their section header', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    const onboardingToggle = await screen.findByRole('button', { name: /how this works/i })
+    expect(onboardingToggle).toHaveAttribute('aria-expanded', 'true')
+
+    await user.click(onboardingToggle)
+
+    expect(onboardingToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText(/mount or place this phone/i)).not.toBeInTheDocument()
+  })
+
+  it('shows the primary owner flow in the intended order and keeps monitoring controls fixed', async () => {
+    render(<App />)
+
+    await screen.findByRole('region', { name: /how this works/i })
+
+    const sectionTitles = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent)
+    expect(sectionTitles).toEqual([
+      'How this works',
+      'Telegram',
+      'Alert instructions',
+      'Monitoring controls',
+      'Recent events',
+      'Stored clips',
+    ])
+    expect(screen.queryByRole('button', { name: /toggle monitoring controls/i })).not.toBeInTheDocument()
   })
 
   it('requires Telegram readiness before start when backend reports not ready', async () => {
@@ -342,9 +594,13 @@ describe('App', () => {
     expect(
       await screen.findByRole('button', { name: /connect telegram alerts/i })
     ).toBeInTheDocument()
+    expect(screen.getByLabelText(/telegram status: action needed/i)).toBeInTheDocument()
     expect(
       screen.getByText(/open telegram and send \/start to your bot/i)
     ).toBeInTheDocument()
+    expect(screen.getByText(/bot linked/i)).toBeInTheDocument()
+    expect(screen.getByText(/recipient added/i)).toBeInTheDocument()
+    expect(screen.getByText(/ready to monitor/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /start monitoring/i })).toBeDisabled()
   })
 
@@ -396,6 +652,7 @@ describe('App', () => {
     const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup)
 
     render(<App />)
+    await addRequiredAlertInstruction(user)
 
     await user.click(
       await screen.findByRole('button', { name: /connect telegram alerts/i })
@@ -410,6 +667,11 @@ describe('App', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /start monitoring/i })).toBeEnabled()
     })
+    expect(screen.getByLabelText(/telegram status: connected/i)).toBeInTheDocument()
+    expect(screen.getByText(/bot linked/i)).toBeInTheDocument()
+    expect(screen.getByText(/recipient added/i)).toBeInTheDocument()
+    expect(screen.getByText(/ready to monitor/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /send test alert/i })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /start monitoring/i }))
     expect(fetchMock).toHaveBeenCalledWith(
@@ -418,6 +680,55 @@ describe('App', () => {
     )
 
     openSpy.mockRestore()
+  })
+
+  it('sends a Telegram test alert once Telegram is linked', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: true,
+        status: 'ready',
+        reason: null,
+      }],
+      telegramTestAlert: [{
+        ok: true,
+        delivered_count: 2,
+      }],
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [{
+            endpoint_id: 'endpoint-1',
+            provider: 'telegram',
+            chat_id: '111',
+            telegram_username: 'alice',
+            linked_at: '2026-03-01T10:00:00Z',
+            subscribed: true,
+          }],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /send test alert/i }))
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/notifications/telegram/test',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          device_id: 'device-1',
+        }),
+      })
+    )
+    expect((await screen.findAllByText(/test alert sent to 2 telegram recipients/i)).length).toBeGreaterThan(0)
   })
 
   it('shows a backup Telegram link when popup is blocked', async () => {
@@ -765,16 +1076,19 @@ describe('App', () => {
 
     render(<App />)
 
-    const recipientSection = await screen.findByRole('region', {
-      name: /telegram recipients/i,
+    const telegramSection = await screen.findByRole('region', {
+      name: /^telegram$/i,
     })
-    expect(within(recipientSection).getByText('@alice')).toBeInTheDocument()
-    expect(within(recipientSection).getByText('@bob')).toBeInTheDocument()
-    expect(within(recipientSection).getByText('Subscribed')).toBeInTheDocument()
-    expect(within(recipientSection).getByText('Not subscribed')).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: /telegram recipients/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: /share access/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: /accept shared invite/i })).not.toBeInTheDocument()
+    expect(within(telegramSection).getByText('@alice')).toBeInTheDocument()
+    expect(within(telegramSection).getByText('@bob')).toBeInTheDocument()
+    expect(within(telegramSection).getByText('Subscribed')).toBeInTheDocument()
+    expect(within(telegramSection).getByText('Not subscribed')).toBeInTheDocument()
 
     await user.click(
-      within(recipientSection).getByRole('button', { name: /add bob to alerts/i })
+      within(telegramSection).getByRole('button', { name: /add bob to alerts/i })
     )
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -788,11 +1102,11 @@ describe('App', () => {
       })
     )
     await waitFor(() => {
-      expect(within(recipientSection).getAllByText('Subscribed')).toHaveLength(2)
+      expect(within(telegramSection).getAllByText('Subscribed')).toHaveLength(2)
     })
 
     await user.click(
-      within(recipientSection).getByRole('button', { name: /remove alice from alerts/i })
+      within(telegramSection).getByRole('button', { name: /remove alice from alerts/i })
     )
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -802,7 +1116,7 @@ describe('App', () => {
       })
     )
     await waitFor(() => {
-      expect(within(recipientSection).getByText('Not subscribed')).toBeInTheDocument()
+      expect(within(telegramSection).getByText('Not subscribed')).toBeInTheDocument()
     })
   })
 
@@ -843,11 +1157,11 @@ describe('App', () => {
 
     render(<App />)
 
-    const recipientSection = await screen.findByRole('region', {
-      name: /telegram recipients/i,
+    const telegramSection = await screen.findByRole('region', {
+      name: /^telegram$/i,
     })
     await user.click(
-      within(recipientSection).getByRole('button', { name: /re-run telegram onboarding/i })
+      within(telegramSection).getByRole('button', { name: /re-run telegram onboarding/i })
     )
 
     expect(openSpy).toHaveBeenCalledWith(
@@ -954,11 +1268,14 @@ describe('App', () => {
 
     render(<App />)
 
-    const shareSection = await screen.findByRole('region', {
-      name: /share access/i,
+    const telegramSection = await screen.findByRole('region', {
+      name: /^telegram$/i,
     })
     await user.click(
-      within(shareSection).getByRole('button', { name: /create share invite/i })
+      within(telegramSection).getByRole('button', { name: /another phone/i })
+    )
+    await user.click(
+      within(telegramSection).getByRole('button', { name: /create share invite/i })
     )
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -971,12 +1288,12 @@ describe('App', () => {
       })
     )
     await waitFor(() => {
-      expect(within(shareSection).getByText('share-code-1')).toBeInTheDocument()
-      expect(within(shareSection).getByText('Pending')).toBeInTheDocument()
+      expect(within(telegramSection).getByText('share-code-1')).toBeInTheDocument()
+      expect(within(telegramSection).getByText('Pending')).toBeInTheDocument()
     })
 
     await user.click(
-      within(shareSection).getByRole('button', { name: /revoke invite invite-1/i })
+      within(telegramSection).getByRole('button', { name: /revoke invite invite-1/i })
     )
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -986,7 +1303,7 @@ describe('App', () => {
       })
     )
     await waitFor(() => {
-      expect(within(shareSection).getByText('Revoked')).toBeInTheDocument()
+      expect(within(telegramSection).getByText('Revoked')).toBeInTheDocument()
     })
   })
 
@@ -1042,15 +1359,18 @@ describe('App', () => {
 
     render(<App />)
 
-    const acceptSection = await screen.findByRole('region', {
-      name: /accept shared invite/i,
+    const telegramSection = await screen.findByRole('region', {
+      name: /^telegram$/i,
     })
+    await user.click(
+      within(telegramSection).getByRole('button', { name: /another phone/i })
+    )
     await user.type(
-      within(acceptSection).getByLabelText(/invite code/i),
+      within(telegramSection).getByLabelText(/invite code/i),
       'share-code-1'
     )
     await user.click(
-      within(acceptSection).getByRole('button', { name: /accept invite/i })
+      within(telegramSection).getByRole('button', { name: /accept invite/i })
     )
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -1071,12 +1391,8 @@ describe('App', () => {
       expect(screen.getByText(/shared invite accepted/i)).toBeInTheDocument()
     })
     expect(screen.queryByRole('button', { name: /start monitoring/i })).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole('region', { name: /telegram recipients/i })
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole('region', { name: /share access/i })
-    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: /telegram recipients/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: /share access/i })).not.toBeInTheDocument()
 
     openSpy.mockRestore()
   })
@@ -1133,6 +1449,7 @@ describe('App', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
+    await addRequiredAlertInstruction(user)
 
     await user.click(
       screen.getByRole('button', { name: /start monitoring/i })
@@ -1160,6 +1477,7 @@ describe('App', () => {
   })
 
   it('shows queued clips counter and force stop control', async () => {
+    localStorage.setItem(FRONTEND_MODE_KEY, 'dev')
     render(<App />)
 
     expect(await screen.findByText(/queued clips/i)).toBeInTheDocument()
@@ -1171,6 +1489,7 @@ describe('App', () => {
 
   it('force stop clears local clips and requests server-side force stop', async () => {
     const user = userEvent.setup()
+    localStorage.setItem(FRONTEND_MODE_KEY, 'dev')
     const fetchMock = createFetchMock({
       start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
       stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
@@ -1188,6 +1507,7 @@ describe('App', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
+    await addRequiredAlertInstruction(user)
 
     await user.click(
       screen.getByRole('button', { name: /start monitoring/i })
@@ -1208,6 +1528,7 @@ describe('App', () => {
 
   it('allows force stop after normal stop while backend processing may still be running', async () => {
     const user = userEvent.setup()
+    localStorage.setItem(FRONTEND_MODE_KEY, 'dev')
     const fetchMock = createFetchMock({
       start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
       stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
@@ -1225,6 +1546,7 @@ describe('App', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
+    await addRequiredAlertInstruction(user)
     await user.click(screen.getByRole('button', { name: /start monitoring/i }))
     await user.click(screen.getByRole('button', { name: /^stop$/i }))
 
@@ -1318,6 +1640,7 @@ describe('App', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
+    await addRequiredAlertInstruction(user)
 
     await user.click(
       screen.getByRole('button', { name: /start monitoring/i })
@@ -1450,6 +1773,7 @@ describe('App', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
+    await addRequiredAlertInstruction(user)
 
     await user.click(
       screen.getByRole('button', { name: /start monitoring/i })
@@ -1501,6 +1825,7 @@ describe('App', () => {
     })
 
     render(<App />)
+    await addRequiredAlertInstruction(user)
 
     await user.click(
       screen.getByRole('button', { name: /start monitoring/i })
@@ -1607,6 +1932,7 @@ describe('App', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
+    await addRequiredAlertInstruction(user)
 
     await user.click(
       screen.getByRole('button', { name: /start monitoring/i })
@@ -1627,11 +1953,27 @@ describe('App', () => {
     vi.restoreAllMocks()
   })
 
-  it('shows recording settings controls', async () => {
+  it('starts in user mode and hides developer-only recording controls', async () => {
     render(<App />)
 
+    expect(await screen.findByRole('button', { name: /user mode/i })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(screen.queryByRole('heading', { name: /recording settings/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/^benchmark$/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/^current clip$/i)).not.toBeInTheDocument()
+  })
+
+  it('shows recording settings controls in dev mode', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /dev mode/i }))
+
+    expect(screen.getByRole('heading', { name: /recording settings/i })).toBeInTheDocument()
     expect(
-      await screen.findByRole('slider', { name: /clip duration/i })
+      screen.getByRole('slider', { name: /clip duration/i })
     ).toBeInTheDocument()
     expect(
       screen.getByRole('slider', { name: /motion delta threshold/i })
@@ -1641,7 +1983,17 @@ describe('App', () => {
     ).toBeInTheDocument()
   })
 
+  it('persists the selected frontend mode', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: /dev mode/i }))
+
+    expect(localStorage.getItem(FRONTEND_MODE_KEY)).toBe('dev')
+  })
+
   it('shows optional audio detection toggles', async () => {
+    localStorage.setItem(FRONTEND_MODE_KEY, 'dev')
     render(<App />)
 
     expect(
@@ -1654,6 +2006,7 @@ describe('App', () => {
 
   it('shows audio delta slider when enabled', async () => {
     const user = userEvent.setup()
+    localStorage.setItem(FRONTEND_MODE_KEY, 'dev')
     render(<App />)
 
     const toggle = await screen.findByRole('checkbox', { name: /enable audio delta/i })
@@ -1666,6 +2019,7 @@ describe('App', () => {
 
   it('shows loud threshold slider when enabled', async () => {
     const user = userEvent.setup()
+    localStorage.setItem(FRONTEND_MODE_KEY, 'dev')
     render(<App />)
 
     const toggle = await screen.findByRole('checkbox', { name: /enable loud sound detection/i })
@@ -1680,6 +2034,7 @@ describe('App', () => {
     // Clear runtime override so localStorage is used
     runtimeFlags.__PING_WATCH_CLIP_DURATION_MS__ = undefined
 
+    localStorage.setItem(FRONTEND_MODE_KEY, 'dev')
     localStorage.setItem('ping-watch:clip-duration', '15')
     localStorage.setItem('ping-watch:motion-delta', '0.08')
     localStorage.setItem('ping-watch:motion-absolute', '0.05')
@@ -1698,6 +2053,7 @@ describe('App', () => {
   })
 
   it('persists settings to localStorage', async () => {
+    localStorage.setItem(FRONTEND_MODE_KEY, 'dev')
     render(<App />)
 
     const clipDuration = await screen.findByRole('slider', {
@@ -1762,6 +2118,7 @@ describe('App', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
+    await addRequiredAlertInstruction(user)
 
     await user.click(
       screen.getByRole('button', { name: /start monitoring/i })
@@ -1794,6 +2151,7 @@ describe('App', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
+    await addRequiredAlertInstruction(user)
 
     await user.click(
       screen.getByRole('button', { name: /start monitoring/i })
@@ -1830,6 +2188,7 @@ describe('App', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
+    await addRequiredAlertInstruction(user)
 
     await user.click(
       screen.getByRole('button', { name: /start monitoring/i })
@@ -1886,13 +2245,20 @@ describe('App', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
+    await addRequiredAlertInstruction(user)
 
     await user.click(
       screen.getByRole('button', { name: /start monitoring/i })
     )
 
-    const list = screen.getByRole('list')
+    const eventsSection = screen.getByRole('heading', { name: /recent events/i }).closest('section')
+    expect(eventsSection).not.toBeNull()
+    const list = within(eventsSection as HTMLElement).getByRole('list')
+    const monitoringSection = screen.getByRole('heading', { name: /monitoring controls/i }).closest('section')
+    expect(monitoringSection).not.toBeNull()
     expect(await screen.findByText('2 captured')).toBeInTheDocument()
+    expect(within(monitoringSection as HTMLElement).getByText(/latest event summary/i)).toBeInTheDocument()
+    expect(within(monitoringSection as HTMLElement).getByText(/audio spike/i)).toBeInTheDocument()
     expect(within(list).getByText('evt_1')).toBeInTheDocument()
     expect(within(list).getByText('evt_2')).toBeInTheDocument()
     expect(within(list).getByText('Motion detected')).toBeInTheDocument()
@@ -1951,6 +2317,7 @@ describe('App', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(<App />)
+    await addRequiredAlertInstruction(user)
 
     await user.click(
       screen.getByRole('button', { name: /start monitoring/i })
@@ -1967,15 +2334,17 @@ describe('App', () => {
   })
 
   it('shows current clip index and benchmark status', async () => {
+    localStorage.setItem(FRONTEND_MODE_KEY, 'dev')
     render(<App />)
 
     expect(await screen.findByText(/current clip/i)).toBeInTheDocument()
     expect(screen.getByText('#0')).toBeInTheDocument()
-    expect(screen.getByText(/benchmark/i)).toBeInTheDocument()
+    expect(screen.getByText(/^benchmark$/i)).toBeInTheDocument()
     expect(screen.getByText(/not set/i)).toBeInTheDocument()
   })
 
   it('shows session stats', async () => {
+    localStorage.setItem(FRONTEND_MODE_KEY, 'dev')
     render(<App />)
 
     expect(await screen.findByText(/session stats/i)).toBeInTheDocument()
@@ -1984,6 +2353,7 @@ describe('App', () => {
   })
 
   it('shows real-time motion/audio scores', async () => {
+    localStorage.setItem(FRONTEND_MODE_KEY, 'dev')
     render(<App />)
 
     expect(await screen.findByText(/motion \/ audio/i)).toBeInTheDocument()

@@ -47,6 +47,14 @@ const signInWithEmail = async (page, email: string) => {
   await expect(page.getByText(new RegExp(`Signed in as ${email}`, 'i'))).toBeVisible()
 }
 
+const addRequiredAlertInstruction = async (page) => {
+  await page.getByRole('textbox', { name: /alert instruction 1/i }).fill(
+    'Alert if a person enters the office.'
+  )
+  await page.getByRole('checkbox', { name: /phone plugged in/i }).check()
+  await page.getByRole('checkbox', { name: /camera aimed/i }).check()
+}
+
 const loginViaApi = async (request, email: string): Promise<AuthResponse> => {
   const response = await request.post(`${backendBaseUrl}/auth/dev/login`, {
     data: { email },
@@ -105,7 +113,7 @@ test('shows the app shell and backend health', async ({ page, request }) => {
 
   await page.goto('/')
   await expect(
-    page.getByRole('heading', { name: 'Ping Watch' })
+    page.getByRole('heading', { name: 'Watch a space and send alerts to Telegram' })
   ).toBeVisible()
 })
 
@@ -177,10 +185,12 @@ test('critical flow: start session, upload clip, worker summary, event done', as
   await page.addInitScript(() => {
     ;(globalThis as { __PING_WATCH_DISABLE_MEDIA__?: boolean })
       .__PING_WATCH_DISABLE_MEDIA__ = true
+    window.localStorage.setItem('ping-watch:frontend-mode', 'dev')
   })
 
   await page.goto('/')
   await signInWithEmail(page, 'owner@example.com')
+  await addRequiredAlertInstruction(page)
 
   await page.getByRole('button', { name: 'Start monitoring' }).click()
   await expect(page.getByText('Active')).toBeVisible()
@@ -257,6 +267,7 @@ test('account switching keeps event fetching scoped to the signed-in owner', asy
   await page.goto('/')
 
   await signInWithEmail(page, 'owner-a@example.com')
+  await addRequiredAlertInstruction(page)
   await page.getByRole('button', { name: 'Start monitoring' }).click()
   await expect(page.getByText('Active')).toBeVisible()
 
@@ -279,6 +290,7 @@ test('account switching keeps event fetching scoped to the signed-in owner', asy
 
   await expect(page.getByText(eventA)).toHaveCount(0)
 
+  await addRequiredAlertInstruction(page)
   await page.getByRole('button', { name: 'Start monitoring' }).click()
   await expect(page.getByText('Active')).toBeVisible()
 

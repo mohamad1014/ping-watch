@@ -70,6 +70,30 @@ async def test_start_session_with_analysis_prompt():
 
 
 @pytest.mark.anyio
+async def test_start_session_accumulates_multiple_analysis_prompts():
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/sessions/start",
+            json={
+                "device_id": "dev_1",
+                "analysis_prompts": [
+                    "Alert if a person enters the office.",
+                    "Alert if motion happens after 10 PM.",
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["analysis_prompt"] == (
+        "Alert if a person enters the office.\n"
+        "Alert if motion happens after 10 PM."
+    )
+
+
+@pytest.mark.anyio
 async def test_start_session_without_analysis_prompt():
     """Test starting a session without an analysis prompt returns null."""
     async with AsyncClient(

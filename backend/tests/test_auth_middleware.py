@@ -176,3 +176,136 @@ async def test_telegram_webhook_stays_public_when_auth_required(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+@pytest.mark.anyio
+async def test_worker_writeback_endpoints_require_worker_token_when_configured(monkeypatch):
+    monkeypatch.setenv("AUTH_REQUIRED", "true")
+    monkeypatch.setenv("WORKER_API_TOKEN", "worker-secret")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        login = await client.post("/auth/dev/login", json={"email": "owner@example.com"})
+        token = login.json()["access_token"]
+        register = await client.post(
+            "/devices/register",
+            json={"device_id": "dev-1"},
+            headers={"authorization": f"Bearer {token}"},
+        )
+        start = await client.post(
+            "/sessions/start",
+            json={"device_id": "dev-1"},
+            headers={"authorization": f"Bearer {token}"},
+        )
+        event = await client.post(
+            "/events",
+            json={
+                "session_id": start.json()["session_id"],
+                "device_id": "dev-1",
+                "trigger_type": "motion",
+                "duration_seconds": 5.0,
+                "clip_uri": "local://clip-1",
+                "clip_mime": "video/webm",
+                "clip_size_bytes": 128,
+            },
+            headers={"authorization": f"Bearer {token}"},
+        )
+        event_id = event.json()["event_id"]
+
+        summary = await client.post(
+            f"/events/{event_id}/summary",
+            json={"summary": "intruder seen"},
+        )
+        failure = await client.post(
+            f"/events/{event_id}/failure",
+            json={"error_message": "boom"},
+        )
+        attempts = await client.post(
+            f"/events/{event_id}/notification-attempts",
+            json={
+                "provider": "telegram",
+                "recipient": "chat-1",
+                "status": "failed",
+                "failure_reason": "telegram status 502",
+                "retryable": True,
+                "attempt_number": 1,
+                "max_attempts": 2,
+                "attempted_at": "2026-03-18T10:00:00+00:00",
+                "finished_at": "2026-03-18T10:00:01+00:00",
+                "next_retry_at": "2026-03-18T10:00:05+00:00",
+            },
+        )
+
+    assert register.status_code == 200
+    assert start.status_code == 200
+    assert event.status_code == 200
+    assert summary.status_code == 401
+    assert summary.json() == {"detail": "invalid worker token"}
+    assert failure.status_code == 401
+    assert failure.json() == {"detail": "invalid worker token"}
+    assert attempts.status_code == 401
+    assert attempts.json() == {"detail": "invalid worker token"}
+
+
+@pytest.mark.anyio
+async def test_worker_writeback_endpoints_accept_worker_token(monkeypatch):
+    monkeypatch.setenv("AUTH_REQUIRED", "true")
+    monkeypatch.setenv("WORKER_API_TOKEN", "worker-secret")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        login = await client.post("/auth/dev/login", json={"email": "owner@example.com"})
+        token = login.json()["access_token"]
+        await client.post(
+            "/devices/register",
+            json={"device_id": "dev-1"},
+            headers={"authorization": f"Bearer {token}"},
+        )
+        start = await client.post(
+            "/sessions/start",
+            json={"device_id": "dev-1"},
+            headers={"authorization": f"Bearer {token}"},
+        )
+        event = await client.post(
+            "/events",
+            json={
+                "session_id": start.json()["session_id"],
+                "device_id": "dev-1",
+                "trigger_type": "motion",
+                "duration_seconds": 5.0,
+                "clip_uri": "local://clip-1",
+                "clip_mime": "video/webm",
+                "clip_size_bytes": 128,
+            },
+            headers={"authorization": f"Bearer {token}"},
+        )
+        event_id = event.json()["event_id"]
+
+        summary = await client.post(
+            f"/events/{event_id}/summary",
+            json={"summary": "intruder seen"},
+            headers={"authorization": "Bearer worker-secret"},
+        )
+        attempts = await client.post(
+            f"/events/{event_id}/notification-attempts",
+            json={
+                "provider": "telegram",
+                "recipient": "chat-1",
+                "status": "succeeded",
+                "failure_reason": None,
+                "retryable": False,
+                "attempt_number": 1,
+                "max_attempts": 1,
+                "attempted_at": "2026-03-18T10:00:00+00:00",
+                "finished_at": "2026-03-18T10:00:01+00:00",
+                "next_retry_at": None,
+            },
+            headers={"authorization": "Bearer worker-secret"},
+        )
+
+    assert summary.status_code == 200
+    assert summary.json()["status"] == "done"
+    assert attempts.status_code == 200
+    assert attempts.json()["status"] == "succeeded"

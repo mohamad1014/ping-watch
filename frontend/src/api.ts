@@ -337,6 +337,11 @@ export type TelegramLinkStatusResponse = {
   attemptId: string
 }
 
+export type TelegramTestAlertResponse = {
+  ok: boolean
+  deliveredCount: number
+}
+
 type TelegramReadinessApiResponse = {
   enabled: boolean
   ready: boolean
@@ -363,6 +368,11 @@ type TelegramLinkStatusApiResponse = {
   status: string
   reason?: string | null
   attempt_id: string
+}
+
+type TelegramTestAlertApiResponse = {
+  ok: boolean
+  delivered_count?: number | null
 }
 
 export type NotificationRecipient = {
@@ -462,14 +472,20 @@ export type InitiateUploadResponse = {
   expiresAt: string
 }
 
-export const startSession = (deviceId: string, analysisPrompt?: string) =>
-  request<SessionResponse>('/sessions/start', {
+export const startSession = (deviceId: string, analysisPrompts?: string[]) => {
+  const normalizedPrompts = (analysisPrompts ?? [])
+    .map((prompt) => prompt.trim())
+    .filter(Boolean)
+
+  return request<SessionResponse>('/sessions/start', {
     method: 'POST',
     body: {
       device_id: deviceId,
-      analysis_prompt: analysisPrompt || null,
+      analysis_prompt: null,
+      analysis_prompts: normalizedPrompts.length > 0 ? normalizedPrompts : null,
     },
   })
+}
 
 export const stopSession = (sessionId: string) =>
   request<SessionResponse>('/sessions/stop', {
@@ -583,6 +599,24 @@ export const getTelegramLinkStatus = async (
     `/notifications/telegram/link/status?device_id=${encodeURIComponent(deviceId)}&attempt_id=${encodeURIComponent(attemptId)}`
   )
   return toTelegramLinkStatus(response)
+}
+
+export const sendTelegramTestAlert = async (
+  deviceId: string
+): Promise<TelegramTestAlertResponse> => {
+  const response = await request<TelegramTestAlertApiResponse>(
+    '/notifications/telegram/test',
+    {
+      method: 'POST',
+      body: {
+        device_id: deviceId,
+      },
+    }
+  )
+  return {
+    ok: response.ok,
+    deliveredCount: response.delivered_count ?? 0,
+  }
 }
 
 export const listNotificationRecipients = async (
