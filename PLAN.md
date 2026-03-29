@@ -147,6 +147,8 @@ Out of scope for now:
   device owner can view linked recipients, add/remove recipients, and rerun Telegram onboarding from the UI. Files: `frontend/src/App.tsx`, `frontend/src/api.ts`, `frontend/src/App.css`. Tests: extend `frontend/src/App.test.tsx`.
 - `PW-05` Invite/share flow ✅:
   owner can generate an invite, recipient can accept it via Telegram linking, and owner can revoke access. Files: `backend/app/routes/notifications.py`, `backend/app/models.py`, `backend/app/store.py`, `frontend/src/App.tsx`. Tests: add `backend/tests/test_notification_invites.py`, extend `frontend/src/App.test.tsx`.
+- `PW-05a` Invite/share magic-link follow-up:
+  redesign share invites into a single magic-link flow so the owner sends one link and the recipient completes setup without typing or pasting a code. Remove the manual invite box from the default UX and keep raw-code fallback behind a secondary recovery path only if needed. Files: `backend/app/routes/notifications.py`, `frontend/src/App.tsx`, `frontend/src/api.ts`. Tests: extend `backend/tests/test_notification_invites.py`, `frontend/src/App.test.tsx`, and E2E invite coverage.
 
 ### P1: Reliability
 

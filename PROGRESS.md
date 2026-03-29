@@ -144,6 +144,22 @@ Update it after each meaningful step so the repo always reflects:
   - kept the preview embedded in-page and disabled picture-in-picture for the temporary preview video
   - changed the preview to a smaller contained frame so the full camera view stays visible without cropping
   - updated frontend coverage and reran the full unit, integration, and E2E gates successfully
+- Simplified onboarding redesign completed:
+  - replaced the multi-panel first-run flow with a simpler `Setup monitor` sequence focused on alert destination, alert rules, and camera/start
+  - added a calmer `Monitoring` active state, grouped `History`, and pushed dev controls into `Advanced settings`
+  - refreshed frontend and E2E coverage for the new copy and active-state selectors, then reran the full unit, integration, and E2E gates successfully
+- Share invite cleanup improved:
+  - added a `Remove from list` action for revoked and expired share invites so stale entries can be hidden after they are no longer usable
+  - kept active invites unchanged and verified the updated invite flow with focused frontend coverage
+- Share-link handoff improved:
+  - changed invite creation to copy a share link with `?invite=...` instead of only the raw code
+  - opening that link now auto-fills the invite box, auto-starts invite acceptance, and immediately checks link status so recipients can continue with less manual setup
+  - updated frontend coverage for the new URL-based invite flow and reran the full `App.test.tsx` suite successfully
+- Setup flow simplification completed:
+  - added the medium-term magic-link invite redesign follow-up to `PLAN.md` and simplified the owner UI around three setup questions: which phone gets alerts, what should trigger alerts, and camera/start
+  - rewrote the Telegram step to default to `A different phone`, renamed invite-sharing copy around a link-first flow, collapsed the step into a compact success row once Telegram is ready, and hid manual code entry behind secondary recovery actions
+  - kept manual code acceptance available for recipients with a small fallback path even when the share-link route is the default
+  - refreshed frontend tests for the compact Telegram success state and the simplified invite handoff, then reran the full unit, integration, and E2E gates successfully
 
 ## In Progress
 

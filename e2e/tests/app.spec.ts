@@ -111,7 +111,7 @@ test('shows the app shell and backend health', async ({ page, request }) => {
 
   await page.goto('/')
   await expect(
-    page.getByRole('heading', { name: 'Watch a space and send alerts to Telegram' })
+    page.getByRole('heading', { name: 'Turn this phone into a Telegram monitor' })
   ).toBeVisible()
 })
 
@@ -191,8 +191,9 @@ test('critical flow: start session, upload clip, worker summary, event done', as
   await addRequiredAlertInstruction(page)
 
   await page.getByRole('button', { name: 'Start monitoring' }).click()
-  await expect(page.getByText('Active')).toBeVisible()
-  await expect(page.getByText('Capture disabled')).toBeVisible()
+  const monitoringRegion = page.getByRole('region', { name: 'Monitoring' })
+  await expect(monitoringRegion.getByRole('heading', { name: 'Monitoring is on' })).toBeVisible()
+  await expect(monitoringRegion.getByText('Capture disabled')).toBeVisible()
 
   const auth = await loginViaApi(request, 'owner@example.com')
   const session = await pollFor(async () => {
