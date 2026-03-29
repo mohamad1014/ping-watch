@@ -116,15 +116,14 @@ Update it after each meaningful step so the repo always reflects:
 
 ## Blocked
 
-- `main` is ahead of `origin/main` until GitHub credentials are available for push.
+- No active blockers recorded right now.
 
 ## Next Steps
 
-1. Push local `main` to `origin`.
-2. Finish the code-quality and production-risk audit.
-3. Finish observability baseline work.
-4. Extend CI/CD to deploy, migrate, and rollback automation.
-5. Run the full unit/integration/E2E gate after the current backend worktree changes settle.
+1. Finish the code-quality and production-risk audit.
+2. Finish observability baseline work.
+3. Extend CI/CD to deploy, migrate, and rollback automation.
+4. Run the full unit/integration/E2E gate after the current backend worktree changes settle.
 
 ## Update Rules
 
