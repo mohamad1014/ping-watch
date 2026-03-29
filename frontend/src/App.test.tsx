@@ -330,19 +330,19 @@ describe('App', () => {
   it('shows a straightforward monitoring headline', async () => {
     render(<App />)
     expect(
-      await screen.findByRole('heading', { name: /watch a space and send alerts to telegram/i })
+      await screen.findByRole('heading', { name: /turn this phone into a telegram monitor/i })
     ).toBeInTheDocument()
     expect(
-      screen.getByText(/use this phone as a simple camera monitor for a room, door, desk, or entryway/i)
+      screen.getByText(/choose where alerts go, describe what matters, preview the camera, then start monitoring/i)
     ).toBeInTheDocument()
   })
 
   it('shows alert instruction guidance with multiple examples', async () => {
     render(<App />)
 
-    expect(await screen.findByRole('heading', { name: /alert instructions/i })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /what should trigger an alert/i })).toBeInTheDocument()
     expect(
-      screen.getByText(/write one short sentence per instruction so alerts stay clear and specific/i)
+      screen.getByText(/add one or more short rules so ping watch knows what should count as an alert/i)
     ).toBeInTheDocument()
     expect(
       screen.getByPlaceholderText(/example: alert me if a person enters through the front door/i)
@@ -358,18 +358,13 @@ describe('App', () => {
 
     const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
     const thisPhoneButton = within(telegramSection).getByRole('button', { name: /this phone/i })
-    const anotherPhoneButton = within(telegramSection).getByRole('button', { name: /another phone/i })
+    const anotherPhoneButton = within(telegramSection).getByRole('button', { name: /a different phone/i })
 
     expect(thisPhoneButton).toHaveAttribute('aria-pressed', 'false')
     expect(anotherPhoneButton).toHaveAttribute('aria-pressed', 'true')
-    expect(within(telegramSection).getByText(/choose this if alerts should go to a different phone or another person's telegram account/i)).toBeInTheDocument()
-    expect(within(telegramSection).getByText(/paste an invite code from a device owner/i)).toBeInTheDocument()
-    expect(
-      within(telegramSection).getByPlaceholderText(/insert code shared from other phone here to connect!/i)
-    ).toBeInTheDocument()
-    expect(
-      within(telegramSection).getByRole('button', { name: /check telegram status/i })
-    ).toBeInTheDocument()
+    expect(within(telegramSection).getByRole('heading', { name: /send connection link/i, level: 4 })).toBeInTheDocument()
+    expect(within(telegramSection).getByText(/tap the button below to make a link for the other phone/i)).toBeInTheDocument()
+    expect(within(telegramSection).getByRole('button', { name: /send link to another phone/i })).toBeInTheDocument()
     expect(within(telegramSection).queryByText(/connect telegram and send \/start to your bot before monitoring/i)).not.toBeInTheDocument()
 
     await user.click(thisPhoneButton)
@@ -377,10 +372,8 @@ describe('App', () => {
     expect(thisPhoneButton).toHaveAttribute('aria-pressed', 'true')
     expect(anotherPhoneButton).toHaveAttribute('aria-pressed', 'false')
     expect(within(telegramSection).getByText(/choose this if the monitoring phone should also receive telegram alerts/i)).toBeInTheDocument()
-    expect(
-      within(telegramSection).getByRole('button', { name: /check telegram status/i })
-    ).toBeInTheDocument()
-    expect(within(telegramSection).queryByText(/paste an invite code from a device owner/i)).not.toBeInTheDocument()
+    expect(within(telegramSection).getByRole('button', { name: /connect telegram alerts/i })).toBeInTheDocument()
+    expect(within(telegramSection).queryByRole('button', { name: /send link to another phone/i })).not.toBeInTheDocument()
   })
 
   it('shows a short telegram summary and next action for each setup path', async () => {
@@ -421,9 +414,10 @@ describe('App', () => {
     render(<App />)
 
     const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
-    expect(within(telegramSection).getByText(/another phone is not linked yet/i)).toBeInTheDocument()
     expect(
-      within(telegramSection).getByText(/next: create a share invite here, then open it on the other phone and accept it in telegram/i)
+      within(telegramSection).getByText(
+        /tap the button below to make a link for the other phone\. opening it there will connect alerts automatically/i
+      )
     ).toBeInTheDocument()
 
     await user.click(within(telegramSection).getByRole('button', { name: /this phone/i }))
@@ -439,12 +433,12 @@ describe('App', () => {
   it('shows onboarding guidance for device owners', async () => {
     render(<App />)
 
-    const onboardingSection = await screen.findByRole('region', { name: /how this works/i })
-    expect(within(onboardingSection).getByText(/choose where alerts should go/i)).toBeInTheDocument()
-    expect(within(onboardingSection).getByText(/write the alerts you want/i)).toBeInTheDocument()
-    expect(within(onboardingSection).getByText(/place this phone and start monitoring/i)).toBeInTheDocument()
-    expect(within(onboardingSection).queryByText(/switch to dev mode only when you need to tune recording/i)).not.toBeInTheDocument()
-    expect(within(onboardingSection).queryByRole('button', { name: /user mode/i })).not.toBeInTheDocument()
+    const setupSection = await screen.findByRole('region', { name: /setup monitor/i })
+    expect(within(setupSection).getByRole('heading', { name: /which phone should receive alerts/i })).toBeInTheDocument()
+    expect(within(setupSection).getByRole('heading', { name: /what should trigger an alert/i })).toBeInTheDocument()
+    expect(within(setupSection).getByRole('heading', { name: /check camera and start/i })).toBeInTheDocument()
+    expect(within(setupSection).queryByText(/switch to dev mode only when you need to tune recording/i)).not.toBeInTheDocument()
+    expect(within(setupSection).queryByRole('button', { name: /user mode/i })).not.toBeInTheDocument()
   })
 
   it('lets each alert instruction manage its own add and remove actions', async () => {
@@ -639,34 +633,31 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: /camera preview live/i })).toBeDisabled()
   })
 
-  it('lets panels be minimized from their section header', async () => {
+  it('lets secondary panels be minimized from their section header', async () => {
     const user = userEvent.setup()
     render(<App />)
 
-    const onboardingToggle = await screen.findByRole('button', { name: /how this works/i })
-    expect(onboardingToggle).toHaveAttribute('aria-expanded', 'true')
+    const historyToggle = await screen.findByRole('button', { name: /history/i })
+    expect(historyToggle).toHaveAttribute('aria-expanded', 'true')
 
-    await user.click(onboardingToggle)
+    await user.click(historyToggle)
 
-    expect(onboardingToggle).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.queryByText(/mount or place this phone/i)).not.toBeInTheDocument()
+    expect(historyToggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText(/no clips captured yet/i)).not.toBeInTheDocument()
   })
 
-  it('shows the primary owner flow in the intended order and keeps monitoring controls fixed', async () => {
+  it('shows the simplified owner flow in the intended order and keeps setup fixed', async () => {
     render(<App />)
 
-    await screen.findByRole('region', { name: /how this works/i })
+    await screen.findByRole('region', { name: /setup monitor/i })
 
     const sectionTitles = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent)
     expect(sectionTitles).toEqual([
-      'How this works',
-      'Telegram',
-      'Alert instructions',
-      'Monitoring controls',
-      'Recent events',
-      'Stored clips',
+      'Setup monitor',
+      'History',
+      'Advanced settings',
     ])
-    expect(screen.queryByRole('button', { name: /toggle monitoring controls/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /toggle setup monitor/i })).not.toBeInTheDocument()
   })
 
   it('requires Telegram readiness before start when backend reports not ready', async () => {
@@ -774,9 +765,8 @@ describe('App', () => {
       expect(screen.getByRole('button', { name: /start monitoring/i })).toBeEnabled()
     })
     expect(screen.getByLabelText(/telegram status: connected/i)).toBeInTheDocument()
-    expect(screen.getByText(/bot linked/i)).toBeInTheDocument()
-    expect(screen.getByText(/recipient added/i)).toBeInTheDocument()
-    expect(screen.getByText(/ready to monitor/i)).toBeInTheDocument()
+    expect(screen.getByText(/alerts will go to telegram/i)).toBeInTheDocument()
+    expect(screen.queryByText(/bot linked/i)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /send test alert/i })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /start monitoring/i }))
@@ -1195,6 +1185,7 @@ describe('App', () => {
     const telegramSection = await screen.findByRole('region', {
       name: /^telegram$/i,
     })
+    await user.click(within(telegramSection).getByRole('button', { name: /^edit$/i }))
     await user.click(within(telegramSection).getByRole('button', { name: /this phone/i }))
     expect(screen.queryByRole('region', { name: /telegram recipients/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('region', { name: /share access/i })).not.toBeInTheDocument()
@@ -1277,6 +1268,7 @@ describe('App', () => {
     const telegramSection = await screen.findByRole('region', {
       name: /^telegram$/i,
     })
+    await user.click(within(telegramSection).getByRole('button', { name: /^edit$/i }))
     await user.click(within(telegramSection).getByRole('button', { name: /this phone/i }))
     await user.click(
       within(telegramSection).getByRole('button', { name: /re-run telegram onboarding/i })
@@ -1395,13 +1387,14 @@ describe('App', () => {
     const telegramSection = await screen.findByRole('region', {
       name: /^telegram$/i,
     })
-    const inviteHeadingsBeforeCreate = within(telegramSection).getAllByRole('heading', { level: 3 })
-    expect(inviteHeadingsBeforeCreate.map((heading) => heading.textContent)).toEqual([
-      'Share access',
-      'Link another phone',
-    ])
     await user.click(
-      within(telegramSection).getByRole('button', { name: /create share invite/i })
+      within(telegramSection).getByRole('button', { name: /^edit$/i })
+    )
+    expect(
+      within(telegramSection).getByRole('heading', { name: /send connection link/i, level: 4 })
+    ).toBeInTheDocument()
+    await user.click(
+      within(telegramSection).getByRole('button', { name: /send link to another phone/i })
     )
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -1414,16 +1407,24 @@ describe('App', () => {
       })
     )
     await waitFor(() => {
-      expect(within(telegramSection).getByText('share-code-1')).toBeInTheDocument()
+      expect(within(telegramSection).getByText(/invite=share-code-1/i)).toBeInTheDocument()
       expect(within(telegramSection).getByText('Pending')).toBeInTheDocument()
     })
-    expect(writeText).toHaveBeenCalledWith('share-code-1')
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('invite=share-code-1'))
     expect(
-      within(telegramSection).getAllByText(/share this code with the other phone, then open telegram there and accept the invite/i).length
+      within(telegramSection).getAllByText(
+        /open this link on the other phone to connect alerts automatically/i
+      ).length
     ).toBeGreaterThan(0)
     expect(
-      within(telegramSection).getByText(/step 1: create a share invite\. step 2: send the code to the other phone\. step 3: paste the code below on that phone and tap accept invite/i)
+      within(telegramSection).getByText(
+        /tap the button below to make a link for the other phone\. opening it there will connect alerts automatically/i
+      )
     ).toBeInTheDocument()
+    expect(within(telegramSection).getByText(/waiting for the other phone to open the link/i)).toBeInTheDocument()
+    expect(within(telegramSection).queryByText(/fallback code:/i)).not.toBeInTheDocument()
+    await user.click(within(telegramSection).getByRole('button', { name: /having trouble\? use code instead/i }))
+    expect(within(telegramSection).getByText(/fallback code:/i)).toBeInTheDocument()
 
     await user.click(
       within(telegramSection).getByRole('button', { name: /revoke invite invite-1/i })
@@ -1437,6 +1438,15 @@ describe('App', () => {
     )
     await waitFor(() => {
       expect(within(telegramSection).getByText('Revoked')).toBeInTheDocument()
+    })
+
+    await user.click(
+      within(telegramSection).getByRole('button', { name: /remove invite invite-1 from list/i })
+    )
+
+    await waitFor(() => {
+      expect(within(telegramSection).queryByText('Revoked')).not.toBeInTheDocument()
+      expect(within(telegramSection).queryByText('invite-1')).not.toBeInTheDocument()
     })
 
     Object.defineProperty(navigator, 'clipboard', {
@@ -1501,7 +1511,13 @@ describe('App', () => {
       name: /^telegram$/i,
     })
     await user.click(
-      within(telegramSection).getByRole('button', { name: /another phone/i })
+      within(telegramSection).getByRole('button', { name: /^edit$/i })
+    )
+    await user.click(
+      within(telegramSection).getByRole('button', { name: /a different phone/i })
+    )
+    await user.click(
+      within(telegramSection).getByRole('button', { name: /already have a code\? use it instead/i })
     )
     await user.type(
       within(telegramSection).getByLabelText(/invite code/i),
@@ -1520,9 +1536,6 @@ describe('App', () => {
         }),
       })
     )
-    expect(
-      within(telegramSection).getByRole('button', { name: /check telegram status/i })
-    ).toBeInTheDocument()
     expect(openSpy).toHaveBeenCalledWith(
       'https://t.me/pingwatch_bot?start=share-token-1',
       '_blank',
@@ -1531,11 +1544,135 @@ describe('App', () => {
     await waitFor(() => {
       expect(screen.getByText(/shared invite accepted/i)).toBeInTheDocument()
     })
+    expect(await screen.findByRole('region', { name: /shared alerts/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /start monitoring/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('region', { name: /telegram recipients/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('region', { name: /share access/i })).not.toBeInTheDocument()
 
     openSpy.mockRestore()
+  })
+
+  it('auto-prefills and accepts a share invite from the URL', async () => {
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: true,
+        status: 'ready',
+        reason: null,
+      }],
+      telegramLinkStatus: [{
+        enabled: true,
+        ready: true,
+        linked: true,
+        status: 'ready',
+        reason: null,
+        attempt_id: 'share-attempt-1',
+      }],
+      invites: {
+        lists: [{
+          device_id: 'device-1',
+          invites: [],
+        }],
+        accept: [{
+          enabled: true,
+          ready: false,
+          status: 'pending',
+          reason: null,
+          attempt_id: 'share-attempt-1',
+          connect_url: 'https://t.me/pingwatch_bot?start=share-token-1',
+          expires_at: '2099-01-01T00:00:00Z',
+          link_code: 'share-token-1',
+          fallback_command: '/start share-token-1',
+          device_id: 'shared-device-1',
+        }],
+      },
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const popup = { location: { href: '' }, close: vi.fn() } as unknown as Window
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup)
+    window.history.replaceState({}, '', '/?invite=share-code-1')
+
+    render(<App />)
+
+    const telegramSection = await screen.findByRole('region', {
+      name: /^telegram$/i,
+    })
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://localhost:8000/notifications/invites/accept',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            invite_code: 'share-code-1',
+          }),
+        })
+      )
+    })
+    expect(openSpy).toHaveBeenCalledWith(
+      'https://t.me/pingwatch_bot?start=share-token-1',
+      '_blank',
+      'noopener,noreferrer'
+    )
+    await waitFor(() => {
+      expect(screen.getByText(/shared invite accepted/i)).toBeInTheDocument()
+    })
+    expect(await screen.findByRole('region', { name: /shared alerts/i })).toBeInTheDocument()
+    expect(window.location.search).toBe('')
+
+    openSpy.mockRestore()
+    window.history.replaceState({}, '', '/')
+  })
+
+  it('collapses the telegram step into a simple success row once alerts are ready', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: true,
+        status: 'ready',
+        reason: null,
+      }],
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [],
+        }],
+      },
+      invites: {
+        lists: [{
+          device_id: 'device-1',
+          invites: [],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    expect(within(telegramSection).getByText(/alerts will go to telegram/i)).toBeInTheDocument()
+    expect(within(telegramSection).getByRole('button', { name: /^edit$/i })).toBeInTheDocument()
+    expect(within(telegramSection).queryByRole('button', { name: /this phone/i })).not.toBeInTheDocument()
+
+    await user.click(within(telegramSection).getByRole('button', { name: /^edit$/i }))
+
+    expect(within(telegramSection).getByRole('button', { name: /this phone/i })).toBeInTheDocument()
+    expect(within(telegramSection).getByRole('button', { name: /a different phone/i })).toBeInTheDocument()
   })
 
   it('clears stale telegram attempt state when status returns not_found', async () => {
@@ -1602,7 +1739,7 @@ describe('App', () => {
         method: 'POST',
       })
     )
-    expect(await screen.findByText('Active')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: /monitoring is on/i })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /^stop$/i }))
 
@@ -1653,7 +1790,9 @@ describe('App', () => {
     await user.click(
       screen.getByRole('button', { name: /start monitoring/i })
     )
-    expect(await screen.findByText('Active')).toBeInTheDocument()
+    expect(
+      await screen.findByRole('heading', { name: /monitoring is on/i })
+    ).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /force stop/i }))
 
@@ -1664,7 +1803,9 @@ describe('App', () => {
       })
     )
     expect(mockedDeleteClipsBySession).toHaveBeenCalledWith('sess_1')
-    expect(await screen.findByText('Stopped')).toBeInTheDocument()
+    expect(
+      await screen.findAllByText('Stopped')
+    ).not.toHaveLength(0)
   })
 
   it('allows force stop after normal stop while backend processing may still be running', async () => {
@@ -2298,7 +2439,7 @@ describe('App', () => {
       screen.getByRole('button', { name: /start monitoring/i })
     )
 
-    await screen.findByText('Active')
+    await screen.findByRole('heading', { name: /monitoring is on/i })
     await new Promise((resolve) => setTimeout(resolve, 60))
     expect(uploadSpy.mock.calls.length).toBeGreaterThanOrEqual(2)
 
@@ -2335,7 +2476,7 @@ describe('App', () => {
       screen.getByRole('button', { name: /start monitoring/i })
     )
 
-    await screen.findByText('Active')
+    await screen.findByRole('heading', { name: /monitoring is on/i })
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 15)
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 25)
 
@@ -2395,7 +2536,7 @@ describe('App', () => {
     const eventsSection = screen.getByRole('heading', { name: /recent events/i }).closest('section')
     expect(eventsSection).not.toBeNull()
     const list = within(eventsSection as HTMLElement).getByRole('list')
-    const monitoringSection = screen.getByRole('heading', { name: /monitoring controls/i }).closest('section')
+    const monitoringSection = screen.getByRole('heading', { name: /^monitoring$/i }).closest('section')
     expect(monitoringSection).not.toBeNull()
     expect(await screen.findByText('2 captured')).toBeInTheDocument()
     expect(within(monitoringSection as HTMLElement).getByText(/latest event summary/i)).toBeInTheDocument()
