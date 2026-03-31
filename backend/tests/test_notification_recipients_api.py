@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import pytest
 import httpx
 from httpx import ASGITransport, AsyncClient
@@ -311,3 +313,49 @@ async def test_owner_can_send_test_telegram_alert_to_subscribed_recipients(monke
     assert len(sent_messages) == 2
     assert all(item["url"].endswith("/bottoken/sendMessage") for item in sent_messages)
     assert {item["json"]["chat_id"] for item in sent_messages} == {"111", "222"}
+
+
+@pytest.mark.anyio
+async def test_test_telegram_alert_falls_back_to_device_target_when_subscription_rows_are_missing(monkeypatch):
+    monkeypatch.setenv("AUTH_REQUIRED", "true")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+
+    sent_messages: list[dict[str, object]] = []
+
+    def mock_post(url: str, *, json: dict, timeout: float):
+        assert timeout > 0
+        sent_messages.append({"url": url, "json": json})
+        return type(
+            "_Resp",
+            (),
+            {
+                "status_code": 200,
+                "raise_for_status": staticmethod(lambda: None),
+            },
+        )()
+
+    monkeypatch.setattr(httpx, "post", mock_post)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        owner = await _dev_login(client, "owner@example.com")
+
+        with SessionLocal() as db:
+            device = register_device(db, device_id="dev-1", user_id=owner["user_id"])
+            device.telegram_chat_id = "111"
+            device.telegram_username = "alice"
+            device.telegram_linked_at = datetime.now(timezone.utc)
+            db.commit()
+
+        response = await client.post(
+            "/notifications/telegram/test",
+            json={"device_id": "dev-1"},
+            headers=_auth_headers(owner["access_token"]),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "delivered_count": 1}
+    assert len(sent_messages) == 1
+    assert sent_messages[0]["url"].endswith("/bottoken/sendMessage")
+    assert sent_messages[0]["json"]["chat_id"] == "111"

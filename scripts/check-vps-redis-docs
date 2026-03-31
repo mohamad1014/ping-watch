@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$scripts_dir/.." && pwd)
+
+status=0
+
+require_file() {
+  local path="$1"
+  if [[ ! -f "$path" ]]; then
+    echo "missing file: $path"
+    status=1
+  fi
+}
+
+require_text() {
+  local file="$1"
+  local pattern="$2"
+  local message="$3"
+  if ! grep -Eq "$pattern" "$file"; then
+    echo "$message"
+    status=1
+  fi
+}
+
+require_file "$repo_root/docs/vps-redis-setup.md"
+require_text "$repo_root/docs/vps-redis-setup.md" "redis://127.0.0.1:6379/0" "vps redis setup should document the local REDIS_URL"
+require_text "$repo_root/docs/vps-redis-setup.md" "bind 127.0.0.1" "vps redis setup should keep Redis bound locally"
+require_text "$repo_root/docs/vps-redis-setup.md" "protected-mode yes" "vps redis setup should keep protected mode enabled"
+
+if [[ "$status" -ne 0 ]]; then
+  echo "vps redis docs check failed"
+  exit 1
+fi
+
+echo "vps redis docs check passed"

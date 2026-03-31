@@ -333,7 +333,7 @@ describe('App', () => {
       await screen.findByRole('heading', { name: /turn this phone into a telegram monitor/i })
     ).toBeInTheDocument()
     expect(
-      screen.getByText(/choose where alerts go, describe what matters, preview the camera, then start monitoring/i)
+      screen.getByText(/choose where alerts go, describe what matters, preview the camera, then start video monitoring/i)
     ).toBeInTheDocument()
   })
 
@@ -347,9 +347,9 @@ describe('App', () => {
     expect(
       screen.getByPlaceholderText(/example: alert me if a person enters through the front door/i)
     ).toBeInTheDocument()
-    expect(screen.getByText(/alert if someone opens the office door/i)).toBeInTheDocument()
-    expect(screen.getByText(/alert if motion happens near the stock shelf after 10 pm/i)).toBeInTheDocument()
-    expect(screen.getByText(/alert if a person stands near the front desk for more than a minute/i)).toBeInTheDocument()
+    expect(screen.getByText(/alert if my dog comes into the room/i)).toBeInTheDocument()
+    expect(screen.getByText(/alert if someone seems to break into my red honda car/i)).toBeInTheDocument()
+    expect(screen.getByText(/alert if garbage are placed outside of the garbage deposit/i)).toBeInTheDocument()
   })
 
   it('lets the user choose between connecting this phone or another phone', async () => {
@@ -428,6 +428,108 @@ describe('App', () => {
     expect(
       within(telegramSection).getByText(/next: tap connect telegram alerts, then send \/start in the bot chat/i)
     ).toBeInTheDocument()
+  })
+
+  it('does not surface checking telegram copy during the initial background readiness load', async () => {
+    let resolveReadiness: ((value: Response) => void) | null = null
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url.endsWith('/devices/register')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ device_id: 'device-1', label: 'Kitchen' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+      }
+
+      if (url.includes('/notifications/telegram/readiness')) {
+        return new Promise((resolve) => {
+          resolveReadiness = resolve
+        })
+      }
+
+      if (url.includes('/notifications/recipients')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ device_id: 'device-1', recipients: [] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+      }
+
+      if (url.includes('/notifications/invites')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ device_id: 'device-1', invites: [] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+      }
+
+      if (url.endsWith('/events')) {
+        return Promise.resolve(
+          new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+      }
+
+      if (url.endsWith('/sessions/start')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ session_id: 'sess_1', device_id: 'device-1', status: 'active' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+      }
+
+      if (url.endsWith('/sessions/stop')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ session_id: 'sess_1', device_id: 'device-1', status: 'stopped' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+      }
+
+      if (url.endsWith('/events') && init?.method === 'POST') {
+        return Promise.resolve(
+          new Response(JSON.stringify({}), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+      }
+
+      throw new Error(`Unexpected fetch call: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    expect((await screen.findAllByText(/telegram optional/i)).length).toBeGreaterThan(0)
+    expect(screen.queryByText(/checking telegram/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/checking telegram readiness/i)).not.toBeInTheDocument()
+
+    resolveReadiness?.(
+      new Response(JSON.stringify({
+        enabled: true,
+        ready: false,
+        status: 'needs_user_action',
+        reason: 'Tap Connect Telegram alerts to start linking.',
+        connect_url: null,
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    )
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/telegram setup needed/i).length).toBeGreaterThan(0)
+    })
   })
 
   it('shows onboarding guidance for device owners', async () => {
@@ -1154,6 +1256,27 @@ describe('App', () => {
                 chat_id: '222',
                 telegram_username: 'bob',
                 linked_at: '2026-03-10T12:05:00Z',
+                subscribed: false,
+              },
+            ],
+          },
+          {
+            device_id: 'device-1',
+            recipients: [
+              {
+                endpoint_id: 'endpoint-1',
+                provider: 'telegram',
+                chat_id: '111',
+                telegram_username: 'alice',
+                linked_at: '2026-03-10T12:00:00Z',
+                subscribed: false,
+              },
+              {
+                endpoint_id: 'endpoint-2',
+                provider: 'telegram',
+                chat_id: '222',
+                telegram_username: 'bob',
+                linked_at: '2026-03-10T12:05:00Z',
                 subscribed: true,
               },
             ],
@@ -1182,9 +1305,7 @@ describe('App', () => {
 
     render(<App />)
 
-    const telegramSection = await screen.findByRole('region', {
-      name: /^telegram$/i,
-    })
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
     await user.click(within(telegramSection).getByRole('button', { name: /^edit$/i }))
     await user.click(within(telegramSection).getByRole('button', { name: /this phone/i }))
     expect(screen.queryByRole('region', { name: /telegram recipients/i })).not.toBeInTheDocument()
@@ -1194,6 +1315,20 @@ describe('App', () => {
     expect(within(telegramSection).getByText('@bob')).toBeInTheDocument()
     expect(within(telegramSection).getByText('Subscribed')).toBeInTheDocument()
     expect(within(telegramSection).getByText('Not subscribed')).toBeInTheDocument()
+
+    await user.click(
+      within(telegramSection).getByRole('button', { name: /remove alice from alerts/i })
+    )
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8000/notifications/recipients?device_id=device-1&endpoint_id=endpoint-1',
+      expect.objectContaining({
+        method: 'DELETE',
+      })
+    )
+    await waitFor(() => {
+      expect(within(telegramSection).getAllByText('Not subscribed')).toHaveLength(2)
+    })
 
     await user.click(
       within(telegramSection).getByRole('button', { name: /add bob to alerts/i })
@@ -1210,21 +1345,9 @@ describe('App', () => {
       })
     )
     await waitFor(() => {
-      expect(within(telegramSection).getAllByText('Subscribed')).toHaveLength(2)
-    })
-
-    await user.click(
-      within(telegramSection).getByRole('button', { name: /remove alice from alerts/i })
-    )
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:8000/notifications/recipients?device_id=device-1&endpoint_id=endpoint-1',
-      expect.objectContaining({
-        method: 'DELETE',
-      })
-    )
-    await waitFor(() => {
-      expect(within(telegramSection).getByText('Not subscribed')).toBeInTheDocument()
+      expect(
+        within(telegramSection).getByRole('button', { name: /remove bob from alerts/i })
+      ).toBeInTheDocument()
     })
   })
 
@@ -1274,7 +1397,7 @@ describe('App', () => {
       within(telegramSection).getByRole('button', { name: /re-run telegram onboarding/i })
     )
 
-    expect(openSpy).toHaveBeenCalledWith(
+    expect(openSpy).toHaveBeenLastCalledWith(
       'https://t.me/pingwatch_bot?start=token-2',
       '_blank',
       'noopener,noreferrer'
@@ -1411,6 +1534,13 @@ describe('App', () => {
       expect(within(telegramSection).getByText('Pending')).toBeInTheDocument()
     })
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining('invite=share-code-1'))
+    expect(within(telegramSection).getByText(/share link copied to clipboard/i)).toBeInTheDocument()
+    expect(
+      within(telegramSection).getByRole('button', { name: /copy latest share link/i })
+    ).toBeInTheDocument()
+    expect(
+      within(telegramSection).getByRole('button', { name: /check telegram status/i })
+    ).toBeInTheDocument()
     expect(
       within(telegramSection).getAllByText(
         /open this link on the other phone to connect alerts automatically/i
@@ -1449,6 +1579,450 @@ describe('App', () => {
       expect(within(telegramSection).queryByText('invite-1')).not.toBeInTheDocument()
     })
 
+    Object.defineProperty(navigator, 'clipboard', {
+      value: originalClipboard,
+      configurable: true,
+    })
+  })
+
+  it('lets the owner check telegram status directly from the latest share link card', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [
+        {
+          enabled: true,
+          ready: false,
+          status: 'needs_user_action',
+          reason: 'Tap Connect Telegram alerts to start linking.',
+        },
+        {
+          enabled: true,
+          ready: true,
+          status: 'ready',
+          reason: null,
+        },
+      ],
+      invites: {
+        lists: [
+          {
+            device_id: 'device-1',
+            invites: [],
+          },
+          {
+            device_id: 'device-1',
+            invites: [{
+              invite_id: 'invite-1',
+              device_id: 'device-1',
+              status: 'pending',
+              invite_code: 'share-code-1',
+              created_at: '2026-03-11T10:00:00Z',
+              expires_at: '2026-03-11T10:30:00Z',
+              accepted_at: null,
+              revoked_at: null,
+              recipient_chat_id: null,
+              recipient_telegram_username: null,
+            }],
+          },
+        ],
+        create: [{
+          invite_id: 'invite-1',
+          device_id: 'device-1',
+          status: 'pending',
+          invite_code: 'share-code-1',
+          created_at: '2026-03-11T10:00:00Z',
+          expires_at: '2026-03-11T10:30:00Z',
+          accepted_at: null,
+          revoked_at: null,
+          recipient_chat_id: null,
+          recipient_telegram_username: null,
+        }],
+      },
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    await user.click(
+      within(telegramSection).getByRole('button', { name: /send link to another phone/i })
+    )
+
+    const checkStatusButton = await within(telegramSection).findByRole('button', {
+      name: /check telegram status/i,
+    })
+
+    await user.click(checkStatusButton)
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/telegram status: connected/i)).toBeInTheDocument()
+    })
+  })
+
+  it('refreshes telegram readiness after revoking an accepted invite', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [
+        {
+          enabled: true,
+          ready: true,
+          status: 'ready',
+          reason: null,
+        },
+        {
+          enabled: true,
+          ready: false,
+          status: 'needs_user_action',
+          reason: 'Tap Connect Telegram alerts to start linking.',
+        },
+      ],
+      invites: {
+        lists: [
+          {
+            device_id: 'device-1',
+            invites: [{
+              invite_id: 'invite-1',
+              device_id: 'device-1',
+              status: 'accepted',
+              invite_code: 'share-code-1',
+              created_at: '2026-03-11T10:00:00Z',
+              expires_at: '2026-03-11T10:30:00Z',
+              accepted_at: '2026-03-11T10:02:00Z',
+              revoked_at: null,
+              recipient_chat_id: '222',
+              recipient_telegram_username: 'bob',
+            }],
+          },
+          {
+            device_id: 'device-1',
+            invites: [{
+              invite_id: 'invite-1',
+              device_id: 'device-1',
+              status: 'revoked',
+              invite_code: 'share-code-1',
+              created_at: '2026-03-11T10:00:00Z',
+              expires_at: '2026-03-11T10:30:00Z',
+              accepted_at: '2026-03-11T10:02:00Z',
+              revoked_at: '2026-03-11T10:05:00Z',
+              recipient_chat_id: '222',
+              recipient_telegram_username: 'bob',
+            }],
+          },
+        ],
+        revoke: [{
+          invite_id: 'invite-1',
+          device_id: 'device-1',
+          status: 'revoked',
+          invite_code: 'share-code-1',
+          created_at: '2026-03-11T10:00:00Z',
+          expires_at: '2026-03-11T10:30:00Z',
+          accepted_at: '2026-03-11T10:02:00Z',
+          revoked_at: '2026-03-11T10:05:00Z',
+          recipient_chat_id: '222',
+          recipient_telegram_username: 'bob',
+        }],
+      },
+      recipients: {
+        lists: [
+          {
+            device_id: 'device-1',
+            recipients: [{
+              endpoint_id: 'endpoint-1',
+              provider: 'telegram',
+              chat_id: '222',
+              telegram_username: 'bob',
+              linked_at: '2026-03-11T10:02:00Z',
+              subscribed: true,
+            }],
+          },
+          {
+            device_id: 'device-1',
+            recipients: [],
+          },
+        ],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<App />)
+
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    await user.click(within(telegramSection).getByRole('button', { name: /^edit$/i }))
+    await user.click(within(telegramSection).getByRole('button', { name: /a different phone/i }))
+
+    expect(within(telegramSection).getByText(/telegram connected/i)).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /send test alert/i })).toBeInTheDocument()
+
+    await user.click(
+      within(telegramSection).getByRole('button', { name: /revoke invite invite-1/i })
+    )
+
+    await waitFor(() => {
+      expect(within(telegramSection).getByText(/telegram setup needed/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByRole('button', { name: /send test alert/i })).not.toBeInTheDocument()
+  })
+
+  it('lets the owner copy the latest share link again', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: true,
+        status: 'ready',
+        reason: null,
+      }],
+      invites: {
+        lists: [
+          {
+            device_id: 'device-1',
+            invites: [],
+          },
+          {
+            device_id: 'device-1',
+            invites: [{
+              invite_id: 'invite-1',
+              device_id: 'device-1',
+              status: 'pending',
+              invite_code: 'share-code-1',
+              created_at: '2026-03-11T10:00:00Z',
+              expires_at: '2026-03-11T10:30:00Z',
+              accepted_at: null,
+              revoked_at: null,
+              recipient_chat_id: null,
+              recipient_telegram_username: null,
+            }],
+          },
+        ],
+        create: [{
+          invite_id: 'invite-1',
+          device_id: 'device-1',
+          status: 'pending',
+          invite_code: 'share-code-1',
+          created_at: '2026-03-11T10:00:00Z',
+          expires_at: '2026-03-11T10:30:00Z',
+          accepted_at: null,
+          revoked_at: null,
+          recipient_chat_id: null,
+          recipient_telegram_username: null,
+        }],
+      },
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const originalClipboard = navigator.clipboard
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    })
+
+    render(<App />)
+
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    await user.click(within(telegramSection).getByRole('button', { name: /^edit$/i }))
+    await user.click(within(telegramSection).getByRole('button', { name: /send link to another phone/i }))
+
+    const copyButton = await within(telegramSection).findByRole('button', { name: /copy latest share link/i })
+    writeText.mockClear()
+
+    await user.click(copyButton)
+
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('invite=share-code-1'))
+
+    Object.defineProperty(navigator, 'clipboard', {
+      value: originalClipboard,
+      configurable: true,
+    })
+  })
+
+  it('drops the trailing slash from generated share links on path-based staging routes', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: true,
+        status: 'ready',
+        reason: null,
+      }],
+      invites: {
+        lists: [
+          {
+            device_id: 'device-1',
+            invites: [],
+          },
+          {
+            device_id: 'device-1',
+            invites: [{
+              invite_id: 'invite-1',
+              device_id: 'device-1',
+              status: 'pending',
+              invite_code: 'share-code-1',
+              created_at: '2026-03-11T10:00:00Z',
+              expires_at: '2026-03-11T10:30:00Z',
+              accepted_at: null,
+              revoked_at: null,
+              recipient_chat_id: null,
+              recipient_telegram_username: null,
+            }],
+          },
+        ],
+        create: [{
+          invite_id: 'invite-1',
+          device_id: 'device-1',
+          status: 'pending',
+          invite_code: 'share-code-1',
+          created_at: '2026-03-11T10:00:00Z',
+          expires_at: '2026-03-11T10:30:00Z',
+          accepted_at: null,
+          revoked_at: null,
+          recipient_chat_id: null,
+          recipient_telegram_username: null,
+        }],
+      },
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const originalClipboard = navigator.clipboard
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    })
+    window.history.replaceState({}, '', '/ping-watch-staging/')
+
+    render(<App />)
+
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    await user.click(within(telegramSection).getByRole('button', { name: /^edit$/i }))
+    await user.click(within(telegramSection).getByRole('button', { name: /send link to another phone/i }))
+
+    expect(writeText).toHaveBeenCalledWith(
+      `${window.location.origin}/ping-watch-staging?invite=share-code-1`
+    )
+    expect(within(telegramSection).getByText(
+      `${window.location.origin}/ping-watch-staging?invite=share-code-1`
+    )).toBeInTheDocument()
+
+    window.history.replaceState({}, '', '/')
+    Object.defineProperty(navigator, 'clipboard', {
+      value: originalClipboard,
+      configurable: true,
+    })
+  })
+
+  it('falls back to document.execCommand when the clipboard API is unavailable', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: true,
+        status: 'ready',
+        reason: null,
+      }],
+      invites: {
+        lists: [
+          {
+            device_id: 'device-1',
+            invites: [],
+          },
+          {
+            device_id: 'device-1',
+            invites: [{
+              invite_id: 'invite-1',
+              device_id: 'device-1',
+              status: 'pending',
+              invite_code: 'share-code-1',
+              created_at: '2026-03-11T10:00:00Z',
+              expires_at: '2026-03-11T10:30:00Z',
+              accepted_at: null,
+              revoked_at: null,
+              recipient_chat_id: null,
+              recipient_telegram_username: null,
+            }],
+          },
+        ],
+        create: [{
+          invite_id: 'invite-1',
+          device_id: 'device-1',
+          status: 'pending',
+          invite_code: 'share-code-1',
+          created_at: '2026-03-11T10:00:00Z',
+          expires_at: '2026-03-11T10:30:00Z',
+          accepted_at: null,
+          revoked_at: null,
+          recipient_chat_id: null,
+          recipient_telegram_username: null,
+        }],
+      },
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const originalClipboard = navigator.clipboard
+    Object.defineProperty(navigator, 'clipboard', {
+      value: undefined,
+      configurable: true,
+    })
+    const originalExecCommand = document.execCommand
+    Object.defineProperty(document, 'execCommand', {
+      value: vi.fn().mockReturnValue(true),
+      configurable: true,
+    })
+    const execCommandSpy = document.execCommand as unknown as ReturnType<typeof vi.fn>
+
+    render(<App />)
+
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    await user.click(within(telegramSection).getByRole('button', { name: /^edit$/i }))
+    await user.click(within(telegramSection).getByRole('button', { name: /send link to another phone/i }))
+
+    expect(execCommandSpy).toHaveBeenCalledWith('copy')
+    expect(within(telegramSection).getByText(/share link copied to clipboard/i)).toBeInTheDocument()
+
+    Object.defineProperty(document, 'execCommand', {
+      value: originalExecCommand,
+      configurable: true,
+    })
     Object.defineProperty(navigator, 'clipboard', {
       value: originalClipboard,
       configurable: true,
@@ -1502,9 +2076,6 @@ describe('App', () => {
       events: [[]],
     })
     vi.stubGlobal('fetch', fetchMock)
-    const popup = { location: { href: '' }, close: vi.fn() } as unknown as Window
-    const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup)
-
     render(<App />)
 
     const telegramSection = await screen.findByRole('region', {
@@ -1536,11 +2107,6 @@ describe('App', () => {
         }),
       })
     )
-    expect(openSpy).toHaveBeenCalledWith(
-      'https://t.me/pingwatch_bot?start=share-token-1',
-      '_blank',
-      'noopener,noreferrer'
-    )
     await waitFor(() => {
       expect(screen.getByText(/shared invite accepted/i)).toBeInTheDocument()
     })
@@ -1549,7 +2115,6 @@ describe('App', () => {
     expect(screen.queryByRole('region', { name: /telegram recipients/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('region', { name: /share access/i })).not.toBeInTheDocument()
 
-    openSpy.mockRestore()
   })
 
   it('auto-prefills and accepts a share invite from the URL', async () => {
@@ -1598,8 +2163,6 @@ describe('App', () => {
       events: [[]],
     })
     vi.stubGlobal('fetch', fetchMock)
-    const popup = { location: { href: '' }, close: vi.fn() } as unknown as Window
-    const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup)
     window.history.replaceState({}, '', '/?invite=share-code-1')
 
     render(<App />)
@@ -1619,18 +2182,86 @@ describe('App', () => {
         })
       )
     })
-    expect(openSpy).toHaveBeenCalledWith(
-      'https://t.me/pingwatch_bot?start=share-token-1',
-      '_blank',
-      'noopener,noreferrer'
-    )
     await waitFor(() => {
       expect(screen.getByText(/shared invite accepted/i)).toBeInTheDocument()
     })
     expect(await screen.findByRole('region', { name: /shared alerts/i })).toBeInTheDocument()
     expect(window.location.search).toBe('')
 
-    openSpy.mockRestore()
+    window.history.replaceState({}, '', '/')
+  })
+
+  it('shows an explicit Telegram handoff action after opening a share link from the URL', async () => {
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: false,
+        status: 'needs_user_action',
+        reason: 'Tap Open Telegram link again to finish connecting alerts.',
+      }],
+      telegramLinkStatus: [{
+        enabled: true,
+        ready: false,
+        linked: false,
+        status: 'pending',
+        reason: null,
+        attempt_id: 'share-attempt-1',
+      }],
+      invites: {
+        lists: [{
+          device_id: 'device-1',
+          invites: [],
+        }],
+        accept: [{
+          enabled: true,
+          ready: false,
+          status: 'pending',
+          reason: null,
+          attempt_id: 'share-attempt-1',
+          connect_url: 'https://t.me/pingwatch_bot?start=share-token-1',
+          expires_at: '2099-01-01T00:00:00Z',
+          link_code: 'share-token-1',
+          fallback_command: '/start share-token-1',
+          device_id: 'shared-device-1',
+        }],
+      },
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    window.history.replaceState({}, '', '/?invite=share-code-1')
+
+    render(<App />)
+
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://localhost:8000/notifications/invites/accept',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            invite_code: 'share-code-1',
+          }),
+        })
+      )
+    })
+    expect(
+      within(telegramSection).getByText(/share link opened\. tap open telegram link again to finish connecting alerts/i)
+    ).toBeInTheDocument()
+    expect(
+      within(telegramSection).getByRole('link', { name: /open telegram link again/i })
+    ).toHaveAttribute('href', 'https://t.me/pingwatch_bot?start=share-token-1')
+    expect(window.location.search).toBe('')
+
     window.history.replaceState({}, '', '/')
   })
 
@@ -1665,7 +2296,9 @@ describe('App', () => {
     render(<App />)
 
     const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
-    expect(within(telegramSection).getByText(/alerts will go to telegram/i)).toBeInTheDocument()
+    await waitFor(() => {
+      expect(within(telegramSection).getByText(/alerts will go to telegram/i)).toBeInTheDocument()
+    })
     expect(within(telegramSection).getByRole('button', { name: /^edit$/i })).toBeInTheDocument()
     expect(within(telegramSection).queryByRole('button', { name: /this phone/i })).not.toBeInTheDocument()
 

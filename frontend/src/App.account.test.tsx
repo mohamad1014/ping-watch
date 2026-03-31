@@ -88,9 +88,7 @@ describe('App account flows', () => {
     const user = userEvent.setup()
     render(<App />)
 
-    expect(
-      await screen.findByRole('heading', { name: /account/i })
-    ).toBeInTheDocument()
+    expect(await screen.findByLabelText(/account email/i)).toBeInTheDocument()
 
     const startButton = screen.getByRole('button', { name: /start monitoring/i })
     expect(startButton).toBeDisabled()
@@ -99,7 +97,7 @@ describe('App account flows', () => {
     await user.click(screen.getByRole('button', { name: /sign in/i }))
 
     await waitFor(() => {
-      expect(screen.getByText(/signed in as owner@example\.com/i)).toBeInTheDocument()
+      expect(screen.queryByLabelText(/account email/i)).not.toBeInTheDocument()
     })
 
     await user.type(

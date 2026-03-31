@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$scripts_dir/.." && pwd)
+
+base_path=${1:-${VITE_BASE_PATH:-/}}
+api_url=${2:-${VITE_API_URL:-}}
+output_dir=${3:-}
+auth_required=${4:-${VITE_AUTH_REQUIRED:-}}
+auth_auto_login=${5:-${VITE_AUTH_AUTO_LOGIN:-}}
+
+cd "$repo_root/frontend"
+
+if [[ ! -d node_modules ]]; then
+  npm ci
+fi
+
+VITE_BASE_PATH="$base_path" \
+VITE_API_URL="$api_url" \
+VITE_AUTH_REQUIRED="$auth_required" \
+VITE_AUTH_AUTO_LOGIN="$auth_auto_login" \
+npm run build
+
+if [[ -n "$output_dir" ]]; then
+  rm -rf "$output_dir"
+  mkdir -p "$output_dir"
+  cp -R dist/. "$output_dir"/
+fi

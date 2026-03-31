@@ -15,6 +15,10 @@ logs/
 .env
 .env.*
 !.env.example
+staging.env
+production.env
+infra/azure/parameters/*.parameters.json
+!infra/azure/parameters/*.example.json
 
 # Node / Frontend
 node_modules/
@@ -67,3 +71,7 @@ tmp/
 .claude/skills/update-user/assets/*
 # Skills 
 # .codex/skills/*
+
+#env files - these should be ignored, but we have to ignore them after the fact since they were already committed
+production.env
+staging.env

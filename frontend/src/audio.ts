@@ -38,13 +38,14 @@ export class AudioGate {
   }
 }
 
-export const computeAudioRms = (samples: Float32Array) => {
+export const computeAudioRms = (samples: ArrayLike<number>) => {
   if (samples.length === 0) {
     return 0
   }
 
   let sumSquares = 0
-  for (const sample of samples) {
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = samples[index] ?? 0
     sumSquares += sample * sample
   }
 

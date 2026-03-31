@@ -1,0 +1,61 @@
+# Add this file as an include inside the existing server block that already serves `/mohamad`.
+# Example:
+# include /etc/nginx/snippets/ping-watch-locations.conf;
+
+location = /ping-watch {
+    return 308 /ping-watch/$is_args$args;
+}
+
+location ^~ /ping-watch/ {
+    alias /var/www/ping-watch/production/frontend/;
+    try_files $uri $uri/ @ping_watch_production_index;
+}
+
+location = /ping-watch-staging {
+    return 308 /ping-watch-staging/$is_args$args;
+}
+
+location ^~ /ping-watch-staging/ {
+    alias /var/www/ping-watch/staging/frontend/;
+    try_files $uri $uri/ @ping_watch_staging_index;
+}
+
+location = /ping-watch-api {
+    return 308 /ping-watch-api/$is_args$args;
+}
+
+location ^~ /ping-watch-api/ {
+    proxy_pass http://127.0.0.1:8000/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Prefix /ping-watch-api;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+}
+
+location = /ping-watch-api-staging {
+    return 308 /ping-watch-api-staging/$is_args$args;
+}
+
+location ^~ /ping-watch-api-staging/ {
+    proxy_pass http://127.0.0.1:8001/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Prefix /ping-watch-api-staging;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+}
+
+location @ping_watch_production_index {
+    rewrite ^ /ping-watch/index.html last;
+}
+
+location @ping_watch_staging_index {
+    rewrite ^ /ping-watch-staging/index.html last;
+}

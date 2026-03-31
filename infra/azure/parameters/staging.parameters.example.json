@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "staging"
+    },
+    "location": {
+      "value": "westeurope"
+    },
+    "postgresServerName": {
+      "value": "replace-with-unique-staging-postgres-name"
+    },
+    "postgresAdminLogin": {
+      "value": "pingwatchadmin"
+    },
+    "postgresAdminPassword": {
+      "value": "REPLACE_WITH_STAGING_POSTGRES_PASSWORD"
+    },
+    "postgresDatabaseName": {
+      "value": "pingwatch_staging"
+    },
+    "allowedClientIpStart": {
+      "value": "REPLACE_WITH_VPS_PUBLIC_IP"
+    },
+    "allowedClientIpEnd": {
+      "value": "REPLACE_WITH_VPS_PUBLIC_IP"
+    },
+    "storageAccountName": {
+      "value": "replacewithuniquestagingstorage"
+    },
+    "clipsContainerName": {
+      "value": "clips-staging"
+    },
+    "deployRedis": {
+      "value": false
+    },
+    "redisName": {
+      "value": "replace-with-staging-redis-name"
+    },
+    "tags": {
+      "value": {
+        "project": "ping-watch",
+        "environment": "staging",
+        "managedBy": "bicep"
+      }
+    }
+  }
+}

@@ -20,7 +20,6 @@ import {
   getTelegramReadiness,
   loginWithEmail,
   listEvents,
-  logout,
   startTelegramLink,
   startSession,
   stopSession,
@@ -88,9 +87,12 @@ const getEnvNumber = (key: string) => {
   const env = (import.meta as ImportMeta & {
     env?: Record<string, string | undefined>
   }).env
-  const raw = env?.[key] ?? (typeof process !== 'undefined'
-    ? process.env?.[key]
-    : undefined)
+  const processEnv = (globalThis as {
+    process?: {
+      env?: Record<string, string | undefined>
+    }
+  }).process?.env
+  const raw = env?.[key] ?? processEnv?.[key]
   if (!raw) return undefined
   const value = Number(raw)
   return Number.isFinite(value) ? value : undefined
@@ -249,12 +251,43 @@ const buildShareInviteLink = (inviteCode: string) => {
   if (typeof window === 'undefined') return inviteCode
   try {
     const url = new URL(window.location.href)
+    if (url.pathname.length > 1 && url.pathname.endsWith('/')) {
+      url.pathname = url.pathname.slice(0, -1)
+    }
     url.search = ''
     url.hash = ''
     url.searchParams.set('invite', inviteCode)
     return url.toString()
   } catch {
     return inviteCode
+  }
+}
+
+const copyTextToClipboard = async (value: string) => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value)
+    return
+  }
+
+  if (typeof document === 'undefined' || typeof document.execCommand !== 'function') {
+    throw new Error('Clipboard unavailable')
+  }
+
+  const textArea = document.createElement('textarea')
+  textArea.value = value
+  textArea.setAttribute('readonly', '')
+  textArea.style.position = 'fixed'
+  textArea.style.top = '-9999px'
+  textArea.style.left = '-9999px'
+  document.body.appendChild(textArea)
+  textArea.focus()
+  textArea.select()
+  textArea.setSelectionRange(0, textArea.value.length)
+
+  const didCopy = document.execCommand('copy')
+  document.body.removeChild(textArea)
+  if (!didCopy) {
+    throw new Error('Clipboard unavailable')
   }
 }
 
@@ -378,6 +411,7 @@ function App() {
   const [loadingNotificationInvites, setLoadingNotificationInvites] = useState(false)
   const [updatingInviteId, setUpdatingInviteId] = useState<string | null>(null)
   const [latestInviteCode, setLatestInviteCode] = useState<string | null>(null)
+  const [latestInviteCopyStatus, setLatestInviteCopyStatus] = useState<'idle' | 'copied'>('idle')
   const [inviteCodeInput, setInviteCodeInput] = useState('')
   const [inviteCodeFromUrl, setInviteCodeFromUrl] = useState<string | null>(() => readInviteCodeFromUrl())
   const [inviteAcceptedMessage, setInviteAcceptedMessage] = useState<string | null>(null)
@@ -932,22 +966,6 @@ function App() {
     }
   }, [accountEmail, resetForAccountChange])
 
-  const handleAccountSignOut = useCallback(async () => {
-    setIsAuthenticating(true)
-    setError(null)
-
-    try {
-      await resetForAccountChange()
-      logout()
-      setAuthSession(getAuthSession())
-    } catch (err) {
-      console.error(err)
-      setError('Unable to sign out cleanly.')
-    } finally {
-      setIsAuthenticating(false)
-    }
-  }, [resetForAccountChange])
-
   const handleStart = async () => {
     if (requiresAccountSignIn) {
       setError('Sign in before starting monitoring.')
@@ -1075,13 +1093,14 @@ function App() {
       const resolvedDeviceId = await ensureResolvedDeviceId()
       await addNotificationRecipient(resolvedDeviceId, recipient.endpointId)
       await refreshTelegramRecipients(resolvedDeviceId)
+      await refreshTelegramReadiness()
     } catch (err) {
       console.error(err)
       setError('Unable to add Telegram recipient.')
     } finally {
       setUpdatingRecipientEndpointId(null)
     }
-  }, [ensureResolvedDeviceId, refreshTelegramRecipients])
+  }, [ensureResolvedDeviceId, refreshTelegramReadiness, refreshTelegramRecipients])
 
   const handleTelegramLinkStatusResult = useCallback(async (
     linkDeviceId: string,
@@ -1129,6 +1148,7 @@ function App() {
       deviceId: string
       flow: TelegramLinkFlow
       preOpenedPopup: Window | null
+      suppressAutomaticRedirect?: boolean
     }
   ) => {
     const fallbackCommand = deriveTelegramFallbackCommand(
@@ -1157,10 +1177,13 @@ function App() {
     })
 
     let popup = options.preOpenedPopup
-    if (!popup) {
+    const shouldReuseCurrentTab = options.flow === 'invite'
+      && !options.preOpenedPopup
+      && !options.suppressAutomaticRedirect
+    if (!popup && !shouldReuseCurrentTab) {
       popup = window.open(start.connectUrl, '_blank', 'noopener,noreferrer')
     }
-    if (!popup) {
+    if (!popup && !shouldReuseCurrentTab) {
       persistTelegramLinkState({
         waiting: true,
         fallbackUrl: start.connectUrl,
@@ -1172,11 +1195,29 @@ function App() {
       return
     }
 
-    if (options.preOpenedPopup) {
+    if (shouldReuseCurrentTab) {
+      persistTelegramLinkState({
+        waiting: true,
+        fallbackUrl: start.connectUrl,
+        fallbackCommand,
+        deviceId: options.deviceId,
+        flow: options.flow,
+      })
+      setError(null)
       try {
-        popup.location.href = start.connectUrl
+        window.location.assign(start.connectUrl)
       } catch {
-        popup.close()
+        setError('Unable to open Telegram automatically. Use the backup Telegram link below.')
+      }
+      return
+    }
+
+    if (options.preOpenedPopup) {
+      const openedPopup = options.preOpenedPopup
+      try {
+        openedPopup.location.href = start.connectUrl
+      } catch {
+        openedPopup.close()
         persistTelegramLinkState({
           waiting: true,
           fallbackUrl: start.connectUrl,
@@ -1206,13 +1247,14 @@ function App() {
       const resolvedDeviceId = await ensureResolvedDeviceId()
       await removeNotificationRecipient(resolvedDeviceId, recipient.endpointId)
       await refreshTelegramRecipients(resolvedDeviceId)
+      await refreshTelegramReadiness()
     } catch (err) {
       console.error(err)
       setError('Unable to remove Telegram recipient.')
     } finally {
       setUpdatingRecipientEndpointId(null)
     }
-  }, [ensureResolvedDeviceId, refreshTelegramRecipients])
+  }, [ensureResolvedDeviceId, refreshTelegramReadiness, refreshTelegramRecipients])
 
   const handleCreateInvite = useCallback(async () => {
     setError(null)
@@ -1223,12 +1265,12 @@ function App() {
       const resolvedDeviceId = await ensureResolvedDeviceId()
       const invite = await createNotificationInvite(resolvedDeviceId)
       setLatestInviteCode(invite.inviteCode)
+      setLatestInviteCopyStatus('idle')
       const shareInviteLink = invite.inviteCode ? buildShareInviteLink(invite.inviteCode) : null
-      if (navigator.clipboard?.writeText) {
+      if (shareInviteLink) {
         try {
-          if (shareInviteLink) {
-            await navigator.clipboard.writeText(shareInviteLink)
-          }
+          await copyTextToClipboard(shareInviteLink)
+          setLatestInviteCopyStatus('copied')
         } catch (clipboardError) {
           console.warn('[ShareInvite] Unable to copy share invite link to clipboard', clipboardError)
         }
@@ -1246,6 +1288,26 @@ function App() {
     }
   }, [ensureResolvedDeviceId, refreshNotificationInvites])
 
+  const handleCopyLatestInviteLink = useCallback(async () => {
+    if (!latestInviteCode) {
+      setError('No share link is available to copy yet.')
+      return
+    }
+    const shareInviteLink = buildShareInviteLink(latestInviteCode)
+    try {
+      await copyTextToClipboard(shareInviteLink)
+      setLatestInviteCopyStatus('copied')
+      setError(null)
+    } catch (err) {
+      console.error(err)
+      setError(
+        err instanceof Error && err.message === 'Clipboard unavailable'
+          ? 'Clipboard unavailable'
+          : 'Unable to copy the latest share link.'
+      )
+    }
+  }, [latestInviteCode])
+
   const handleRevokeInvite = useCallback(async (invite: NotificationInvite) => {
     setError(null)
     setUpdatingInviteId(invite.inviteId)
@@ -1254,13 +1316,14 @@ function App() {
       await revokeNotificationInvite(resolvedDeviceId, invite.inviteId)
       await refreshNotificationInvites(resolvedDeviceId)
       await refreshTelegramRecipients(resolvedDeviceId)
+      await refreshTelegramReadiness()
     } catch (err) {
       console.error(err)
       setError('Unable to revoke that share invite.')
     } finally {
       setUpdatingInviteId(null)
     }
-  }, [ensureResolvedDeviceId, refreshNotificationInvites, refreshTelegramRecipients])
+  }, [ensureResolvedDeviceId, refreshNotificationInvites, refreshTelegramReadiness, refreshTelegramRecipients])
 
   const handleDismissInvite = useCallback((inviteId: string) => {
     setDismissedInviteIds((current) => (
@@ -1268,7 +1331,12 @@ function App() {
     ))
   }, [])
 
-  const handleAcceptInviteCode = useCallback(async (inviteCode: string) => {
+  const handleAcceptInviteCode = useCallback(async (
+    inviteCode: string,
+    options?: {
+      openedFromShareLink?: boolean
+    }
+  ) => {
     const normalizedCode = inviteCode.trim()
     if (!normalizedCode) {
       setError('Enter an invite code before accepting a shared invite.')
@@ -1277,6 +1345,9 @@ function App() {
 
     setError(null)
     setInviteAcceptedMessage(null)
+    if (options?.openedFromShareLink) {
+      setShowInviteCodeFallback(true)
+    }
     const preOpenedPopup = shouldPreOpenTelegramPopup()
       ? window.open('', '_blank', 'noopener,noreferrer')
       : null
@@ -1286,8 +1357,12 @@ function App() {
       beginTelegramLinkFlow(start, {
         deviceId: start.deviceId,
         flow: 'invite',
-        preOpenedPopup,
+        preOpenedPopup: options?.openedFromShareLink ? null : preOpenedPopup,
+        suppressAutomaticRedirect: options?.openedFromShareLink === true,
       })
+      if (options?.openedFromShareLink && start.connectUrl) {
+        setInviteAcceptedMessage('Share link opened. Tap Open Telegram link again to finish connecting alerts.')
+      }
       if (start.attemptId) {
         const status = await getTelegramLinkStatus(start.deviceId, start.attemptId)
         await handleTelegramLinkStatusResult(start.deviceId, 'invite', status)
@@ -1309,7 +1384,7 @@ function App() {
     setInviteCodeInput(inviteCodeFromUrl)
     clearInviteCodeFromUrl()
     setInviteCodeFromUrl(null)
-    void handleAcceptInviteCode(inviteCodeFromUrl)
+    void handleAcceptInviteCode(inviteCodeFromUrl, { openedFromShareLink: true })
   }, [handleAcceptInviteCode, inviteCodeFromUrl])
 
   const handleSendTelegramTestAlert = useCallback(async () => {
@@ -1494,15 +1569,15 @@ function App() {
 
   const handleCopyEventId = async (eventId: string) => {
     try {
-      if (!navigator.clipboard?.writeText) {
-        setError('Clipboard unavailable')
-        return
-      }
-      await navigator.clipboard.writeText(eventId)
+      await copyTextToClipboard(eventId)
       setCopiedEventId(eventId)
     } catch (err) {
       console.error(err)
-      setError('Unable to copy event id')
+      setError(
+        err instanceof Error && err.message === 'Clipboard unavailable'
+          ? 'Clipboard unavailable'
+          : 'Unable to copy event id'
+      )
     }
   }
 
@@ -1572,6 +1647,12 @@ function App() {
     const timeout = window.setTimeout(() => setCopiedEventId(null), 1500)
     return () => window.clearTimeout(timeout)
   }, [copiedEventId])
+
+  useEffect(() => {
+    if (latestInviteCopyStatus !== 'copied') return
+    const timeout = window.setTimeout(() => setLatestInviteCopyStatus('idle'), 2000)
+    return () => window.clearTimeout(timeout)
+  }, [latestInviteCopyStatus])
 
   useEffect(() => {
     if (!authSession.email) return
@@ -1668,14 +1749,17 @@ function App() {
   const selectedTelegramSetupPath = isRecipientOnlyMode ? 'invite' : telegramSetupPath
   const isDevMode = frontendMode === 'dev'
   const monitoringStatusLabel = statusLabels[sessionStatus]
-  const telegramStatusLabel = checkingTelegramReadiness
+  const showAccountPanel = authSession.authRequired && !authSession.authenticated
+  const isSessionActive = sessionStatus === 'active'
+  const showTelegramCheckingState = checkingTelegramReadiness && isWaitingForTelegramConnect
+  const telegramStatusLabel = showTelegramCheckingState
     ? 'Checking Telegram'
     : telegramReadiness?.ready
     ? 'Telegram connected'
     : telegramReadiness?.enabled
     ? 'Telegram setup needed'
     : 'Telegram optional'
-  const telegramStatusTone = checkingTelegramReadiness
+  const telegramStatusTone = showTelegramCheckingState
     ? 'checking'
     : telegramReadiness?.ready
     ? 'connected'
@@ -1706,7 +1790,7 @@ function App() {
       done: Boolean(telegramReadiness?.ready),
     },
   ]
-  const deviceTelegramSummary = checkingTelegramReadiness
+  const deviceTelegramSummary = showTelegramCheckingState
     ? {
       tone: 'checking',
       label: 'Checking setup',
@@ -1799,19 +1883,15 @@ function App() {
       <header className="app-header">
         <h1>Turn this phone into a Telegram monitor</h1>
         <p className="app-tagline">
-          Choose where alerts go, describe what matters, preview the camera, then start monitoring.
+          Choose where alerts go, describe what matters, preview the camera, then start video monitoring.
         </p>
       </header>
 
       <main className="app-main">
-        {authSession.authRequired && (
+        {showAccountPanel && (
           <CollapsiblePanel title="Account" contentClassName="account-card">
             <div className="account-header">
-              <p>
-                {authSession.authenticated
-                  ? `Signed in as ${authSession.email ?? authSession.userId ?? 'current user'}`
-                  : 'Sign in to load your devices and events.'}
-              </p>
+              <p>Sign in to load your devices and events.</p>
             </div>
             <div className="account-controls">
               <label className="account-field">
@@ -1831,18 +1911,8 @@ function App() {
                 onClick={handleAccountSignIn}
                 disabled={isAuthenticating}
               >
-                {authSession.authenticated ? 'Switch account' : 'Sign in'}
+                Sign in
               </button>
-              {authSession.authenticated && (
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={handleAccountSignOut}
-                  disabled={isAuthenticating}
-                >
-                  Sign out
-                </button>
-              )}
             </div>
           </CollapsiblePanel>
         )}
@@ -1873,7 +1943,7 @@ function App() {
               <CollapsiblePanel title="Setup monitor" contentClassName="setup-panel" collapsible={false}>
                 <div className="setup-intro">
                   <p className="setup-intro-copy">
-                    Finish these three steps once, then just come back here whenever you want to arm this phone again.
+                    Finish these three steps once, then just come back here whenever you want to use this phone again.
                   </p>
                   <div className="setup-progress" aria-label="Setup steps">
                     <span className="setup-progress-chip">1. Which phone should receive alerts?</span>
@@ -1887,7 +1957,7 @@ function App() {
                     <span className="setup-step-number">1</span>
                     <div>
                       <h3>Which phone should receive alerts?</h3>
-                      <p>Pick the phone that should get Telegram alerts for this monitor.</p>
+                      <p>Pick the phone that should get Telegram alerts for this monitor. We will send you clips alerts to the other phone that must Telegram installed.</p>
                     </div>
                     <span
                       className={`telegram-health telegram-health-${telegramStatusTone}`}
@@ -1951,7 +2021,7 @@ function App() {
                                   Choose this if the monitoring phone should also receive Telegram alerts.
                                 </p>
                                 <p className="telegram-onboarding-copy">
-                                  {checkingTelegramReadiness
+                                  {showTelegramCheckingState
                                     ? 'Checking Telegram readiness...'
                                     : telegramReadiness?.ready
                                     ? 'Telegram alerts are connected.'
@@ -2110,6 +2180,28 @@ function App() {
                                     <span>Latest share link</span>
                                     <code>{latestInviteLink}</code>
                                   </p>
+                                  <div className="telegram-actions telegram-actions-compact">
+                                    <button
+                                      type="button"
+                                      className="telegram-link-button"
+                                      onClick={() => {
+                                        void handleCopyLatestInviteLink()
+                                      }}
+                                    >
+                                      Copy latest share link
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="telegram-link-button"
+                                      onClick={handleCheckTelegramReadiness}
+                                      disabled={checkingTelegramReadiness}
+                                    >
+                                      {checkingTelegramReadiness ? 'Checking...' : 'Check Telegram status'}
+                                    </button>
+                                  </div>
+                                  {latestInviteCopyStatus === 'copied' && (
+                                    <p className="telegram-recipient-meta">Share link copied to clipboard.</p>
+                                  )}
                                   <p className="telegram-recipient-meta">
                                     Open this link on the other phone to connect alerts automatically.
                                   </p>
@@ -2275,9 +2367,9 @@ function App() {
                           Add one short sentence per rule so alerts stay clear and specific.
                         </p>
                         <ul className="analysis-prompt-examples" aria-label="Alert instruction examples">
-                          <li>Alert if someone opens the office door.</li>
-                          <li>Alert if motion happens near the stock shelf after 10 PM.</li>
-                          <li>Alert if a person stands near the front desk for more than a minute.</li>
+                          <li>Alert if my dog comes into the room.</li>
+                          <li>Alert if someone seems to break into my red honda car.</li>
+                          <li>Alert if garbage are placed outside of the garbage deposit.</li>
                         </ul>
                       </div>
                     </div>
@@ -2291,7 +2383,7 @@ function App() {
                               placeholder="Example: Alert me if a person enters through the front door."
                               value={instruction}
                               onChange={(event) => handleAlertInstructionChange(index, event.target.value)}
-                              disabled={sessionStatus === 'active'}
+                              disabled={isSessionActive}
                               rows={2}
                             />
                           </label>
@@ -2300,7 +2392,7 @@ function App() {
                               className="secondary"
                               type="button"
                               onClick={handleAddAlertInstruction}
-                              disabled={sessionStatus === 'active'}
+                              disabled={isSessionActive}
                               aria-label={`Add alert instruction after ${index + 1}`}
                             >
                               Add
@@ -2309,7 +2401,7 @@ function App() {
                               className="secondary analysis-prompt-remove"
                               type="button"
                               onClick={() => handleRemoveAlertInstruction(index)}
-                              disabled={sessionStatus === 'active' || alertInstructions.length === 1}
+                              disabled={isSessionActive || alertInstructions.length === 1}
                               aria-label={`Remove alert instruction ${index + 1}`}
                             >
                               Remove
@@ -2463,7 +2555,7 @@ function App() {
                       type="button"
                       onClick={handleStart}
                       disabled={
-                        sessionStatus === 'active'
+                        isSessionActive
                         || isBusy
                         || isAuthenticating
                         || requiresTelegramOnboarding
@@ -2476,7 +2568,7 @@ function App() {
                       className="secondary"
                       type="button"
                       onClick={handleStop}
-                      disabled={sessionStatus !== 'active' || isBusy || isAuthenticating}
+                      disabled={!isSessionActive || isBusy || isAuthenticating}
                     >
                       Stop
                     </button>

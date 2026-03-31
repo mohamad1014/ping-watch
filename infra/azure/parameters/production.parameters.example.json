@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "production"
+    },
+    "location": {
+      "value": "westeurope"
+    },
+    "postgresServerName": {
+      "value": "replace-with-unique-production-postgres-name"
+    },
+    "postgresAdminLogin": {
+      "value": "pingwatchadmin"
+    },
+    "postgresAdminPassword": {
+      "value": "REPLACE_WITH_PRODUCTION_POSTGRES_PASSWORD"
+    },
+    "postgresDatabaseName": {
+      "value": "pingwatch"
+    },
+    "allowedClientIpStart": {
+      "value": "REPLACE_WITH_VPS_PUBLIC_IP"
+    },
+    "allowedClientIpEnd": {
+      "value": "REPLACE_WITH_VPS_PUBLIC_IP"
+    },
+    "storageAccountName": {
+      "value": "replacewithuniqueprodstorage"
+    },
+    "clipsContainerName": {
+      "value": "clips"
+    },
+    "deployRedis": {
+      "value": false
+    },
+    "redisName": {
+      "value": "replace-with-production-redis-name"
+    },
+    "tags": {
+      "value": {
+        "project": "ping-watch",
+        "environment": "production",
+        "managedBy": "bicep"
+      }
+    }
+  }
+}

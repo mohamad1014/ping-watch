@@ -1,6 +1,6 @@
 # Ping Watch Progress
 
-Updated: **2026-03-23**
+Updated: **2026-03-31**
 
 ## Purpose
 
@@ -160,6 +160,59 @@ Update it after each meaningful step so the repo always reflects:
   - rewrote the Telegram step to default to `A different phone`, renamed invite-sharing copy around a link-first flow, collapsed the step into a compact success row once Telegram is ready, and hid manual code entry behind secondary recovery actions
   - kept manual code acceptance available for recipients with a small fallback path even when the share-link route is the default
   - refreshed frontend tests for the compact Telegram success state and the simplified invite handoff, then reran the full unit, integration, and E2E gates successfully
+- MVP cloud deploy checklist added:
+  - created `docs/mvp-cloud-deploy-checklist.md` to capture the current deployable cloud shape, required secrets, deployment order, smoke tests, observability minimums, and rollback expectations
+  - linked the new checklist from `README.md` so deployment planning docs are discoverable from the main setup guide
+  - kept the checklist aligned with the current stack by explicitly using Redis/RQ for MVP cloud deploys and calling out later production-hardening gaps separately
+- VPS + Azure deployment scaffolding completed:
+  - added path-based frontend hosting support so production builds can target `/ping-watch/` and `/ping-watch-staging/`, including PWA asset and service-worker path handling
+  - added `scripts/build-frontend-static`, `scripts/deploy-vps-release`, VPS `systemd` templates, an nginx location snippet, and a runtime env example for the shared VPS + Azure hosting model
+  - added `.github/workflows/deploy.yml` as a manual staging/production deploy workflow that reruns docs, migration, rollback, unit, integration, and E2E verification before syncing to the VPS
+  - documented the concrete staging/production VPS layout, required GitHub environment secrets, and one-time nginx include/bootstrap steps in `docs/vps-azure-deployment.md`
+  - fixed frontend production typecheck blockers uncovered by the new deploy build path and verified the path-based frontend build locally
+- Staging and production env templates added:
+  - created `infra/vps/env/staging.env.example` and `infra/vps/env/production.env.example` so the VPS runtime files map directly to the selected Azure + VPS hosting shape
+  - linked the new templates from `README.md` and `docs/vps-azure-deployment.md` so they are easy to find during server bootstrap
+- Azure managed-services IaC added:
+  - added `infra/azure/main.bicep` to provision low-cost MVP defaults for Azure Database for PostgreSQL Flexible Server, Azure Managed Redis, and Azure Blob Storage
+  - added staging and production parameter examples plus `infra/azure/README.md` to document the cheapest practical defaults and the deploy flow per subscription
+  - added `scripts/azure-deploy-managed-services` for repeatable resource-group deployment and `scripts/check-azure-iac` for repo-side guardrails
+  - kept the cost baseline intentionally low with PostgreSQL `Standard_B1ms`, Redis `Balanced_B0`, storage `Standard_LRS`, minimal backup retention, and HA disabled where acceptable for MVP
+- VPS Redis runbook added:
+  - documented Ubuntu 24.04 Redis install, local-only bind, service enablement, and queue verification in `docs/vps-redis-setup.md`
+  - added `scripts/check-vps-redis-docs` and wired the new runbook into the main docs consistency checks
+  - aligned the queue setup docs with the cheaper architecture decision to keep Redis on the VPS instead of Azure for now
+- One-command VPS dev deploy added:
+  - added `scripts/deploy-vps-dev` to build the staging frontend, copy `staging.env`, verify VPS prerequisites, sync code/assets, run the remote release step, and perform smoke checks
+  - added targeted script coverage in `worker/tests/test_deploy_vps_dev_script.py`
+  - ignored local `staging.env` and `production.env` files so they stay out of Git during manual VPS setup
+- Live staging smoke review completed:
+  - verified `http://217.154.253.21/ping-watch-staging/` loads through nginx and the backend/worker/redis/nginx services are active on the VPS
+  - confirmed the frontend is rendering the onboarding shell, and after fixing staging auth config propagation the live environment now completes `/auth/dev/login`, `/devices/register`, and Telegram readiness calls successfully
+  - fixed the staging auth mismatch by passing `AUTH_REQUIRED` and `AUTH_DEV_LOGIN_ENABLED` through the frontend build as `VITE_AUTH_REQUIRED` and `VITE_AUTH_AUTO_LOGIN`, then re-deploying the VPS staging app
+  - restored dev login for the staging environment so the development deploy can authenticate and register devices successfully
+- Share-link UX and Telegram invite polish completed:
+  - creating a share link now attempts to copy it to the clipboard immediately and shows a short copied confirmation in the Telegram share section
+  - added a dedicated `Copy latest share link` action next to the newest invite so owners can quickly resend the same link
+  - changed invite acceptance to reuse the current tab when opening Telegram from the receiving phone, which avoids the blank-popup dead end that was happening in the different-phone flow
+  - when a recipient opens a shared invite URL on another phone, the app now immediately surfaces the Telegram continue action and message instead of silently leaving them on the page without a clear next step
+  - limited the “Checking Telegram” label to the active waiting-for-link state so normal background readiness refreshes stop showing the noisy checking copy
+  - added focused frontend coverage for the new clipboard behavior and the quieter readiness state
+  - added a `document.execCommand('copy')` fallback for mobile/insecure-context browsers where `navigator.clipboard` is unavailable, which is important for the current IP-based staging URL
+  - fixed the nginx path redirect so `/ping-watch-staging?invite=...` and `/ping-watch?invite=...` keep their query strings when normalizing to the trailing-slash route, which lets shared invite links survive the first page load
+- Staging notification recovery completed:
+  - fixed Telegram test alerts to fall back to the device's direct Telegram target when subscription rows are missing, so linked devices no longer fail with `409 no telegram recipients configured`
+  - added backend coverage for the test-alert fallback path in `backend/tests/test_notification_recipients_api.py`
+  - refreshed stale frontend copy expectations in `frontend/src/App.test.tsx`
+  - rebuilt and redeployed staging with `./scripts/deploy-vps-dev` after the targeted backend/frontend regressions passed
+- Telegram recipient revoke state refresh completed:
+  - refreshing a recipient subscription or revoking an accepted invite now also refreshes Telegram readiness so the UI stops showing stale green status after access is removed
+  - added frontend coverage for the accepted-invite revoke case in `frontend/src/App.test.tsx`
+  - refreshed the recipient add/remove test flow to match the new post-mutation readiness checks
+- Telegram setup UI follow-up completed:
+  - added a quick `Check Telegram status` action next to the latest generated share link so the owner can manually refresh readiness right after the other phone opens the invite
+  - kept the top account panel hidden while a user is already authenticated so the Telegram setup flow stays focused during staging
+  - refreshed focused frontend coverage for the latest-share-link status action
 
 ## In Progress
 
@@ -171,10 +224,10 @@ Update it after each meaningful step so the repo always reflects:
 
 ## Next Steps
 
-1. Finish the code-quality and production-risk audit.
-2. Finish observability baseline work.
-3. Extend CI/CD to deploy, migrate, and rollback automation.
-4. Run the full unit/integration/E2E gate after the current backend worktree changes settle.
+1. Verify on a real phone that test alerts succeed after Telegram linking and that camera preview behaves correctly once staging moves to HTTPS.
+2. Move staging to HTTPS or a domain-backed origin so camera preview and clipboard/media APIs behave like production browsers expect.
+3. Configure GitHub `staging` and `production` environment secrets once the manual VPS path is stable.
+4. Prepare the production env and run the same deploy flow against the production route.
 
 ## Update Rules
 
