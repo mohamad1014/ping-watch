@@ -13,6 +13,7 @@ See also:
 
 - `docs/environment-strategy.md`
 - `docs/domain-routing-and-tls-plan.md`
+- `infra/vps/nginx/alhajj.nl.shared-site.conf.example`
 
 ## Target Hosting Shape
 

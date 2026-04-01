@@ -1,0 +1,78 @@
+# Shared nginx site draft for `alhajj.nl` and `www.alhajj.nl`.
+#
+# Ownership model:
+# - the top-level site file is shared-domain infrastructure and should live with
+#   the website-owned nginx site config on the VPS
+# - Ping Watch continues to own `/etc/nginx/snippets/ping-watch-locations.conf`
+#
+# This file intentionally includes both:
+# - the public website mounted at `/mohamad`
+# - the Ping Watch paths mounted under `/ping-watch*`
+#
+# Before using it:
+# 1. ensure `/etc/nginx/snippets/ping-watch-locations.conf` exists
+# 2. ensure the website app is running on `127.0.0.1:3000`
+# 3. replace certificate paths if your Certbot layout differs
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name alhajj.nl www.alhajj.nl;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name alhajj.nl www.alhajj.nl;
+
+    ssl_certificate /etc/letsencrypt/live/alhajj.nl/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/alhajj.nl/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    include /etc/nginx/snippets/ping-watch-locations.conf;
+
+    location = / {
+        return 302 /mohamad;
+    }
+
+    location = /mohamad {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    location = /mohamad/ {
+        return 308 /mohamad;
+    }
+
+    location ^~ /mohamad/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    location / {
+        return 404;
+    }
+}

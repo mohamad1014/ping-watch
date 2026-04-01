@@ -233,6 +233,9 @@ Update it after each meaningful step so the repo always reflects:
 - Domain mapping and TLS plan documented:
   - added `docs/domain-routing-and-tls-plan.md` to define the shared-domain route ownership between `../website` and Ping Watch, the recommended nginx ownership split, and the Certbot rollout steps
   - linked the new domain/TLS plan from the environment strategy, VPS deployment guide, README, and docs consistency guard
+- Concrete `alhajj.nl` shared-site draft added:
+  - added `infra/vps/nginx/alhajj.nl.shared-site.conf.example` with a combined website + Ping Watch nginx server-block draft for `alhajj.nl` and `www.alhajj.nl`
+  - updated the domain/TLS plan to use the real target domain examples and to point to the shared-site draft file directly
 
 ## In Progress
 

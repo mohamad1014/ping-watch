@@ -11,6 +11,11 @@ It is written for the current path-based hosting model and can be applied once t
 
 Keep one public domain and one nginx server block for now.
 
+Concrete domain target for the next rollout:
+
+- `alhajj.nl`
+- `www.alhajj.nl`
+
 Recommended path ownership:
 
 - `/mohamad`
@@ -43,7 +48,7 @@ Once the product is more mature, we can still move Ping Watch to a dedicated sub
 
 Short term:
 
-- point the purchased domain to the VPS
+- point `alhajj.nl` and `www.alhajj.nl` to the VPS
 - serve both repos through one HTTPS-enabled nginx site
 - keep Ping Watch path-based
 
@@ -163,6 +168,10 @@ server {
 
 The exact top-level file should still live in the website repo, but this is the shared target shape.
 
+There is also a concrete draft file in this repo:
+
+- `infra/vps/nginx/alhajj.nl.shared-site.conf.example`
+
 ## Certbot Commands
 
 After nginx is serving the real domain on port 80:
@@ -171,7 +180,7 @@ After nginx is serving the real domain on port 80:
 sudo apt-get update
 sudo apt-get install -y certbot python3-certbot-nginx
 sudo nginx -t
-sudo certbot --nginx -d your-domain.example -d www.your-domain.example
+sudo certbot --nginx -d alhajj.nl -d www.alhajj.nl
 ```
 
 Then verify renewal:
@@ -190,9 +199,9 @@ Update:
 
 Expected examples:
 
-- `dev`: `https://your-domain.example`
-- `staging`: `https://your-domain.example`
-- `production`: `https://your-domain.example`
+- `dev`: `https://alhajj.nl`
+- `staging`: `https://alhajj.nl`
+- `production`: `https://alhajj.nl`
 
 The path segment differentiates the environments; the origin stays the same.
 
@@ -201,14 +210,14 @@ The path segment differentiates the environments; the origin stays the same.
 After enabling TLS, verify:
 
 ```bash
-curl -I http://your-domain.example/mohamad
-curl -I https://your-domain.example/mohamad
-curl -I https://your-domain.example/ping-watch-dev
-curl -I https://your-domain.example/ping-watch-staging
-curl -I https://your-domain.example/ping-watch
-curl -I https://your-domain.example/ping-watch-api-dev/docs
-curl -I https://your-domain.example/ping-watch-api-staging/docs
-curl -I https://your-domain.example/ping-watch-api/docs
+curl -I http://alhajj.nl/mohamad
+curl -I https://alhajj.nl/mohamad
+curl -I https://alhajj.nl/ping-watch-dev
+curl -I https://alhajj.nl/ping-watch-staging
+curl -I https://alhajj.nl/ping-watch
+curl -I https://alhajj.nl/ping-watch-api-dev/docs
+curl -I https://alhajj.nl/ping-watch-api-staging/docs
+curl -I https://alhajj.nl/ping-watch-api/docs
 ```
 
 Also verify in real browsers:

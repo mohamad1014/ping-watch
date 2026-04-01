@@ -125,6 +125,7 @@ Execution progress is tracked in `PROGRESS.md`.
 - `docs/mvp-cloud-deploy-checklist.md` — concrete MVP cloud deployment checklist for the current stack.
 - `docs/environment-strategy.md` — environment roles, route mapping, secret separation, and deploy entrypoints for `dev`, `staging`, and `production`.
 - `docs/domain-routing-and-tls-plan.md` — recommended shared-domain route map, nginx ownership split, and TLS rollout plan with the separate `../website` repo.
+- `infra/vps/nginx/alhajj.nl.shared-site.conf.example` — concrete shared nginx site draft for `alhajj.nl` / `www.alhajj.nl`, covering both the website and Ping Watch paths.
 - `docs/vps-azure-deployment.md` — concrete staging/production VPS + Azure deployment plan and GitHub Actions deploy requirements.
 - `docs/vps-redis-setup.md` — Ubuntu VPS Redis install and verification guide for the low-cost local queue setup.
 - `infra/azure/README.md` — Bicep-based Azure managed-services deployment guide for low-cost staging and production.
