@@ -230,6 +230,9 @@ Update it after each meaningful step so the repo always reflects:
   - updated `.github/workflows/deploy.yml` so the manual deploy workflow now supports `dev`, `staging`, and `production`
   - routed the workflow through the shared `./scripts/deploy-vps-environment <environment>` entrypoint so CI and local deploys use the same environment-aware deploy path
   - refreshed VPS deployment docs and targeted script coverage to reflect `dev` as a first-class hosted route alongside staging and production
+- Domain mapping and TLS plan documented:
+  - added `docs/domain-routing-and-tls-plan.md` to define the shared-domain route ownership between `../website` and Ping Watch, the recommended nginx ownership split, and the Certbot rollout steps
+  - linked the new domain/TLS plan from the environment strategy, VPS deployment guide, README, and docs consistency guard
 
 ## In Progress
 

@@ -12,6 +12,7 @@ This document turns the MVP cloud deploy checklist into the concrete hosting sha
 See also:
 
 - `docs/environment-strategy.md`
+- `docs/domain-routing-and-tls-plan.md`
 
 ## Target Hosting Shape
 

@@ -124,6 +124,7 @@ Execution progress is tracked in `PROGRESS.md`.
 - `docs/observability-dashboard-baseline.md` — first dashboard panels for queue stalls and notification failures.
 - `docs/mvp-cloud-deploy-checklist.md` — concrete MVP cloud deployment checklist for the current stack.
 - `docs/environment-strategy.md` — environment roles, route mapping, secret separation, and deploy entrypoints for `dev`, `staging`, and `production`.
+- `docs/domain-routing-and-tls-plan.md` — recommended shared-domain route map, nginx ownership split, and TLS rollout plan with the separate `../website` repo.
 - `docs/vps-azure-deployment.md` — concrete staging/production VPS + Azure deployment plan and GitHub Actions deploy requirements.
 - `docs/vps-redis-setup.md` — Ubuntu VPS Redis install and verification guide for the low-cost local queue setup.
 - `infra/azure/README.md` — Bicep-based Azure managed-services deployment guide for low-cost staging and production.

@@ -106,3 +106,7 @@ Each wrapper delegates to the generic script with the correct environment name.
 1. Move staging to the new domain and HTTPS first.
 2. Keep `dev` local by default; only use hosted `dev` if we need a third persistent VPS slot.
 3. Wire production deploy only after staging runs cleanly with the new domain and secrets model.
+
+See also:
+
+- `docs/domain-routing-and-tls-plan.md`
