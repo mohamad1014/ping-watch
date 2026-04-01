@@ -219,6 +219,10 @@ Update it after each meaningful step so the repo always reflects:
   - replaced the staging-only VPS deploy script with a generic `./scripts/deploy-vps-environment <dev|staging|production>` entrypoint plus thin per-environment wrappers
   - expanded the nginx path template to include hosted `dev` routes alongside staging and production
   - extended script/docs guardrails and targeted script coverage for the new environment-aware deploy flow
+- Environment docs and templates cleanup completed:
+  - refreshed the staging and production env templates so they read as local source files for `/etc/ping-watch/<environment>.env`, with clearer routing notes and a direct pointer to the environment strategy doc
+  - updated `docs/vps-azure-deployment.md` so the directory layout, routes, runtime files, and direct deploy commands cover hosted `dev` in addition to staging and production
+  - linked the hosted env file convention in `README.md` so `dev.env`, `staging.env`, and `production.env` are easier to discover and use consistently
 
 ## In Progress
 

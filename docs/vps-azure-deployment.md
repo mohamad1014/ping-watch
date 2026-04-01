@@ -5,23 +5,31 @@ This document turns the MVP cloud deploy checklist into the concrete hosting sha
 - app hosting on the existing VPS
 - path-based routing on the same domain that already serves `/mohamad`
 - Azure managed PostgreSQL
-- Azure managed Redis
+- VPS-local Redis for the cheapest MVP path
 - Azure Blob Storage
 - GitHub Actions manual deploys after verification
+
+See also:
+
+- `docs/environment-strategy.md`
 
 ## Target Hosting Shape
 
 Frontend and API routes:
 
+- dev frontend: `/ping-watch-dev`
 - production frontend: `/ping-watch`
 - staging frontend: `/ping-watch-staging`
+- dev API: `/ping-watch-api-dev`
 - production API: `/ping-watch-api`
 - staging API: `/ping-watch-api-staging`
 
 Private services:
 
+- dev backend bind: `127.0.0.1:8002`
 - production backend bind: `127.0.0.1:8000`
 - staging backend bind: `127.0.0.1:8001`
+- dev worker: internal `systemd` service only
 - production worker: internal `systemd` service only
 - staging worker: internal `systemd` service only
 
@@ -40,8 +48,11 @@ Suggested server layout:
 /var/www/ping-watch/production/frontend
 /var/www/ping-watch/staging/app
 /var/www/ping-watch/staging/frontend
+/var/www/ping-watch/dev/app
+/var/www/ping-watch/dev/frontend
 /etc/ping-watch/production.env
 /etc/ping-watch/staging.env
+/etc/ping-watch/dev.env
 /etc/systemd/system/ping-watch-backend@.service
 /etc/systemd/system/ping-watch-worker@.service
 /etc/nginx/snippets/ping-watch-locations.conf
@@ -63,6 +74,8 @@ mkdir -p /var/www/ping-watch/production/app
 mkdir -p /var/www/ping-watch/production/frontend
 mkdir -p /var/www/ping-watch/staging/app
 mkdir -p /var/www/ping-watch/staging/frontend
+mkdir -p /var/www/ping-watch/dev/app
+mkdir -p /var/www/ping-watch/dev/frontend
 mkdir -p /etc/ping-watch
 chown -R www-data:www-data /var/www/ping-watch
 ```
@@ -99,21 +112,24 @@ systemctl reload nginx
 Start from:
 
 - `infra/vps/env/runtime.env.example`
+- `infra/vps/env/dev.env.example`
 - `infra/vps/env/staging.env.example`
 - `infra/vps/env/production.env.example`
 
 Create:
 
+- `/etc/ping-watch/dev.env`
 - `/etc/ping-watch/production.env`
 - `/etc/ping-watch/staging.env`
 
 Set at minimum:
 
 - Azure Postgres connection string
-- Azure Redis connection string
+- Redis connection string
 - Azure Blob account values
 - Telegram bot settings
 - worker API token
+- `PORT=8002` for hosted dev
 - `PORT=8000` for production
 - `PORT=8001` for staging
 
@@ -137,21 +153,29 @@ Expected behavior:
 
 ## One-Command VPS Dev Deploy
 
-For the current development/staging-on-VPS workflow, you can deploy directly from your machine with:
+For direct deploys from your machine, use one of:
 
 ```bash
 ./scripts/deploy-vps-dev
+./scripts/deploy-vps-staging
+./scripts/deploy-vps-production
 ```
 
-What it does:
+All three wrapper scripts call:
 
-1. checks local prerequisites and verifies `staging.env` exists
+```bash
+./scripts/deploy-vps-environment <dev|staging|production>
+```
+
+What the generic deploy flow does:
+
+1. checks local prerequisites and verifies the target env file exists
 2. runs docs consistency checks
-3. builds the frontend for `/ping-watch-staging/`
+3. builds the frontend for the correct path-based route
 4. checks the VPS for `nginx`, `redis-server`, local Redis health, and nginx include wiring
-5. copies `staging.env` to `/etc/ping-watch/staging.env`
-6. syncs the repo and built frontend to `/var/www/ping-watch/staging`
-7. runs `./scripts/deploy-vps-release staging` remotely
+5. copies the chosen env file to `/etc/ping-watch/<environment>.env`
+6. syncs the repo and built frontend to `/var/www/ping-watch/<environment>`
+7. runs `./scripts/deploy-vps-release <environment>` remotely
 8. performs basic backend/frontend smoke checks on the VPS
 
 Defaults:
@@ -216,6 +240,16 @@ systemctl status ping-watch-worker@staging
 curl -I http://127.0.0.1:8001/docs
 curl -I https://your-domain/ping-watch-staging
 curl -I https://your-domain/ping-watch-api-staging/docs
+```
+
+Hosted dev:
+
+```bash
+systemctl status ping-watch-backend@dev
+systemctl status ping-watch-worker@dev
+curl -I http://127.0.0.1:8002/docs
+curl -I https://your-domain/ping-watch-dev
+curl -I https://your-domain/ping-watch-api-dev/docs
 ```
 
 ## Operational Notes

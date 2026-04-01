@@ -174,6 +174,12 @@ Note: E2E/Playwright runs use a temp SQLite database for the backend; if you ove
 - `VITE_POLL_INTERVAL_MS` — polling interval for event refresh (default 5000).
 - `VITE_UPLOAD_INTERVAL_MS` — polling interval for retrying pending uploads (default 10000).
 - `VITE_DISABLE_MEDIA` — set to `true` to skip `getUserMedia`/`MediaRecorder` capture (useful for tests/E2E).
+
+Hosted environment source files:
+
+- `dev.env` — local source for hosted `dev`; starts from `infra/vps/env/dev.env.example`.
+- `staging.env` — local source for hosted `staging`; starts from `infra/vps/env/staging.env.example`.
+- `production.env` — local source for hosted `production`; starts from `infra/vps/env/production.env.example`.
 - `DATABASE_URL` — backend DB URL (default Postgres in local dev).
 - `AUTH_REQUIRED` — when `true`, backend write endpoints (`POST`/`PUT`/`PATCH`/`DELETE`) require a bearer token.
 - `AUTH_DEV_LOGIN_ENABLED` — when `true` (default), enables `POST /auth/dev/login` to mint development bearer tokens. Keep this `false` outside local/dev unless you explicitly need the bootstrap route.
