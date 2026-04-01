@@ -8,6 +8,7 @@ on:
         required: true
         type: choice
         options:
+          - dev
           - staging
           - production
 
@@ -144,6 +145,10 @@ jobs:
           app_root="${VPS_APP_ROOT:-/var/www/ping-watch}"
 
           case "${{ inputs.environment }}" in
+            dev)
+              frontend_base_path="/ping-watch-dev/"
+              api_path="/ping-watch-api-dev"
+              ;;
             production)
               frontend_base_path="/ping-watch/"
               api_path="/ping-watch-api"
@@ -165,12 +170,6 @@ jobs:
           echo "frontend_base_path=$frontend_base_path" >> "$GITHUB_OUTPUT"
           echo "api_url=$api_url" >> "$GITHUB_OUTPUT"
 
-      - name: Build frontend
-        run: |
-          ./scripts/build-frontend-static \
-            "${{ steps.settings.outputs.frontend_base_path }}" \
-            "${{ steps.settings.outputs.api_url }}"
-
       - name: Start SSH agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
@@ -189,39 +188,13 @@ jobs:
           fi
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Sync application code
+      - name: Run environment deploy
         shell: bash
         run: |
           set -euo pipefail
-          remote_base="${{ steps.settings.outputs.app_root }}/${{ inputs.environment }}"
-          ssh -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" \
-            "sudo install -d -m 0775 -o ${VPS_USER} -g ${VPS_USER} '${remote_base}/app' '${remote_base}/frontend'"
-          rsync -az --delete \
-            --exclude '.git/' \
-            --exclude 'frontend/node_modules/' \
-            --exclude 'frontend/dist/' \
-            --exclude 'backend/.venv/' \
-            --exclude 'worker/.venv/' \
-            --exclude 'e2e/node_modules/' \
-            --exclude '.env' \
-            --exclude '.env.*' \
-            ./ "${VPS_USER}@${VPS_HOST}:${remote_base}/app/"
-
-      - name: Sync built frontend
-        shell: bash
-        run: |
-          set -euo pipefail
-          remote_base="${{ steps.settings.outputs.app_root }}/${{ inputs.environment }}"
-          rsync -az --delete \
-            frontend/dist/ "${VPS_USER}@${VPS_HOST}:${remote_base}/frontend/"
-
-      - name: Install service templates and deploy release
-        shell: bash
-        run: |
-          set -euo pipefail
-          ssh -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" \
-            "cd '${{ steps.settings.outputs.app_root }}/${{ inputs.environment }}/app' && \
-             sudo install -m 0644 infra/vps/systemd/ping-watch-backend@.service /etc/systemd/system/ping-watch-backend@.service && \
-             sudo install -m 0644 infra/vps/systemd/ping-watch-worker@.service /etc/systemd/system/ping-watch-worker@.service && \
-             sudo install -m 0644 infra/vps/nginx/ping-watch.locations.conf.template /etc/nginx/snippets/ping-watch-locations.conf && \
-             PING_WATCH_SERVER_ROOT='${{ steps.settings.outputs.app_root }}' ./scripts/deploy-vps-release '${{ inputs.environment }}'"
+          export PING_WATCH_VPS_HOST="${VPS_HOST}"
+          export PING_WATCH_VPS_USER="${VPS_USER}"
+          export PING_WATCH_VPS_PORT="${VPS_PORT:-22}"
+          export PING_WATCH_PUBLIC_ORIGIN="${PUBLIC_ORIGIN}"
+          export PING_WATCH_SERVER_ROOT="${{ steps.settings.outputs.app_root }}"
+          ./scripts/deploy-vps-environment '${{ inputs.environment }}'

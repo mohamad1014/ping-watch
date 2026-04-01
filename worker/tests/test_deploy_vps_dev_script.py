@@ -93,3 +93,16 @@ def test_nginx_snippet_preserves_query_strings_and_supports_all_paths():
     assert 'return 308 /ping-watch-api/$is_args$args;' in content
     assert 'return 308 /ping-watch-api-staging/$is_args$args;' in content
     assert 'proxy_pass http://127.0.0.1:8002/;' in content
+
+
+def test_deploy_workflow_supports_dev_staging_and_production():
+    repo_root = Path(__file__).resolve().parents[2]
+    workflow = repo_root / ".github" / "workflows" / "deploy.yml"
+    content = workflow.read_text()
+
+    assert "- dev" in content
+    assert "- staging" in content
+    assert "- production" in content
+    assert 'frontend_base_path="/ping-watch-dev/"' in content
+    assert 'api_path="/ping-watch-api-dev"' in content
+    assert "./scripts/deploy-vps-environment '${{ inputs.environment }}'" in content

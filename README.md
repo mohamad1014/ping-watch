@@ -128,6 +128,7 @@ Execution progress is tracked in `PROGRESS.md`.
 - `docs/vps-redis-setup.md` — Ubuntu VPS Redis install and verification guide for the low-cost local queue setup.
 - `infra/azure/README.md` — Bicep-based Azure managed-services deployment guide for low-cost staging and production.
 - `.github/workflows/deploy.yml` — manual staging/production deploy workflow that reruns verification before syncing to the VPS.
+  It now supports `dev`, `staging`, and `production` targets through the shared VPS deploy entrypoint.
 - `infra/vps/env/dev.env.example`, `infra/vps/env/staging.env.example`, and `infra/vps/env/production.env.example` — fill-in templates for `/etc/ping-watch/<environment>.env`.
 
 ## Getting Started (local)

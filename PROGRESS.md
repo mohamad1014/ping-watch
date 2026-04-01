@@ -226,6 +226,10 @@ Update it after each meaningful step so the repo always reflects:
 - Shared platform boundary docs completed:
   - added `PLATFORM.md` here and in `../website` so both repos document which product, routes, and responsibilities live where on the shared VPS/domain
   - linked the new platform boundary doc from this repo's `README.md`
+- GitHub deploy flow expanded to all hosted environments:
+  - updated `.github/workflows/deploy.yml` so the manual deploy workflow now supports `dev`, `staging`, and `production`
+  - routed the workflow through the shared `./scripts/deploy-vps-environment <environment>` entrypoint so CI and local deploys use the same environment-aware deploy path
+  - refreshed VPS deployment docs and targeted script coverage to reflect `dev` as a first-class hosted route alongside staging and production
 
 ## In Progress
 

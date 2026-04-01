@@ -144,12 +144,10 @@ The deploy workflow lives in:
 Expected behavior:
 
 1. manual `workflow_dispatch`
-2. choose `staging` or `production`
+2. choose `dev`, `staging`, or `production`
 3. rerun docs, migration, rollback, unit, integration, and E2E checks in GitHub Actions
-4. build the frontend with the correct base path and API path
-5. sync repo files plus built frontend assets to the VPS
-6. run migrations on the target environment
-7. restart backend and worker services
+4. resolve the correct path-based routes and VPS target for the selected environment
+5. run the generic `./scripts/deploy-vps-environment <environment>` flow from CI
 
 ## One-Command VPS Dev Deploy
 
@@ -196,6 +194,7 @@ Override with environment variables when needed:
 
 Create GitHub Environments named:
 
+- `dev`
 - `staging`
 - `production`
 
