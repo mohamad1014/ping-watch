@@ -79,6 +79,7 @@ Execution progress is tracked in `PROGRESS.md`.
 - `scripts/` — dev/test/logs entrypoints
 - `docs/` — architecture and decisions
 - `PROGRESS.md` — live execution tracker for completed work, active work, blockers, and next steps
+- `PLATFORM.md` — short boundary doc describing what lives in this repo vs the separate `../website` repo
 
 ## Decisions (2026-01-24)
 

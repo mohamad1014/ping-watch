@@ -223,6 +223,9 @@ Update it after each meaningful step so the repo always reflects:
   - refreshed the staging and production env templates so they read as local source files for `/etc/ping-watch/<environment>.env`, with clearer routing notes and a direct pointer to the environment strategy doc
   - updated `docs/vps-azure-deployment.md` so the directory layout, routes, runtime files, and direct deploy commands cover hosted `dev` in addition to staging and production
   - linked the hosted env file convention in `README.md` so `dev.env`, `staging.env`, and `production.env` are easier to discover and use consistently
+- Shared platform boundary docs completed:
+  - added `PLATFORM.md` here and in `../website` so both repos document which product, routes, and responsibilities live where on the shared VPS/domain
+  - linked the new platform boundary doc from this repo's `README.md`
 
 ## In Progress
 
