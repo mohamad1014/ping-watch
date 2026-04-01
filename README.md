@@ -99,6 +99,7 @@ Execution progress is tracked in `PROGRESS.md`.
 - `./scripts/test-all` — run all tests.
 - `./scripts/check-migrations` — verify Alembic can upgrade an isolated database to the current head revision.
 - `./scripts/staging-rollback-drill` — validate upgrade, rollback, and re-apply against an isolated database or a provided `DATABASE_URL`.
+- `./scripts/deploy-vps-dev` — build and deploy the staging/dev environment to the VPS, including copying `staging.env`.
 - `./scripts/check-docs-consistency` — verify docs/script consistency for key commands.
 - `./scripts/clean-local` — remove local-only test/runtime artifacts.
 - `./scripts/create-wave1-worktrees` — create Wave 1 Git worktrees for parallel Codex execution.
@@ -117,6 +118,12 @@ Execution progress is tracked in `PROGRESS.md`.
 - `docs/queue-stall-runbook.md` — queue backlog, stalled worker, and backlog response runbook.
 - `docs/notification-failure-runbook.md` — Telegram/webhook notification failure triage.
 - `docs/observability-dashboard-baseline.md` — first dashboard panels for queue stalls and notification failures.
+- `docs/mvp-cloud-deploy-checklist.md` — concrete MVP cloud deployment checklist for the current stack.
+- `docs/vps-azure-deployment.md` — concrete staging/production VPS + Azure deployment plan and GitHub Actions deploy requirements.
+- `docs/vps-redis-setup.md` — Ubuntu VPS Redis install and verification guide for the low-cost local queue setup.
+- `infra/azure/README.md` — Bicep-based Azure managed-services deployment guide for low-cost staging and production.
+- `.github/workflows/deploy.yml` — manual staging/production deploy workflow that reruns verification before syncing to the VPS.
+- `infra/vps/env/staging.env.example` and `infra/vps/env/production.env.example` — fill-in templates for `/etc/ping-watch/staging.env` and `/etc/ping-watch/production.env`.
 
 ## Getting Started (local)
 
@@ -156,6 +163,7 @@ Note: E2E/Playwright runs use a temp SQLite database for the backend; if you ove
 ## Environment
 
 - `VITE_API_URL` — optional backend base URL override for the frontend. If unset, frontend uses `<current-host>:8000` (better for phone/LAN testing). Set explicitly when backend is on a different host/port.
+- `VITE_BASE_PATH` — optional build-time base path for path-hosted deploys such as `/ping-watch/` or `/ping-watch-staging/`.
 - `VITE_AUTH_REQUIRED` — when `true`, frontend obtains/stores a bearer token via `POST /auth/dev/login` and sends `Authorization: Bearer ...` on API requests.
 - `VITE_AUTH_AUTO_LOGIN` — when `true`, frontend can auto-bootstrap a dev auth token; set `false` to require explicit sign-in from the account panel.
 - `VITE_ALLOWED_HOSTS` — optional comma-separated extra hostnames allowed by the Vite dev server (useful for tunnel domains).

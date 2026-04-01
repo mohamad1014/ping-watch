@@ -1,0 +1,227 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DATABASE_URL: postgresql+psycopg://pingwatch:pingwatch@localhost:5432/pingwatch
+      POSTGRES_URL: postgresql://pingwatch:pingwatch@localhost:5432/pingwatch
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: pingwatch
+          POSTGRES_PASSWORD: pingwatch
+          POSTGRES_DB: pingwatch
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pingwatch -d pingwatch"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            e2e/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install e2e dependencies
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install backend dependencies
+        run: |
+          python -m venv backend/.venv
+          backend/.venv/bin/pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+
+      - name: Install worker dependencies
+        run: |
+          python -m venv worker/.venv
+          worker/.venv/bin/pip install -r worker/requirements.txt -r worker/requirements-dev.txt
+
+      - name: Install Playwright browser + system deps
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Docs consistency
+        run: ./scripts/check-docs-consistency
+
+      - name: Migration check
+        run: ./scripts/check-migrations
+
+      - name: Rollback drill
+        run: ./scripts/staging-rollback-drill
+
+      - name: Unit tests
+        run: ./scripts/test-unit
+
+      - name: Integration tests
+        run: ./scripts/test-integration
+
+      - name: E2E tests
+        run: ./scripts/test-e2e
+
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs:
+      - verify
+    environment: ${{ inputs.environment }}
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_PORT: ${{ secrets.VPS_PORT }}
+      VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+      PUBLIC_ORIGIN: ${{ secrets.PUBLIC_ORIGIN }}
+      VPS_APP_ROOT: ${{ secrets.VPS_APP_ROOT }}
+      SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Resolve environment settings
+        id: settings
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${PUBLIC_ORIGIN}" ]]; then
+            echo "PUBLIC_ORIGIN secret is required" >&2
+            exit 1
+          fi
+
+          app_root="${VPS_APP_ROOT:-/var/www/ping-watch}"
+
+          case "${{ inputs.environment }}" in
+            production)
+              frontend_base_path="/ping-watch/"
+              api_path="/ping-watch-api"
+              ;;
+            staging)
+              frontend_base_path="/ping-watch-staging/"
+              api_path="/ping-watch-api-staging"
+              ;;
+            *)
+              echo "unsupported environment: ${{ inputs.environment }}" >&2
+              exit 1
+              ;;
+          esac
+
+          public_origin="${PUBLIC_ORIGIN%/}"
+          api_url="${public_origin}${api_path}"
+
+          echo "app_root=$app_root" >> "$GITHUB_OUTPUT"
+          echo "frontend_base_path=$frontend_base_path" >> "$GITHUB_OUTPUT"
+          echo "api_url=$api_url" >> "$GITHUB_OUTPUT"
+
+      - name: Build frontend
+        run: |
+          ./scripts/build-frontend-static \
+            "${{ steps.settings.outputs.frontend_base_path }}" \
+            "${{ steps.settings.outputs.api_url }}"
+
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ env.VPS_SSH_PRIVATE_KEY }}
+
+      - name: Configure SSH known hosts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          if [[ -n "${SSH_KNOWN_HOSTS}" ]]; then
+            printf '%s\n' "${SSH_KNOWN_HOSTS}" >> ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "${VPS_PORT:-22}" -H "${VPS_HOST}" >> ~/.ssh/known_hosts
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Sync application code
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_base="${{ steps.settings.outputs.app_root }}/${{ inputs.environment }}"
+          ssh -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" \
+            "sudo install -d -m 0775 -o ${VPS_USER} -g ${VPS_USER} '${remote_base}/app' '${remote_base}/frontend'"
+          rsync -az --delete \
+            --exclude '.git/' \
+            --exclude 'frontend/node_modules/' \
+            --exclude 'frontend/dist/' \
+            --exclude 'backend/.venv/' \
+            --exclude 'worker/.venv/' \
+            --exclude 'e2e/node_modules/' \
+            --exclude '.env' \
+            --exclude '.env.*' \
+            ./ "${VPS_USER}@${VPS_HOST}:${remote_base}/app/"
+
+      - name: Sync built frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_base="${{ steps.settings.outputs.app_root }}/${{ inputs.environment }}"
+          rsync -az --delete \
+            frontend/dist/ "${VPS_USER}@${VPS_HOST}:${remote_base}/frontend/"
+
+      - name: Install service templates and deploy release
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" \
+            "cd '${{ steps.settings.outputs.app_root }}/${{ inputs.environment }}/app' && \
+             sudo install -m 0644 infra/vps/systemd/ping-watch-backend@.service /etc/systemd/system/ping-watch-backend@.service && \
+             sudo install -m 0644 infra/vps/systemd/ping-watch-worker@.service /etc/systemd/system/ping-watch-worker@.service && \
+             sudo install -m 0644 infra/vps/nginx/ping-watch.locations.conf.template /etc/nginx/snippets/ping-watch-locations.conf && \
+             PING_WATCH_SERVER_ROOT='${{ steps.settings.outputs.app_root }}' ./scripts/deploy-vps-release '${{ inputs.environment }}'"

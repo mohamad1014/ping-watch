@@ -1,0 +1,281 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$scripts_dir/.." && pwd)
+
+staging_env_source="$repo_root/staging.env"
+vps_host=${PING_WATCH_VPS_HOST:-217.154.253.21}
+vps_user=${PING_WATCH_VPS_USER:-root}
+vps_port=${PING_WATCH_VPS_PORT:-22}
+public_origin=${PING_WATCH_PUBLIC_ORIGIN:-http://$vps_host}
+server_root=${PING_WATCH_SERVER_ROOT:-/var/www/ping-watch}
+ssh_key_path=${PING_WATCH_VPS_SSH_KEY:-$HOME/.ssh/websitekey}
+
+frontend_base_path="/ping-watch-staging/"
+api_url="${public_origin}/ping-watch-api-staging"
+remote_release_root="$server_root/staging"
+remote_app_root="$remote_release_root/app"
+remote_frontend_root="$remote_release_root/frontend"
+remote_env_path="/etc/ping-watch/staging.env"
+ssh_target="${vps_user}@${vps_host}"
+ssh_args=(-p "$vps_port")
+
+fail() {
+  echo "deploy-vps-dev: $*" >&2
+  exit 1
+}
+
+require_local_file() {
+  local path="$1"
+  [[ -f "$path" ]] || fail "missing required local file: $path"
+}
+
+require_local_command() {
+  local name="$1"
+  command -v "$name" >/dev/null 2>&1 || fail "missing required local command: $name"
+}
+
+read_env_value() {
+  local path="$1"
+  local key="$2"
+  python3 - <<'PY' "$path" "$key"
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+key = sys.argv[2]
+
+for raw_line in path.read_text().splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    current_key, value = line.split("=", 1)
+    if current_key == key:
+        print(value)
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+}
+
+reject_placeholder_env_values() {
+  local path="$1"
+  python3 - <<'PY' "$path"
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+required_keys = {
+    "DATABASE_URL",
+    "REDIS_URL",
+    "AZURITE_BLOB_ENDPOINT",
+    "AZURITE_ACCOUNT_NAME",
+    "AZURITE_ACCOUNT_KEY",
+    "AZURITE_CLIPS_CONTAINER",
+    "BACKEND_CORS_ORIGINS",
+    "WORKER_API_TOKEN",
+}
+placeholders = (
+    "replace-with-",
+    "staging-postgres-host",
+    "stagingstorageaccount",
+    "staging_user:staging_password",
+)
+
+values = {}
+for raw_line in path.read_text().splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, value = line.split("=", 1)
+    values[key] = value
+
+missing = [key for key in sorted(required_keys) if not values.get(key)]
+bad = [
+    key for key in sorted(required_keys)
+    if any(token in values.get(key, "") for token in placeholders)
+]
+
+if missing or bad:
+    parts = []
+    if missing:
+        parts.append(f"missing required keys: {', '.join(missing)}")
+    if bad:
+        parts.append(f"placeholder values in: {', '.join(bad)}")
+    raise SystemExit("; ".join(parts))
+PY
+  local status=$?
+  if [[ $status -ne 0 ]]; then
+    fail "staging env file is not ready for deploy: $path"
+  fi
+}
+
+run_remote() {
+  ssh "${ssh_args[@]}" "$ssh_target" "$@"
+}
+
+echo "Checking local prerequisites"
+require_local_command ssh
+require_local_command rsync
+require_local_command curl
+require_local_file "$staging_env_source"
+require_local_file "$repo_root/scripts/build-frontend-static"
+require_local_file "$repo_root/scripts/deploy-vps-release"
+reject_placeholder_env_values "$staging_env_source"
+
+if [[ -f "$ssh_key_path" ]]; then
+  ssh_args+=(-i "$ssh_key_path")
+elif [[ -f "${ssh_key_path}.ppk" ]]; then
+  fail "found only PuTTY key ${ssh_key_path}.ppk; provide an OpenSSH private key via PING_WATCH_VPS_SSH_KEY or convert the .ppk first"
+else
+  fail "missing SSH private key: $ssh_key_path"
+fi
+
+echo "Running local docs guard"
+"$repo_root/scripts/check-docs-consistency"
+
+frontend_auth_required=$(read_env_value "$staging_env_source" "AUTH_REQUIRED") \
+  || fail "missing AUTH_REQUIRED in $staging_env_source"
+frontend_auth_auto_login=$(read_env_value "$staging_env_source" "AUTH_DEV_LOGIN_ENABLED") \
+  || fail "missing AUTH_DEV_LOGIN_ENABLED in $staging_env_source"
+
+echo "Building frontend for $frontend_base_path"
+(
+  cd "$repo_root"
+  ./scripts/build-frontend-static "$frontend_base_path" "$api_url" "" "$frontend_auth_required" "$frontend_auth_auto_login"
+)
+
+echo "Running remote preflight checks on $ssh_target"
+run_remote "bash -se" <<'REMOTE_PRECHECK'
+set -euo pipefail
+
+fail() {
+  echo "remote preflight failed: $*" >&2
+  exit 1
+}
+
+if [[ $(id -u) -eq 0 ]]; then
+  SUDO=""
+else
+  SUDO="sudo"
+fi
+
+command -v python3 >/dev/null 2>&1 || fail "python3 is not installed"
+command -v rsync >/dev/null 2>&1 || fail "rsync is not installed"
+command -v nginx >/dev/null 2>&1 || fail "nginx is not installed"
+command -v redis-cli >/dev/null 2>&1 || fail "redis-cli is not installed"
+python3 -m venv --help >/dev/null 2>&1 || fail "python3-venv is not available"
+command -v systemctl >/dev/null 2>&1 || fail "systemctl is not available"
+
+$SUDO systemctl is-enabled nginx >/dev/null 2>&1 || fail "nginx is not enabled"
+$SUDO systemctl is-enabled redis-server >/dev/null 2>&1 || fail "redis-server is not enabled"
+$SUDO systemctl is-active nginx >/dev/null 2>&1 || fail "nginx is not running"
+$SUDO systemctl is-active redis-server >/dev/null 2>&1 || fail "redis-server is not running"
+
+[[ $(redis-cli -h 127.0.0.1 ping) == "PONG" ]] || fail "redis-cli -h 127.0.0.1 ping did not return PONG"
+
+test -f /etc/nginx/sites-available/maah || fail "missing /etc/nginx/sites-available/maah"
+
+$SUDO install -d -m 0775 -o "$(id -un)" -g "$(id -gn)" /var/www/ping-watch/staging/app /var/www/ping-watch/staging/frontend
+$SUDO install -d -m 0750 -o root -g www-data /etc/ping-watch
+REMOTE_PRECHECK
+
+echo "Copying staging.env to $remote_env_path"
+rsync -az -e "ssh ${ssh_args[*]}" "$staging_env_source" "$ssh_target:/tmp/ping-watch-staging.env"
+run_remote "bash -se" <<'REMOTE_ENV'
+set -euo pipefail
+
+if [[ $(id -u) -eq 0 ]]; then
+  SUDO=""
+else
+  SUDO="sudo"
+fi
+
+$SUDO install -m 0640 -o root -g www-data /tmp/ping-watch-staging.env /etc/ping-watch/staging.env
+rm -f /tmp/ping-watch-staging.env
+REMOTE_ENV
+
+echo "Syncing application code to $remote_app_root"
+rsync -az --delete -e "ssh ${ssh_args[*]}" \
+  --exclude '.git/' \
+  --exclude 'frontend/node_modules/' \
+  --exclude 'frontend/dist/' \
+  --exclude 'backend/.venv/' \
+  --exclude 'worker/.venv/' \
+  --exclude 'e2e/node_modules/' \
+  --exclude '.env' \
+  --exclude '.env.*' \
+  --exclude 'staging.env' \
+  --exclude 'production.env' \
+  ./ "$ssh_target:$remote_app_root/"
+
+echo "Syncing built frontend to $remote_frontend_root"
+rsync -az --delete -e "ssh ${ssh_args[*]}" \
+  frontend/dist/ "$ssh_target:$remote_frontend_root/"
+
+echo "Ensuring nginx include wiring on VPS"
+run_remote "bash -se" <<'REMOTE_NGINX'
+set -euo pipefail
+
+site_file="/etc/nginx/sites-available/maah"
+include_line="    include /etc/nginx/snippets/ping-watch-locations.conf;"
+
+if [[ ! -f "$site_file" ]]; then
+  echo "remote nginx setup failed: missing $site_file" >&2
+  exit 1
+fi
+
+if ! grep -Fq "/etc/nginx/snippets/ping-watch-locations.conf" "$site_file"; then
+  python3 - <<'PY'
+from pathlib import Path
+
+site_file = Path("/etc/nginx/sites-available/maah")
+content = site_file.read_text()
+needle = "    location / {\n        return 404;\n    }\n"
+replacement = "    include /etc/nginx/snippets/ping-watch-locations.conf;\n\n    location / {\n        return 404;\n    }\n"
+if needle not in content:
+    raise SystemExit("could not find insertion point in /etc/nginx/sites-available/maah")
+site_file.write_text(content.replace(needle, replacement, 1))
+PY
+fi
+
+nginx -t >/dev/null
+REMOTE_NGINX
+
+echo "Running remote deploy-vps-release staging"
+run_remote "bash -se" <<REMOTE_DEPLOY
+set -euo pipefail
+cd "$remote_app_root"
+PING_WATCH_SERVER_ROOT='/var/www/ping-watch' ./scripts/deploy-vps-release 'staging'
+REMOTE_DEPLOY
+
+echo "Running remote smoke checks"
+run_remote "bash -se" <<'REMOTE_SMOKE'
+set -euo pipefail
+
+if [[ $(id -u) -eq 0 ]]; then
+  SUDO=""
+else
+  SUDO="sudo"
+fi
+
+$SUDO systemctl is-active ping-watch-backend@staging >/dev/null
+$SUDO systemctl is-active ping-watch-worker@staging >/dev/null
+
+for attempt in 1 2 3 4 5; do
+  if \
+    curl -I http://127.0.0.1:8001/docs --fail --silent >/dev/null && \
+    curl -I http://127.0.0.1/ping-watch-staging --fail --silent >/dev/null && \
+    curl -I http://127.0.0.1/ping-watch-api-staging/docs --fail --silent >/dev/null
+  then
+    exit 0
+  fi
+  sleep 2
+done
+
+echo "remote smoke checks failed after retries" >&2
+exit 1
+REMOTE_SMOKE
+
+echo "deploy-vps-dev: staging deploy completed successfully"

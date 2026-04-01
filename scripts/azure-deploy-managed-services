@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -lt 4 ]]; then
+  echo "usage: $0 <staging|production> <subscription-id> <resource-group> <parameters-file>" >&2
+  exit 1
+fi
+
+environment_name=$1
+subscription_id=$2
+resource_group=$3
+parameters_file=$4
+
+scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$scripts_dir/.." && pwd)
+template_file="$repo_root/infra/azure/main.bicep"
+
+if ! command -v az >/dev/null 2>&1; then
+  echo "Azure CLI is required. Install it first: https://learn.microsoft.com/cli/azure/install-azure-cli" >&2
+  exit 1
+fi
+
+if [[ ! -f "$template_file" ]]; then
+  echo "missing template: $template_file" >&2
+  exit 1
+fi
+
+if [[ ! -f "$parameters_file" ]]; then
+  echo "missing parameters file: $parameters_file" >&2
+  exit 1
+fi
+
+location=$(python3 - <<'PY' "$parameters_file"
+import json, sys
+with open(sys.argv[1], 'r', encoding='utf-8') as fh:
+    data = json.load(fh)
+print(data.get('parameters', {}).get('location', {}).get('value', 'westeurope'))
+PY
+)
+
+echo "Using subscription: $subscription_id"
+az account set --subscription "$subscription_id"
+
+echo "Ensuring resource group exists: $resource_group ($location)"
+az group create --name "$resource_group" --location "$location" >/dev/null
+
+echo "Deploying managed services for $environment_name"
+az deployment group create \
+  --resource-group "$resource_group" \
+  --name "ping-watch-${environment_name}-$(date +%Y%m%d%H%M%S)" \
+  --template-file "$template_file" \
+  --parameters @"$parameters_file" \
+  --query properties.outputs

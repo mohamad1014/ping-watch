@@ -1,10 +1,24 @@
 const CACHE_NAME = 'ping-watch-static-v1'
+const basePath = self.location.pathname.endsWith('/sw.js')
+  ? self.location.pathname.slice(0, -'/sw.js'.length)
+  : ''
+
+const withBasePath = (path) => {
+  if (!basePath) {
+    return path
+  }
+  if (path === '/') {
+    return `${basePath}/`
+  }
+  return `${basePath}${path}`
+}
+
 const ASSETS = [
-  '/',
-  '/index.html',
-  '/manifest.webmanifest',
-  '/pwa-icon-192.svg',
-  '/pwa-icon-512.svg',
+  withBasePath('/'),
+  withBasePath('/index.html'),
+  withBasePath('/manifest.webmanifest'),
+  withBasePath('/pwa-icon-192.svg'),
+  withBasePath('/pwa-icon-512.svg'),
 ]
 
 self.addEventListener('install', (event) => {

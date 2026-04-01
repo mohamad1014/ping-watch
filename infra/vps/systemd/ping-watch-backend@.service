@@ -1,0 +1,16 @@
+[Unit]
+Description=Ping Watch backend (%i)
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/ping-watch/%i/app/backend
+EnvironmentFile=/etc/ping-watch/%i.env
+ExecStart=/var/www/ping-watch/%i/app/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port ${PORT}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

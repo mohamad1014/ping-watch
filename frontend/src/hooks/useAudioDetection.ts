@@ -13,7 +13,7 @@ export const useAudioDetection = (): AudioDetectionState => {
 
   const audioContextRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
-  const audioDataRef = useRef<Float32Array | null>(null)
+  const audioDataRef = useRef<Float32Array<ArrayBuffer> | null>(null)
   const scoreRef = useRef(0)
 
   const getScore = useCallback(() => {
@@ -56,7 +56,9 @@ export const useAudioDetection = (): AudioDetectionState => {
       source.connect(analyser)
 
       analyserRef.current = analyser
-      audioDataRef.current = new Float32Array(analyser.fftSize)
+      audioDataRef.current = new Float32Array(
+        new ArrayBuffer(analyser.fftSize * Float32Array.BYTES_PER_ELEMENT)
+      )
 
       console.log('[useAudioDetection] Setup complete')
     } catch (err) {

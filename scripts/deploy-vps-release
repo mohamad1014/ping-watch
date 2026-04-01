@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+environment_name=${1:?usage: deploy-vps-release <staging|production>}
+
+server_root=${PING_WATCH_SERVER_ROOT:-/var/www/ping-watch}
+deploy_root="$server_root/$environment_name"
+app_root="$deploy_root/app"
+frontend_root="$deploy_root/frontend"
+env_file="/etc/ping-watch/${environment_name}.env"
+
+if [[ ! -f "$env_file" ]]; then
+  echo "missing environment file: $env_file" >&2
+  exit 1
+fi
+
+set -a
+. "$env_file"
+set +a
+
+if [[ ! -d "$app_root/backend" ]]; then
+  echo "missing backend app directory: $app_root/backend" >&2
+  exit 1
+fi
+
+if [[ ! -d "$app_root/worker" ]]; then
+  echo "missing worker app directory: $app_root/worker" >&2
+  exit 1
+fi
+
+if [[ ! -f "$frontend_root/index.html" ]]; then
+  echo "missing built frontend assets: $frontend_root/index.html" >&2
+  exit 1
+fi
+
+if [[ -f "$app_root/infra/vps/systemd/ping-watch-backend@.service" ]]; then
+  sudo install -m 0644 "$app_root/infra/vps/systemd/ping-watch-backend@.service" /etc/systemd/system/ping-watch-backend@.service
+fi
+
+if [[ -f "$app_root/infra/vps/systemd/ping-watch-worker@.service" ]]; then
+  sudo install -m 0644 "$app_root/infra/vps/systemd/ping-watch-worker@.service" /etc/systemd/system/ping-watch-worker@.service
+fi
+
+if [[ -f "$app_root/infra/vps/nginx/ping-watch.locations.conf.template" ]]; then
+  sudo install -d -m 0755 /etc/nginx/snippets
+  sudo install -m 0644 "$app_root/infra/vps/nginx/ping-watch.locations.conf.template" /etc/nginx/snippets/ping-watch-locations.conf
+fi
+
+cd "$app_root/backend"
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+.venv/bin/alembic upgrade head
+
+cd "$app_root/worker"
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+
+sudo systemctl daemon-reload
+sudo systemctl enable "ping-watch-backend@${environment_name}" "ping-watch-worker@${environment_name}"
+sudo systemctl restart "ping-watch-backend@${environment_name}" "ping-watch-worker@${environment_name}"
+sudo nginx -t
+sudo systemctl reload nginx

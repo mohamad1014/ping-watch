@@ -1197,7 +1197,20 @@ def send_telegram_test_alert(
         if subscribed
     ]
     if not recipients:
-        raise HTTPException(status_code=409, detail="no telegram recipients configured")
+        fallback_chat_id, _ = get_telegram_target_for_device(db, device)
+        if not fallback_chat_id:
+            raise HTTPException(status_code=409, detail="no telegram recipients configured")
+
+        message = (
+            "Ping Watch test alert\n\n"
+            f"Device {payload.device_id} is connected and ready to send Telegram notifications."
+        )
+        _send_telegram_message(token, fallback_chat_id, message)
+        logger.info(
+            "Sent Telegram test alert for device %s using fallback target",
+            payload.device_id,
+        )
+        return TelegramTestAlertResponse(ok=True, delivered_count=1)
 
     message = (
         "Ping Watch test alert\n\n"

@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd "$scripts_dir/.." && pwd)
+
+status=0
+
+require_file() {
+  local path="$1"
+  if [[ ! -f "$path" ]]; then
+    echo "missing file: $path"
+    status=1
+  fi
+}
+
+require_text() {
+  local file="$1"
+  local pattern="$2"
+  local message="$3"
+  if ! grep -Eq "$pattern" "$file"; then
+    echo "$message"
+    status=1
+  fi
+}
+
+require_no_text() {
+  local file="$1"
+  local pattern="$2"
+  local message="$3"
+  if grep -Eq "$pattern" "$file"; then
+    echo "$message"
+    status=1
+  fi
+}
+
+require_file "$repo_root/infra/azure/main.bicep"
+require_file "$repo_root/infra/azure/README.md"
+require_file "$repo_root/infra/azure/parameters/staging.parameters.example.json"
+require_file "$repo_root/infra/azure/parameters/production.parameters.example.json"
+require_file "$repo_root/scripts/azure-deploy-managed-services"
+
+require_text "$repo_root/infra/azure/main.bicep" "Standard_B1ms" "main.bicep should keep the low-cost PostgreSQL default"
+require_text "$repo_root/infra/azure/main.bicep" "Balanced_B0" "main.bicep should keep the low-cost Redis default"
+require_text "$repo_root/infra/azure/main.bicep" "Standard_LRS" "main.bicep should keep the low-cost storage default"
+require_text "$repo_root/infra/azure/main.bicep" "clips-staging" "main.bicep should distinguish the staging clips container"
+require_text "$repo_root/infra/azure/main.bicep" "param deployRedis bool = false" "main.bicep should default Azure Redis off for the cheapest MVP path"
+
+require_no_text "$repo_root/infra/azure/parameters/staging.parameters.example.json" "nvapi-|hf_" "staging parameters example contains a real-looking secret"
+require_no_text "$repo_root/infra/azure/parameters/production.parameters.example.json" "nvapi-|hf_" "production parameters example contains a real-looking secret"
+
+if [[ "$status" -ne 0 ]]; then
+  echo "azure iac check failed"
+  exit 1
+fi
+
+echo "azure iac check passed"
