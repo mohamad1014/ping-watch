@@ -1,6 +1,6 @@
 # Ping Watch Progress
 
-Updated: **2026-03-31**
+Updated: **2026-04-01**
 
 ## Purpose
 
@@ -213,6 +213,12 @@ Update it after each meaningful step so the repo always reflects:
   - added a quick `Check Telegram status` action next to the latest generated share link so the owner can manually refresh readiness right after the other phone opens the invite
   - kept the top account panel hidden while a user is already authenticated so the Telegram setup flow stays focused during staging
   - refreshed focused frontend coverage for the latest-share-link status action
+- Environment split foundation completed:
+  - added `docs/environment-strategy.md` to define the roles, routes, secrets, and deploy entrypoints for `dev`, `staging`, and `production`
+  - added `infra/vps/env/dev.env.example` and refreshed the shared runtime template so hosted `dev`, `staging`, and `production` use one consistent variable model
+  - replaced the staging-only VPS deploy script with a generic `./scripts/deploy-vps-environment <dev|staging|production>` entrypoint plus thin per-environment wrappers
+  - expanded the nginx path template to include hosted `dev` routes alongside staging and production
+  - extended script/docs guardrails and targeted script coverage for the new environment-aware deploy flow
 
 ## In Progress
 

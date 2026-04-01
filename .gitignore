@@ -17,6 +17,7 @@ logs/
 !.env.example
 staging.env
 production.env
+dev.env
 infra/azure/parameters/*.parameters.json
 !infra/azure/parameters/*.example.json
 

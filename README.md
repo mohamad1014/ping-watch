@@ -99,7 +99,10 @@ Execution progress is tracked in `PROGRESS.md`.
 - `./scripts/test-all` — run all tests.
 - `./scripts/check-migrations` — verify Alembic can upgrade an isolated database to the current head revision.
 - `./scripts/staging-rollback-drill` — validate upgrade, rollback, and re-apply against an isolated database or a provided `DATABASE_URL`.
-- `./scripts/deploy-vps-dev` — build and deploy the staging/dev environment to the VPS, including copying `staging.env`.
+- `./scripts/deploy-vps-environment <dev|staging|production>` — build and deploy a named hosted environment to the VPS, including copying its env file.
+- `./scripts/deploy-vps-dev` — deploy the hosted `dev` environment from `dev.env`.
+- `./scripts/deploy-vps-staging` — deploy the hosted `staging` environment from `staging.env`.
+- `./scripts/deploy-vps-production` — deploy the hosted `production` environment from `production.env`.
 - `./scripts/check-docs-consistency` — verify docs/script consistency for key commands.
 - `./scripts/clean-local` — remove local-only test/runtime artifacts.
 - `./scripts/create-wave1-worktrees` — create Wave 1 Git worktrees for parallel Codex execution.
@@ -119,11 +122,12 @@ Execution progress is tracked in `PROGRESS.md`.
 - `docs/notification-failure-runbook.md` — Telegram/webhook notification failure triage.
 - `docs/observability-dashboard-baseline.md` — first dashboard panels for queue stalls and notification failures.
 - `docs/mvp-cloud-deploy-checklist.md` — concrete MVP cloud deployment checklist for the current stack.
+- `docs/environment-strategy.md` — environment roles, route mapping, secret separation, and deploy entrypoints for `dev`, `staging`, and `production`.
 - `docs/vps-azure-deployment.md` — concrete staging/production VPS + Azure deployment plan and GitHub Actions deploy requirements.
 - `docs/vps-redis-setup.md` — Ubuntu VPS Redis install and verification guide for the low-cost local queue setup.
 - `infra/azure/README.md` — Bicep-based Azure managed-services deployment guide for low-cost staging and production.
 - `.github/workflows/deploy.yml` — manual staging/production deploy workflow that reruns verification before syncing to the VPS.
-- `infra/vps/env/staging.env.example` and `infra/vps/env/production.env.example` — fill-in templates for `/etc/ping-watch/staging.env` and `/etc/ping-watch/production.env`.
+- `infra/vps/env/dev.env.example`, `infra/vps/env/staging.env.example`, and `infra/vps/env/production.env.example` — fill-in templates for `/etc/ping-watch/<environment>.env`.
 
 ## Getting Started (local)
 

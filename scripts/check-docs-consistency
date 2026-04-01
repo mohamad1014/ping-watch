@@ -43,9 +43,13 @@ require_file "$repo_root/docs/observability-dashboard-baseline.md"
 require_file "$repo_root/docs/mvp-cloud-deploy-checklist.md"
 require_file "$repo_root/docs/vps-azure-deployment.md"
 require_file "$repo_root/docs/vps-redis-setup.md"
+require_file "$repo_root/docs/environment-strategy.md"
 
 # Key scripts must exist
 for name in dev-up dev test-unit test-integration test-e2e test-all logs; do
+  require_executable_script "$name"
+done
+for name in deploy-vps-environment deploy-vps-dev deploy-vps-staging deploy-vps-production; do
   require_executable_script "$name"
 done
 
@@ -66,6 +70,7 @@ require_text "$repo_root/README.md" "docs/observability-dashboard-baseline.md" "
 require_text "$repo_root/README.md" "docs/mvp-cloud-deploy-checklist.md" "README.md missing docs/mvp-cloud-deploy-checklist.md"
 require_text "$repo_root/README.md" "docs/vps-azure-deployment.md" "README.md missing docs/vps-azure-deployment.md"
 require_text "$repo_root/README.md" "docs/vps-redis-setup.md" "README.md missing docs/vps-redis-setup.md"
+require_text "$repo_root/README.md" "docs/environment-strategy.md" "README.md missing docs/environment-strategy.md"
 
 # Keep docs aligned to current test-unit behavior
 require_text "$repo_root/scripts/test-unit" "worker" "scripts/test-unit no longer runs worker tests"

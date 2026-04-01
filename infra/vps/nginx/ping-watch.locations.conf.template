@@ -6,6 +6,15 @@ location = /ping-watch {
     return 308 /ping-watch/$is_args$args;
 }
 
+location = /ping-watch-dev {
+    return 308 /ping-watch-dev/$is_args$args;
+}
+
+location ^~ /ping-watch-dev/ {
+    alias /var/www/ping-watch/dev/frontend/;
+    try_files $uri $uri/ @ping_watch_dev_index;
+}
+
 location ^~ /ping-watch/ {
     alias /var/www/ping-watch/production/frontend/;
     try_files $uri $uri/ @ping_watch_production_index;
@@ -22,6 +31,22 @@ location ^~ /ping-watch-staging/ {
 
 location = /ping-watch-api {
     return 308 /ping-watch-api/$is_args$args;
+}
+
+location = /ping-watch-api-dev {
+    return 308 /ping-watch-api-dev/$is_args$args;
+}
+
+location ^~ /ping-watch-api-dev/ {
+    proxy_pass http://127.0.0.1:8002/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Prefix /ping-watch-api-dev;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
 }
 
 location ^~ /ping-watch-api/ {
@@ -54,6 +79,10 @@ location ^~ /ping-watch-api-staging/ {
 
 location @ping_watch_production_index {
     rewrite ^ /ping-watch/index.html last;
+}
+
+location @ping_watch_dev_index {
+    rewrite ^ /ping-watch-dev/index.html last;
 }
 
 location @ping_watch_staging_index {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-environment_name=${1:?usage: deploy-vps-release <staging|production>}
+environment_name=${1:?usage: deploy-vps-release <environment>}
 
 server_root=${PING_WATCH_SERVER_ROOT:-/var/www/ping-watch}
 deploy_root="$server_root/$environment_name"
