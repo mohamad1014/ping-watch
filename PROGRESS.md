@@ -236,6 +236,10 @@ Update it after each meaningful step so the repo always reflects:
 - Concrete `alhajj.nl` shared-site draft added:
   - added `infra/vps/nginx/alhajj.nl.shared-site.conf.example` with a combined website + Ping Watch nginx server-block draft for `alhajj.nl` and `www.alhajj.nl`
   - updated the domain/TLS plan to use the real target domain examples and to point to the shared-site draft file directly
+- Human-operated configuration ledger added:
+  - created `docs/human-configuration.md` to capture registrar/DNS choices, shared route ownership, hosting decisions, and model-provider setup references that were configured manually outside the repo
+  - recorded the applied STRATO DNS setup for `alhajj.nl`, the current shared route plan, and the external NVIDIA / Hugging Face configuration links
+  - linked the new document from `README.md` and the docs consistency guard
 
 ## In Progress
 
