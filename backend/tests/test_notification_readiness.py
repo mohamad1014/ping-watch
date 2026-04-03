@@ -209,6 +209,129 @@ async def test_telegram_webhook_links_device_and_status_becomes_ready(monkeypatc
 
 
 @pytest.mark.anyio
+async def test_telegram_webhook_success_message_includes_website_url(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setenv("TELEGRAM_BOT_ONBOARDING_URL", "https://t.me/pingwatch_bot")
+    monkeypatch.setenv("PING_WATCH_PUBLIC_URL", "https://ping.alhajj.nl")
+
+    sent_messages: list[dict] = []
+
+    def mock_post(url: str, *, json: dict, timeout: float):
+        assert timeout > 0
+        sent_messages.append({"url": url, "json": json})
+
+        class _Resp:
+            status_code = 200
+            text = "{}"
+
+            def raise_for_status(self):
+                return None
+
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "post", mock_post)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post("/devices/register", json={"device_id": "dev-1"})
+        start_response = await client.post(
+            "/notifications/telegram/link/start", json={"device_id": "dev-1"}
+        )
+        start_payload = start_response.json()
+        parsed = urlparse(start_payload["connect_url"])
+        token = parse_qs(parsed.query)["start"][0]
+
+        webhook_response = await client.post(
+            "/notifications/telegram/webhook",
+            json={
+                "update_id": 1,
+                "message": {
+                    "text": f"/start {token}",
+                    "chat": {"id": 987654321},
+                    "from": {"username": "alice"},
+                },
+            },
+        )
+
+    assert webhook_response.status_code == 200
+    assert sent_messages
+    message_lines = sent_messages[-1]["json"]["text"].splitlines()
+    assert message_lines[0] == (
+        "Ping Watch is connected. Return to Ping Watch and tap Check Telegram status."
+    )
+    assert len(message_lines) == 2
+
+    return_url = urlparse(message_lines[1])
+    assert return_url.scheme == "https"
+    assert return_url.netloc == "ping.alhajj.nl"
+    assert return_url.path == ""
+    params = parse_qs(return_url.query)
+    assert params["telegram_link_device_id"] == ["dev-1"]
+    assert params["telegram_link_attempt_id"] == [start_payload["attempt_id"]]
+    assert params["telegram_link_flow"] == ["device"]
+
+
+@pytest.mark.anyio
+async def test_telegram_already_linked_message_keeps_return_url(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setenv("TELEGRAM_BOT_ONBOARDING_URL", "https://t.me/pingwatch_bot")
+    monkeypatch.setenv("PING_WATCH_PUBLIC_URL", "https://ping.alhajj.nl")
+
+    sent_messages: list[dict] = []
+
+    def mock_post(url: str, *, json: dict, timeout: float):
+        assert timeout > 0
+        sent_messages.append({"url": url, "json": json})
+
+        class _Resp:
+            status_code = 200
+            text = "{}"
+
+            def raise_for_status(self):
+                return None
+
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "post", mock_post)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post("/devices/register", json={"device_id": "dev-1"})
+        start_response = await client.post(
+            "/notifications/telegram/link/start", json={"device_id": "dev-1"}
+        )
+        start_payload = start_response.json()
+        parsed = urlparse(start_payload["connect_url"])
+        token = parse_qs(parsed.query)["start"][0]
+
+        webhook_payload = {
+            "update_id": 1,
+            "message": {
+                "text": f"/start {token}",
+                "chat": {"id": 987654321},
+                "from": {"username": "alice"},
+            },
+        }
+        await client.post("/notifications/telegram/webhook", json=webhook_payload)
+        second_response = await client.post("/notifications/telegram/webhook", json=webhook_payload)
+
+    assert second_response.status_code == 200
+    assert len(sent_messages) >= 2
+
+    message_lines = sent_messages[-1]["json"]["text"].splitlines()
+    assert message_lines[0] == (
+        "This device is already linked. Return to Ping Watch and tap Check Telegram status."
+    )
+    return_url = urlparse(message_lines[1])
+    params = parse_qs(return_url.query)
+    assert params["telegram_link_device_id"] == ["dev-1"]
+    assert params["telegram_link_attempt_id"] == [start_payload["attempt_id"]]
+    assert params["telegram_link_flow"] == ["device"]
+
+
+@pytest.mark.anyio
 async def test_telegram_webhook_creates_endpoint_record_and_attaches_device(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
     monkeypatch.setenv("TELEGRAM_BOT_ONBOARDING_URL", "https://t.me/pingwatch_bot")

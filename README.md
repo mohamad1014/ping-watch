@@ -81,6 +81,13 @@ Execution progress is tracked in `PROGRESS.md`.
 - `PROGRESS.md` — live execution tracker for completed work, active work, blockers, and next steps
 - `PLATFORM.md` — short boundary doc describing what lives in this repo vs the separate `../website` repo
 
+## Persistent Repo Context
+
+- Hosted deploys for `dev`, `staging`, and `production` are performed from the current workspace state. If the working tree contains local changes, those are the changes that get deployed.
+- The hosted environment source files live in this repo as `dev.env`, `staging.env`, and `production.env`.
+- This repo owns the Ping Watch product stack and routes; the separate `../website` repo owns the public/personal website and `/mohamad`.
+- After implementing changes and after deploying them, verify the solution with the strongest tools available: repo test scripts first, then browser automation and available MCP/tool integrations when they help confirm the real behavior.
+
 ## Decisions (2026-01-24)
 
 - Frontend: React + TypeScript (Vite).
@@ -185,6 +192,7 @@ Hosted environment source files:
 - `dev.env` — local source for hosted `dev`; starts from `infra/vps/env/dev.env.example`.
 - `staging.env` — local source for hosted `staging`; starts from `infra/vps/env/staging.env.example`.
 - `production.env` — local source for hosted `production`; starts from `infra/vps/env/production.env.example`.
+- These repo-local env files are the inputs used by the VPS deploy scripts before they are copied to `/etc/ping-watch/<environment>.env` remotely.
 - `DATABASE_URL` — backend DB URL (default Postgres in local dev).
 - `AUTH_REQUIRED` — when `true`, backend write endpoints (`POST`/`PUT`/`PATCH`/`DELETE`) require a bearer token.
 - `AUTH_DEV_LOGIN_ENABLED` — when `true` (default), enables `POST /auth/dev/login` to mint development bearer tokens. Keep this `false` outside local/dev unless you explicitly need the bootstrap route.

@@ -52,10 +52,20 @@ But they should remain separate products:
 - separate deploy logic
 - separate secrets
 - separate runtime processes
+- separate verification responsibilities, while still checking the other repo when a shared hosting change could affect it
 
 ## Coordination Rule
 
 When changing routing, nginx includes, domains, TLS, or VPS layout here, also check the website repo so the shared hosting model stays consistent.
+
+## Deployment And Verification Notes
+
+- Deployments from this repo use the current workspace state plus the repo-local hosted env files (`dev.env`, `staging.env`, `production.env`).
+- After changing or deploying Ping Watch behavior, verify it with the strongest available tools for the target surface:
+  - repo test scripts for code-level confidence
+  - browser automation for real frontend flows
+  - available MCP/tool integrations when they help validate the live environment
+- If a shared platform change may affect `../website`, validate both sides before considering the work complete.
 
 See also:
 

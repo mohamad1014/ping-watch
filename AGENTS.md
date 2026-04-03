@@ -28,6 +28,22 @@ Primary scripts:
 - `./scripts/sync-skills` — mirror `.codex/skills` to `.claude/skills`.
 - `./scripts/logs` — tail structured backend logs with timestamps.
 
+## Deploy Persistence
+
+- Deploys for `dev`, `staging`, and `production` ship the current workspace contents, not just the last Git commit. If there are local modifications, those modifications are what will be deployed.
+- Hosted environment source files live in this repo as `dev.env`, `staging.env`, and `production.env`. The VPS deploy scripts copy those repo-local files to `/etc/ping-watch/<environment>.env` on the server.
+- Use the environment-specific deploy wrappers or the shared entrypoint:
+  - `./scripts/deploy-vps-dev`
+  - `./scripts/deploy-vps-staging`
+  - `./scripts/deploy-vps-production`
+  - `./scripts/deploy-vps-environment <dev|staging|production>`
+
+## Cross-Repo Context
+
+- This repo owns the Ping Watch product stack and its hosted routes.
+- The separate `../website` repo owns the public website and the `/mohamad` route.
+- When work touches shared VPS concerns such as nginx, route ownership, domain/TLS behavior, or shared deployment assumptions, also inspect `../website` so both repos stay aligned.
+
 ## Coding Style & Naming Conventions
 
 Frontend ESLint is configured (`frontend/eslint.config.js` and `npm run lint`).
@@ -54,6 +70,8 @@ No shared formatter is enforced across the full monorepo yet. If you introduce o
   - `./scripts/test-integration`
   - `./scripts/test-e2e`
   - or `./scripts/test-all`
+- After changes and after deploys, test the solution with the best verification tools available in the environment. Prefer the repo scripts first, then use available browser automation and MCP integrations when they materially improve confidence in the deployed behavior.
+- For deployed web flows, use the available browser/testing tooling to exercise the real route whenever feasible instead of stopping at static inspection.
 - Report exact pass/fail output and any blockers.
 - Update `PROGRESS.md` to reflect what was completed, what is in progress, and any blockers before finalizing substantial work.
 

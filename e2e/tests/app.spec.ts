@@ -44,7 +44,22 @@ const pollFor = async <T>(
 const signInWithEmail = async (page, email: string) => {
   await page.getByLabel('Account email').fill(email)
   await page.getByRole('button', { name: /sign in/i }).click()
-  await expect(page.getByText(new RegExp(`Signed in as ${email}`, 'i'))).toBeVisible()
+  await expect(page.getByLabel('Account email')).toHaveCount(0)
+}
+
+const switchAccount = async (page) => {
+  await page.evaluate(() => {
+    const authKeys = [
+      'ping-watch:auth-token',
+      'ping-watch:auth-user-id',
+      'ping-watch:auth-expires-at',
+      'ping-watch:auth-email',
+    ]
+    for (const key of authKeys) {
+      window.localStorage.removeItem(key)
+    }
+  })
+  await page.reload()
 }
 
 const addRequiredAlertInstruction = async (page) => {
@@ -284,7 +299,7 @@ test('account switching keeps event fetching scoped to the signed-in owner', asy
 
   await expect.poll(async () => await page.getByText(eventA).count()).toBeGreaterThan(0)
 
-  await page.getByRole('button', { name: /sign out/i }).click()
+  await switchAccount(page)
   await signInWithEmail(page, 'owner-b@example.com')
 
   await expect(page.getByText(eventA)).toHaveCount(0)

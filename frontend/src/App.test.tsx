@@ -19,9 +19,12 @@ const mockedListClips = vi.mocked(listClips)
 const mockedGetClip = vi.mocked(getClip)
 const mockedDeleteClipsBySession = vi.mocked(deleteClipsBySession)
 const TELEGRAM_LINK_ATTEMPT_KEY = 'ping-watch:telegram-link-attempt-id'
+const TELEGRAM_LINK_ATTEMPT_DEVICE_ID_KEY = 'ping-watch:telegram-link-attempt-device-id'
 const TELEGRAM_LINK_FALLBACK_URL_KEY = 'ping-watch:telegram-link-fallback-url'
 const TELEGRAM_LINK_FALLBACK_COMMAND_KEY = 'ping-watch:telegram-link-fallback-command'
 const TELEGRAM_LINK_WAITING_KEY = 'ping-watch:telegram-link-waiting'
+const TELEGRAM_LINK_FLOW_KEY = 'ping-watch:telegram-link-flow'
+const RECIPIENT_SHARED_DEVICE_ID_KEY = 'ping-watch:recipient-shared-device-id'
 const FRONTEND_MODE_KEY = 'ping-watch:frontend-mode'
 
 const buildResponse = (payload: unknown) =>
@@ -352,6 +355,8 @@ describe('App', () => {
     expect(screen.getByText(/alert if garbage are placed outside of the garbage deposit/i)).toBeInTheDocument()
   })
 
+  // Keep this chooser coverage near both Telegram path flows.
+  // If one path changes, review assertions for the sibling path as well.
   it('lets the user choose between connecting this phone or another phone', async () => {
     const user = userEvent.setup()
     render(<App />)
@@ -880,6 +885,75 @@ describe('App', () => {
     openSpy.mockRestore()
   })
 
+  it('treats a ready link-status response as connected even before readiness catches up', async () => {
+    const user = userEvent.setup()
+    const fetchMock = createFetchMock({
+      telegramReadiness: [
+        {
+          enabled: true,
+          ready: false,
+          status: 'needs_user_action',
+          reason: 'Open Telegram and send /start to your bot, then return.',
+          connect_url: null,
+        },
+        {
+          enabled: true,
+          ready: false,
+          status: 'needs_user_action',
+          reason: 'Tap Connect Telegram alerts to start linking.',
+          connect_url: null,
+        },
+      ],
+      telegramLinkStart: [{
+        enabled: true,
+        ready: false,
+        status: 'pending',
+        reason: null,
+        attempt_id: 'attempt-1',
+        connect_url: 'https://t.me/pingwatch_bot?start=token-1',
+        expires_at: '2099-01-01T00:00:00Z',
+        link_code: 'token-1',
+        fallback_command: '/start token-1',
+      }],
+      telegramLinkStatus: [{
+        enabled: true,
+        ready: true,
+        linked: true,
+        status: 'ready',
+        reason: null,
+        attempt_id: 'attempt-1',
+      }],
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const popup = { location: { href: '' }, close: vi.fn() } as unknown as Window
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup)
+
+    render(<App />)
+    await addRequiredAlertInstruction(user)
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+    await user.click(within(telegramSection).getByRole('button', { name: /this phone/i }))
+
+    await user.click(
+      await within(telegramSection).findByRole('button', { name: /connect telegram alerts/i })
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /start monitoring/i })).toBeEnabled()
+    })
+    expect(screen.getByLabelText(/telegram status: connected/i)).toBeInTheDocument()
+    expect(
+      screen.queryByText(/if telegram opens without payload, send/i)
+    ).not.toBeInTheDocument()
+    expect(localStorage.getItem(TELEGRAM_LINK_WAITING_KEY)).toBeNull()
+    expect(localStorage.getItem(TELEGRAM_LINK_FALLBACK_COMMAND_KEY)).toBeNull()
+
+    openSpy.mockRestore()
+  })
+
   it('sends a Telegram test alert once Telegram is linked', async () => {
     const user = userEvent.setup()
     const fetchMock = createFetchMock({
@@ -983,7 +1057,7 @@ describe('App', () => {
     openSpy.mockRestore()
   })
 
-  it('opens a placeholder popup immediately while creating Telegram link on mobile', async () => {
+  it('uses same-tab navigation for Telegram onboarding on mobile', async () => {
     const user = userEvent.setup()
 
     let resolveLinkStart: ((value: Response) => void) | null = null
@@ -1022,8 +1096,7 @@ describe('App', () => {
       configurable: true,
     })
 
-    const popup = { location: { href: '' }, close: vi.fn() } as unknown as Window
-    const openSpy = vi.spyOn(window, 'open').mockReturnValue(popup)
+    const openSpy = vi.spyOn(window, 'open')
 
     render(<App />)
     const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
@@ -1033,7 +1106,7 @@ describe('App', () => {
       await within(telegramSection).findByRole('button', { name: /connect telegram alerts/i })
     )
 
-    expect(openSpy).toHaveBeenCalledWith('', '_blank', 'noopener,noreferrer')
+    expect(openSpy).not.toHaveBeenCalled()
 
     await act(async () => {
       resolveLinkStart?.(buildResponse({
@@ -1047,7 +1120,9 @@ describe('App', () => {
       }))
     })
     await waitFor(() => {
-      expect(popup.location.href).toBe('https://t.me/pingwatch_bot?start=token-1')
+      expect(localStorage.getItem(TELEGRAM_LINK_FALLBACK_URL_KEY)).toBe(
+        'https://t.me/pingwatch_bot?start=token-1'
+      )
     })
 
     Object.defineProperty(window.navigator, 'userAgent', {
@@ -1055,6 +1130,100 @@ describe('App', () => {
       configurable: true,
     })
     openSpy.mockRestore()
+  })
+
+  it('re-checks telegram link status when the page returns after mobile handoff', async () => {
+    const fetchMock = createFetchMock({
+      telegramReadiness: [
+        {
+          enabled: true,
+          ready: false,
+          status: 'needs_user_action',
+          reason: 'Open Telegram and send /start to your bot, then return.',
+        },
+        {
+          enabled: true,
+          ready: false,
+          status: 'needs_user_action',
+          reason: 'Open Telegram and send /start to your bot, then return.',
+        },
+        {
+          enabled: true,
+          ready: true,
+          status: 'ready',
+          reason: null,
+        },
+      ],
+      telegramLinkStatus: [
+        {
+          enabled: true,
+          ready: false,
+          linked: false,
+          status: 'pending',
+          reason: null,
+          attempt_id: 'attempt-return',
+        },
+        {
+          enabled: true,
+          ready: true,
+          linked: true,
+          status: 'ready',
+          reason: null,
+          attempt_id: 'attempt-return',
+        },
+      ],
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [{
+            endpoint_id: 'endpoint-1',
+            provider: 'telegram',
+            chat_id: '111',
+            telegram_username: 'alice',
+            linked_at: '2026-04-02T17:00:00Z',
+            subscribed: true,
+          }],
+        }],
+      },
+      invites: {
+        lists: [{
+          device_id: 'device-1',
+          invites: [],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    localStorage.setItem(TELEGRAM_LINK_ATTEMPT_KEY, 'attempt-return')
+    localStorage.setItem(TELEGRAM_LINK_WAITING_KEY, '1')
+    localStorage.setItem(TELEGRAM_LINK_FALLBACK_URL_KEY, 'https://t.me/pingwatch_bot?start=token-return')
+    localStorage.setItem(TELEGRAM_LINK_FALLBACK_COMMAND_KEY, '/start token-return')
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://localhost:8000/notifications/telegram/link/status?device_id=device-1&attempt_id=attempt-return',
+        expect.anything()
+      )
+    })
+    const statusRequestUrl =
+      'http://localhost:8000/notifications/telegram/link/status?device_id=device-1&attempt_id=attempt-return'
+    const countStatusChecks = () =>
+      fetchMock.mock.calls.filter(([url]) => String(url) === statusRequestUrl).length
+    expect(countStatusChecks()).toBe(1)
+
+    await act(async () => {
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+    })
+
+    await waitFor(() => {
+      expect(countStatusChecks()).toBeGreaterThanOrEqual(2)
+      expect(screen.getByLabelText(/telegram status: connected/i)).toBeInTheDocument()
+    })
   })
 
   it('persists telegram link attempt state for backup-check flow', async () => {
@@ -2191,7 +2360,7 @@ describe('App', () => {
     window.history.replaceState({}, '', '/')
   })
 
-  it('shows an explicit Telegram handoff action after opening a share link from the URL', async () => {
+  it('uses same-tab Telegram handoff after opening a share link from the URL', async () => {
     const fetchMock = createFetchMock({
       telegramReadiness: [{
         enabled: true,
@@ -2238,6 +2407,7 @@ describe('App', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
     window.history.replaceState({}, '', '/?invite=share-code-1')
+    const openSpy = vi.spyOn(window, 'open')
 
     render(<App />)
 
@@ -2254,12 +2424,214 @@ describe('App', () => {
         })
       )
     })
-    expect(
-      within(telegramSection).getByText(/share link opened\. tap open telegram link again to finish connecting alerts/i)
-    ).toBeInTheDocument()
+    expect(openSpy).not.toHaveBeenCalled()
     expect(
       within(telegramSection).getByRole('link', { name: /open telegram link again/i })
     ).toHaveAttribute('href', 'https://t.me/pingwatch_bot?start=share-token-1')
+    expect(
+      within(telegramSection).queryByText(/share link opened\. tap open telegram link again to finish connecting alerts/i)
+    ).not.toBeInTheDocument()
+    expect(window.location.search).toBe('')
+
+    openSpy.mockRestore()
+    window.history.replaceState({}, '', '/')
+  })
+
+  it('does not re-accept a shared invite from the URL when an invite link attempt is already pending', async () => {
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: false,
+        ready: false,
+        status: 'not_configured',
+        reason: null,
+      }],
+      telegramLinkStatus: [{
+        enabled: true,
+        ready: true,
+        linked: true,
+        status: 'ready',
+        reason: null,
+        attempt_id: 'share-attempt-1',
+      }],
+      invites: {
+        lists: [{
+          device_id: 'device-1',
+          invites: [],
+        }],
+        accept: [{
+          enabled: true,
+          ready: false,
+          status: 'pending',
+          reason: null,
+          attempt_id: 'share-attempt-1',
+          connect_url: 'https://t.me/pingwatch_bot?start=share-token-1',
+          expires_at: '2099-01-01T00:00:00Z',
+          link_code: 'share-token-1',
+          fallback_command: '/start share-token-1',
+          device_id: 'shared-device-1',
+        }],
+      },
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    localStorage.setItem(TELEGRAM_LINK_WAITING_KEY, '1')
+    localStorage.setItem(TELEGRAM_LINK_FLOW_KEY, 'invite')
+    localStorage.setItem(TELEGRAM_LINK_ATTEMPT_KEY, 'share-attempt-1')
+    localStorage.setItem(TELEGRAM_LINK_ATTEMPT_DEVICE_ID_KEY, 'shared-device-1')
+    localStorage.setItem(
+      TELEGRAM_LINK_FALLBACK_URL_KEY,
+      'https://t.me/pingwatch_bot?start=share-token-1'
+    )
+    localStorage.setItem(TELEGRAM_LINK_FALLBACK_COMMAND_KEY, '/start share-token-1')
+    window.history.replaceState({}, '', '/?invite=share-code-1')
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: /shared alerts/i })).toBeInTheDocument()
+    })
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      'http://localhost:8000/notifications/invites/accept',
+      expect.anything()
+    )
+    expect(localStorage.getItem(RECIPIENT_SHARED_DEVICE_ID_KEY)).toBe('shared-device-1')
+    expect(window.location.search).toBe('')
+
+    window.history.replaceState({}, '', '/')
+  })
+
+  it('reuses the stored pending invite flow when reopening a shared invite URL', async () => {
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: false,
+        ready: false,
+        status: 'not_configured',
+        reason: null,
+      }],
+      telegramLinkStatus: [{
+        enabled: true,
+        ready: false,
+        linked: false,
+        status: 'pending',
+        reason: null,
+        attempt_id: 'share-attempt-1',
+      }],
+      invites: {
+        lists: [{
+          device_id: 'device-1',
+          invites: [],
+        }],
+      },
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    localStorage.setItem(TELEGRAM_LINK_WAITING_KEY, '1')
+    localStorage.setItem(TELEGRAM_LINK_FLOW_KEY, 'invite')
+    localStorage.setItem(TELEGRAM_LINK_ATTEMPT_KEY, 'share-attempt-1')
+    localStorage.setItem(TELEGRAM_LINK_ATTEMPT_DEVICE_ID_KEY, 'shared-device-1')
+    localStorage.setItem(
+      TELEGRAM_LINK_FALLBACK_URL_KEY,
+      'https://t.me/pingwatch_bot?start=share-token-1'
+    )
+    localStorage.setItem(TELEGRAM_LINK_FALLBACK_COMMAND_KEY, '/start share-token-1')
+    window.history.replaceState({}, '', '/?invite=share-code-1')
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://localhost:8000/notifications/telegram/link/status?device_id=shared-device-1&attempt_id=share-attempt-1',
+        expect.objectContaining({
+          method: 'GET',
+        })
+      )
+    })
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      'http://localhost:8000/notifications/invites/accept',
+      expect.anything()
+    )
+    expect(window.location.search).toBe('')
+    expect(screen.queryByText(/unable to accept that shared invite/i)).not.toBeInTheDocument()
+
+    window.history.replaceState({}, '', '/')
+  })
+
+  it('restores an invite link attempt from the Telegram return URL and confirms shared alerts', async () => {
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: false,
+        ready: false,
+        status: 'not_configured',
+        reason: null,
+      }],
+      telegramLinkStatus: [{
+        enabled: true,
+        ready: true,
+        linked: true,
+        status: 'ready',
+        reason: null,
+        attempt_id: 'share-attempt-1',
+      }],
+      invites: {
+        lists: [{
+          device_id: 'device-1',
+          invites: [],
+        }],
+      },
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    window.history.replaceState(
+      {},
+      '',
+      '/?telegram_link_device_id=shared-device-1&telegram_link_attempt_id=share-attempt-1&telegram_link_flow=invite'
+    )
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        'http://localhost:8000/notifications/telegram/link/status?device_id=shared-device-1&attempt_id=share-attempt-1',
+        expect.objectContaining({
+          method: 'GET',
+        })
+      )
+    })
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: /shared alerts/i })).toBeInTheDocument()
+    })
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      'http://localhost:8000/notifications/invites/accept',
+      expect.anything()
+    )
+    expect(localStorage.getItem(RECIPIENT_SHARED_DEVICE_ID_KEY)).toBe('shared-device-1')
     expect(window.location.search).toBe('')
 
     window.history.replaceState({}, '', '/')
@@ -2341,6 +2713,68 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => {
+      expect(localStorage.getItem(TELEGRAM_LINK_ATTEMPT_KEY)).toBeNull()
+      expect(localStorage.getItem(TELEGRAM_LINK_WAITING_KEY)).toBeNull()
+      expect(localStorage.getItem(TELEGRAM_LINK_FALLBACK_URL_KEY)).toBeNull()
+      expect(localStorage.getItem(TELEGRAM_LINK_FALLBACK_COMMAND_KEY)).toBeNull()
+    })
+  })
+
+  it('clears stale waiting state when readiness becomes ready during a pending device link attempt', async () => {
+    const fetchMock = createFetchMock({
+      telegramReadiness: [{
+        enabled: true,
+        ready: true,
+        status: 'ready',
+        reason: null,
+      }],
+      telegramLinkStatus: [{
+        enabled: true,
+        ready: false,
+        linked: false,
+        status: 'pending',
+        reason: null,
+        attempt_id: 'attempt-stale',
+      }],
+      recipients: {
+        lists: [{
+          device_id: 'device-1',
+          recipients: [{
+            endpoint_id: 'endpoint-1',
+            provider: 'telegram',
+            chat_id: '123456',
+            telegram_username: 'alice',
+            linked_at: '2026-04-02T17:00:00Z',
+            subscribed: true,
+          }],
+        }],
+      },
+      invites: {
+        lists: [{
+          device_id: 'device-1',
+          invites: [],
+        }],
+      },
+      start: { session_id: 'sess_1', device_id: 'device-1', status: 'active' },
+      stop: { session_id: 'sess_1', device_id: 'device-1', status: 'stopped' },
+      createEvent: {},
+      events: [[]],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    localStorage.setItem(TELEGRAM_LINK_ATTEMPT_KEY, 'attempt-stale')
+    localStorage.setItem(TELEGRAM_LINK_WAITING_KEY, '1')
+    localStorage.setItem(
+      TELEGRAM_LINK_FALLBACK_URL_KEY,
+      'https://t.me/pingwatch_bot?start=token-stale'
+    )
+    localStorage.setItem(TELEGRAM_LINK_FALLBACK_COMMAND_KEY, '/start token-stale')
+
+    render(<App />)
+
+    const telegramSection = await screen.findByRole('region', { name: /^telegram$/i })
+
+    await waitFor(() => {
+      expect(within(telegramSection).getByText(/alerts will go to telegram/i)).toBeInTheDocument()
       expect(localStorage.getItem(TELEGRAM_LINK_ATTEMPT_KEY)).toBeNull()
       expect(localStorage.getItem(TELEGRAM_LINK_WAITING_KEY)).toBeNull()
       expect(localStorage.getItem(TELEGRAM_LINK_FALLBACK_URL_KEY)).toBeNull()

@@ -1,6 +1,6 @@
 # Ping Watch Progress
 
-Updated: **2026-04-01**
+Updated: **2026-04-02**
 
 ## Purpose
 
@@ -22,9 +22,24 @@ Update it after each meaningful step so the repo always reflects:
   - CI/CD and rollback automation
   - security baseline
   - queue backlog and dead-letter visibility
+- New blocker noted during verification:
+  - `./scripts/test-e2e` is currently failing in `e2e/tests/app.spec.ts` because the sign-in confirmation text expected by the tests is not visible in two account-based flows; this appears unrelated to the Telegram return-path fix completed today.
 
 ## Completed
 
+- Telegram mobile return-path and bot handoff fix completed:
+  - frontend now re-checks Telegram link status when the app regains focus, becomes visible again, or is restored with `pageshow`, which fixes the “connected in Telegram but still looks disconnected on the phone” handoff case
+  - backend Telegram success replies now append the public Ping Watch website URL when `PING_WATCH_PUBLIC_URL` is configured, so the bot response gives the user a direct path back to the site
+  - added focused regression coverage for the mobile return-path refresh and for the bot success message URL
+  - verification status:
+    `./scripts/test-unit` passed
+    `./scripts/test-integration` passed
+    `./scripts/test-e2e` failed in existing account sign-in E2E expectations (`tests/app.spec.ts:179` and `tests/app.spec.ts:257`)
+- Repository operating-context persistence completed:
+  - documented in `AGENTS.md` that hosted deploys use the current workspace state, not only committed Git history
+  - documented that `dev.env`, `staging.env`, and `production.env` live in this repo and are the deploy inputs copied to `/etc/ping-watch/<environment>.env`
+  - refreshed `README.md` and `PLATFORM.md` to preserve the ownership boundary between this repo and `../website`
+  - documented that changes and deploys should be verified with the strongest available repo scripts, browser tooling, and MCP/tool integrations where they improve confidence
 - Core phone-as-sensor monitoring flow implemented.
 - Local clip persistence and upload/finalize flow implemented.
 - Backend sessions/events persistence and Alembic migration flow implemented.
@@ -240,6 +255,47 @@ Update it after each meaningful step so the repo always reflects:
   - created `docs/human-configuration.md` to capture registrar/DNS choices, shared route ownership, hosting decisions, and model-provider setup references that were configured manually outside the repo
   - recorded the applied STRATO DNS setup for `alhajj.nl`, the current shared route plan, and the external NVIDIA / Hugging Face configuration links
   - linked the new document from `README.md` and the docs consistency guard
+- VPS domain/TLS cutover completed on `2026-04-02`:
+  - backed up the live nginx site file and Ping Watch snippet on the VPS before replacing them
+  - installed the `alhajj.nl` domain-based nginx site config for the shared website + Ping Watch routes and refreshed `/etc/nginx/snippets/ping-watch-locations.conf` from this repo
+  - installed `certbot` and `python3-certbot-nginx`, issued the Let’s Encrypt certificate for `alhajj.nl` and `www.alhajj.nl`, and reloaded nginx successfully
+  - discovered HTTPS was still unreachable externally because `443/tcp` was missing from UFW, then opened it and re-verified the public HTTPS routes
+- Live Ping Watch route hotfix applied on `2026-04-02`:
+  - investigated `https://alhajj.nl/ping-watch/` returning `500` and confirmed nginx was looping because `/var/www/ping-watch/production/frontend` was missing on the VPS
+  - verified only the `staging` Ping Watch deployment currently exists on the server; the production route was enabled before any production frontend/backend was deployed
+  - updated the live nginx Ping Watch snippet so `/ping-watch*` and `/ping-watch-api*` temporarily redirect to the working staging routes instead of failing
+- Telegram mobile handoff fix deployed to staging on `2026-04-02`:
+  - traced the blank-tab behavior on `https://alhajj.nl/ping-watch-staging/` to the frontend's mobile-specific placeholder popup path for the "this phone" Telegram onboarding flow
+  - changed the client flow so mobile "this phone" onboarding uses same-tab navigation to the Telegram bot URL while still persisting the fallback reopen link
+  - rebuilt the staging frontend with the HTTPS staging API origin and synced the new static assets to `/var/www/ping-watch/staging/frontend`
+- Telegram path maintenance guardrail added on `2026-04-02`:
+  - added an inline maintainer note at the shared Telegram path branch in `frontend/src/App.tsx` to explicitly review the sibling flow whenever the "This phone" or "A different phone" setup changes
+  - mirrored that reminder in `frontend/src/App.test.tsx` next to the chooser coverage so the expectation stays visible during future Telegram onboarding edits
+  - reran focused frontend coverage for the Telegram path chooser after the note-only change
+- Telegram waiting-state recovery fix deployed to staging on `2026-04-02`:
+  - reproduced a client-side regression where stale local Telegram link-attempt state survived even after readiness returned `ready`, leaving the onboarding UI stuck in an old waiting flow
+  - added frontend regression coverage for the case where a pending stored attempt is superseded by a confirmed ready readiness response, and then fixed `refreshTelegramReadiness()` to clear stale local waiting/attempt metadata whenever readiness is confirmed
+  - reran focused frontend tests for the new regression and the sibling Telegram path chooser, then rebuilt and resynced the staging frontend bundle to `/var/www/ping-watch/staging/frontend`
+- Staging Telegram onboarding mixed-content fix deployed on `2026-04-02`:
+  - reproduced both "Unable to create a share invite" and "Unable to open Telegram" on `https://alhajj.nl/ping-watch-staging/` and traced them to the deployed frontend still calling `http://217.154.253.21/ping-watch-api-staging`, which browsers blocked as mixed content
+  - added regression coverage for the deploy script default public origin and the staging public Ping Watch URL, then changed `scripts/deploy-vps-environment` to default `PING_WATCH_PUBLIC_ORIGIN` to `https://alhajj.nl` and corrected `PING_WATCH_PUBLIC_URL` in `staging.env`
+  - reran the focused deploy regression tests, redeployed staging, and re-verified in a browser that share invite creation succeeds over `https://alhajj.nl/ping-watch-api-staging` and "Connect Telegram alerts" opens `https://t.me/PingUser_bot?start=...`
+- Telegram confirmation race and stale E2E sign-in checks fixed on `2026-04-02`:
+  - updated the frontend device-link flow so a confirmed Telegram link-status `ready` result immediately keeps the monitor in a connected state, invalidates older readiness checks, and ignores short-lived backend readiness lag instead of falling back to "If Telegram opens without payload, send /start ..."
+  - added frontend regression coverage for the "link status ready before readiness catches up" case, and refreshed the Playwright sign-in/account-switch helpers so they assert the current signed-in UI instead of the removed `Signed in as ...` copy
+  - reran `./scripts/test-unit`, `./scripts/test-integration`, and `./scripts/test-e2e` successfully before the staging deploy
+- Shared invite Telegram handoff fix deployed to staging on `2026-04-02`:
+  - reproduced the live `?invite=WZIK3qVolhfmbuLN_kYF62uqBov3Y77m` staging flow and confirmed the other-phone path was suppressing same-tab redirect, then falling back to a popup path that browsers can block because the invite accept runs from a non-click effect
+  - changed the invite URL accept flow so shared links no longer pre-open a popup and instead reuse the current tab for the Telegram handoff, while still preserving the fallback reopen link if the user comes back without finishing
+  - updated the frontend regression coverage for shared invite URL handling, reran `./scripts/test-unit`, `./scripts/test-integration`, and `./scripts/test-e2e`, then redeployed staging
+- Shared invite return verification fix deployed to staging on `2026-04-02`:
+  - reproduced the follow-up failure where returning to the site on the same shared `?invite=...` URL after Telegram confirmed the bot link caused the frontend to try `/notifications/invites/accept` a second time and show a false "Unable to accept that shared invite." error instead of verifying the stored link attempt
+  - changed the invite-from-URL bootstrap so an existing stored invite link attempt or recipient mode takes precedence over re-accepting the same invite code, and added regression coverage for reopening an invite URL while the invite link attempt is already pending
+  - reran `./scripts/test-unit`, `./scripts/test-integration`, and `./scripts/test-e2e` successfully before the staging deploy
+- Telegram return-link recovery for shared invites deployed to staging on `2026-04-03`:
+  - reproduced the live failure behind `https://alhajj.nl/ping-watch-staging?invite=XpEQ3TqURkoE2o6ofWHyUe_lGRzsQT7W` and confirmed a clean browser context falls back to `/notifications/invites/accept`, which now returns `409 notification invite is no longer active` after Telegram has already consumed the invite
+  - taught the frontend to restore pending Telegram link attempts from `telegram_link_device_id`, `telegram_link_attempt_id`, and `telegram_link_flow` URL parameters so the website link coming back from Telegram can recover the correct status without relying on prior local storage
+  - changed the Telegram bot success and already-linked replies to append a Ping Watch return URL carrying those link-status parameters, added regression coverage on both frontend and backend, reran `./scripts/test-unit`, `./scripts/test-integration`, and `./scripts/test-e2e`, then redeployed staging and rechecked the public frontend/API URLs
 
 ## In Progress
 
@@ -252,9 +308,9 @@ Update it after each meaningful step so the repo always reflects:
 ## Next Steps
 
 1. Verify on a real phone that test alerts succeed after Telegram linking and that camera preview behaves correctly once staging moves to HTTPS.
-2. Move staging to HTTPS or a domain-backed origin so camera preview and clipboard/media APIs behave like production browsers expect.
-3. Configure GitHub `staging` and `production` environment secrets once the manual VPS path is stable.
-4. Prepare the production env and run the same deploy flow against the production route.
+2. Prepare a real production Ping Watch deploy so `/ping-watch` can stop redirecting to staging.
+3. Verify the remaining shared-domain routes on real devices now that `https://alhajj.nl` is live.
+4. Configure GitHub `staging` and `production` environment secrets once the manual VPS path is stable.
 
 ## Update Rules
 

@@ -230,6 +230,7 @@ const formatInviteDismissActionName = (invite: NotificationInvite) =>
   `Remove invite ${invite.inviteId} from list`
 
 const createEmptyAlertInstructions = () => ['']
+const TELEGRAM_READY_CONFIRMATION_GRACE_MS = 15000
 
 const readStoredFrontendMode = (): FrontendMode => {
   try {
@@ -301,12 +302,58 @@ const readInviteCodeFromUrl = () => {
   }
 }
 
+type TelegramLinkStateFromUrl = {
+  attemptId: string
+  deviceId: string
+  flow: TelegramLinkFlow
+}
+
+const readTelegramLinkStateFromUrl = (): TelegramLinkStateFromUrl | null => {
+  if (typeof window === 'undefined') return null
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const attemptId = params.get('telegram_link_attempt_id')?.trim() ?? ''
+    const deviceId = params.get('telegram_link_device_id')?.trim() ?? ''
+    if (!attemptId || !deviceId) {
+      return null
+    }
+    return {
+      attemptId,
+      deviceId,
+      flow: params.get('telegram_link_flow') === 'invite' ? 'invite' : 'device',
+    }
+  } catch {
+    return null
+  }
+}
+
 const clearInviteCodeFromUrl = () => {
   if (typeof window === 'undefined') return
   try {
     const url = new URL(window.location.href)
     if (!url.searchParams.has('invite')) return
     url.searchParams.delete('invite')
+    const nextSearch = url.searchParams.toString()
+    const nextUrl = `${url.pathname}${nextSearch ? `?${nextSearch}` : ''}${url.hash}`
+    window.history.replaceState(window.history.state, '', nextUrl)
+  } catch {
+    // Ignore URL cleanup errors and continue.
+  }
+}
+
+const clearTelegramLinkStateFromUrl = () => {
+  if (typeof window === 'undefined') return
+  try {
+    const url = new URL(window.location.href)
+    const keys = [
+      'telegram_link_attempt_id',
+      'telegram_link_device_id',
+      'telegram_link_flow',
+    ]
+    if (!keys.some((key) => url.searchParams.has(key))) return
+    keys.forEach((key) => {
+      url.searchParams.delete(key)
+    })
     const nextSearch = url.searchParams.toString()
     const nextUrl = `${url.pathname}${nextSearch ? `?${nextSearch}` : ''}${url.hash}`
     window.history.replaceState(window.history.state, '', nextUrl)
@@ -385,8 +432,9 @@ function App() {
   const [alertInstructions, setAlertInstructions] = useState<string[]>(createEmptyAlertInstructions)
   const [telegramReadiness, setTelegramReadiness] = useState<TelegramReadinessResponse | null>(null)
   const [checkingTelegramReadiness, setCheckingTelegramReadiness] = useState(false)
+  const telegramLinkStateFromUrl = readTelegramLinkStateFromUrl()
   const [isWaitingForTelegramConnect, setIsWaitingForTelegramConnect] = useState(
-    () => readStoredTelegramValue(TELEGRAM_LINK_WAITING_KEY) === '1'
+    () => telegramLinkStateFromUrl !== null || readStoredTelegramValue(TELEGRAM_LINK_WAITING_KEY) === '1'
   )
   const [telegramPopupFallbackUrl, setTelegramPopupFallbackUrl] = useState<string | null>(
     () => readStoredTelegramValue(TELEGRAM_LINK_FALLBACK_URL_KEY)
@@ -395,13 +443,13 @@ function App() {
     () => readStoredTelegramValue(TELEGRAM_LINK_FALLBACK_COMMAND_KEY)
   )
   const [telegramLinkAttemptId, setTelegramLinkAttemptId] = useState<string | null>(
-    () => readStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_KEY)
+    () => telegramLinkStateFromUrl?.attemptId ?? readStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_KEY)
   )
   const [telegramLinkAttemptDeviceId, setTelegramLinkAttemptDeviceId] = useState<string | null>(
-    () => readStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_DEVICE_ID_KEY)
+    () => telegramLinkStateFromUrl?.deviceId ?? readStoredTelegramValue(TELEGRAM_LINK_ATTEMPT_DEVICE_ID_KEY)
   )
   const [telegramLinkFlow, setTelegramLinkFlow] = useState<TelegramLinkFlow>(
-    () => (readStoredTelegramValue(TELEGRAM_LINK_FLOW_KEY) === 'invite' ? 'invite' : 'device')
+    () => telegramLinkStateFromUrl?.flow ?? (readStoredTelegramValue(TELEGRAM_LINK_FLOW_KEY) === 'invite' ? 'invite' : 'device')
   )
   const [telegramRecipients, setTelegramRecipients] = useState<NotificationRecipient[]>([])
   const [loadingTelegramRecipients, setLoadingTelegramRecipients] = useState(false)
@@ -457,6 +505,9 @@ function App() {
   const cameraPreviewTimeoutRef = useRef<number | null>(null)
   const cameraPreviewStreamRef = useRef<MediaStream | null>(null)
   const cameraPreviewOwnsStreamRef = useRef(false)
+  const telegramReadinessRequestIdRef = useRef(0)
+  const telegramConfirmedReadyUntilRef = useRef(0)
+  const telegramReadinessRef = useRef<TelegramReadinessResponse | null>(null)
 
   if (!clipQueueRef.current) {
     clipQueueRef.current = createSerialQueue(
@@ -638,6 +689,21 @@ function App() {
       writeStoredTelegramValue(TELEGRAM_LINK_FLOW_KEY, state.flow)
     }
   }, [])
+
+  useEffect(() => {
+    if (!telegramLinkStateFromUrl) return
+
+    persistTelegramLinkState({
+      waiting: true,
+      attemptId: telegramLinkStateFromUrl.attemptId,
+      deviceId: telegramLinkStateFromUrl.deviceId,
+      flow: telegramLinkStateFromUrl.flow,
+    })
+    if (telegramLinkStateFromUrl.flow === 'invite') {
+      setTelegramSetupPath('invite')
+    }
+    clearTelegramLinkStateFromUrl()
+  }, [persistTelegramLinkState, telegramLinkStateFromUrl])
 
   const processQueuedClip = useCallback(
     async (queuedClip: QueuedClip) => {
@@ -1029,6 +1095,8 @@ function App() {
   }
 
   const refreshTelegramReadiness = useCallback(async () => {
+    const requestId = telegramReadinessRequestIdRef.current + 1
+    telegramReadinessRequestIdRef.current = requestId
     if (requiresAccountSignIn) {
       setCheckingTelegramReadiness(false)
       setTelegramReadiness(null)
@@ -1041,6 +1109,16 @@ function App() {
         deviceId: resolvedDeviceId,
       })
       const status = await getTelegramReadiness(resolvedDeviceId)
+      if (telegramReadinessRequestIdRef.current !== requestId) {
+        return
+      }
+      const shouldPreserveConfirmedReadyState = !status.ready
+        && telegramReadinessRef.current?.ready === true
+        && Date.now() < telegramConfirmedReadyUntilRef.current
+      if (shouldPreserveConfirmedReadyState) {
+        clearTelegramLinkState()
+        return
+      }
       setTelegramReadiness(status)
       if (status.enabled) {
         await refreshTelegramRecipients(resolvedDeviceId)
@@ -1049,6 +1127,9 @@ function App() {
         setTelegramRecipients([])
         setNotificationInvites([])
       }
+      if (telegramReadinessRequestIdRef.current !== requestId) {
+        return
+      }
       console.info('[TelegramOnboarding] Readiness response', {
         deviceId: resolvedDeviceId,
         enabled: status.enabled,
@@ -1056,10 +1137,13 @@ function App() {
         status: status.status,
         reason: status.reason,
       })
-      if (status.ready && !isWaitingForTelegramConnect && !telegramLinkAttemptId) {
+      if (status.ready) {
         clearTelegramLinkState()
       }
     } catch (err) {
+      if (telegramReadinessRequestIdRef.current !== requestId) {
+        return
+      }
       console.error(err)
       if (err instanceof ApiError && err.status === 401) {
         setAuthSession(getAuthSession())
@@ -1074,7 +1158,9 @@ function App() {
       })
       setTelegramRecipients([])
     } finally {
-      setCheckingTelegramReadiness(false)
+      if (telegramReadinessRequestIdRef.current === requestId) {
+        setCheckingTelegramReadiness(false)
+      }
     }
   }, [
     clearTelegramLinkState,
@@ -1113,6 +1199,11 @@ function App() {
     }
   ) => {
     if (status.ready) {
+      // Invalidate any older readiness request that was started before link polling
+      // completed so its response cannot overwrite the confirmed ready state.
+      telegramReadinessRequestIdRef.current += 1
+      telegramConfirmedReadyUntilRef.current = Date.now() + TELEGRAM_READY_CONFIRMATION_GRACE_MS
+      setCheckingTelegramReadiness(false)
       if (flow === 'invite') {
         activateRecipientMode(linkDeviceId)
         clearTelegramLinkState()
@@ -1120,7 +1211,15 @@ function App() {
         setInviteCodeInput('')
         return true
       }
-      await refreshTelegramReadiness()
+      clearTelegramLinkState()
+      setTelegramReadiness({
+        enabled: true,
+        ready: true,
+        status: 'ready',
+        reason: null,
+      })
+      await refreshTelegramRecipients(linkDeviceId)
+      await refreshNotificationInvites(linkDeviceId)
       return true
     }
 
@@ -1132,7 +1231,13 @@ function App() {
     }
 
     return false
-  }, [activateRecipientMode, clearTelegramLinkState, refreshTelegramReadiness])
+  }, [
+    activateRecipientMode,
+    clearTelegramLinkState,
+    refreshNotificationInvites,
+    refreshTelegramReadiness,
+    refreshTelegramRecipients,
+  ])
 
   const beginTelegramLinkFlow = useCallback((
     start: {
@@ -1148,6 +1253,7 @@ function App() {
       deviceId: string
       flow: TelegramLinkFlow
       preOpenedPopup: Window | null
+      preferSameTabRedirect?: boolean
       suppressAutomaticRedirect?: boolean
     }
   ) => {
@@ -1177,9 +1283,9 @@ function App() {
     })
 
     let popup = options.preOpenedPopup
-    const shouldReuseCurrentTab = options.flow === 'invite'
-      && !options.preOpenedPopup
+    const shouldReuseCurrentTab = !options.preOpenedPopup
       && !options.suppressAutomaticRedirect
+      && (options.preferSameTabRedirect || options.flow === 'invite')
     if (!popup && !shouldReuseCurrentTab) {
       popup = window.open(start.connectUrl, '_blank', 'noopener,noreferrer')
     }
@@ -1348,7 +1454,9 @@ function App() {
     if (options?.openedFromShareLink) {
       setShowInviteCodeFallback(true)
     }
-    const preOpenedPopup = shouldPreOpenTelegramPopup()
+    const preOpenedPopup = options?.openedFromShareLink
+      ? null
+      : shouldPreOpenTelegramPopup()
       ? window.open('', '_blank', 'noopener,noreferrer')
       : null
 
@@ -1358,11 +1466,8 @@ function App() {
         deviceId: start.deviceId,
         flow: 'invite',
         preOpenedPopup: options?.openedFromShareLink ? null : preOpenedPopup,
-        suppressAutomaticRedirect: options?.openedFromShareLink === true,
+        preferSameTabRedirect: options?.openedFromShareLink === true,
       })
-      if (options?.openedFromShareLink && start.connectUrl) {
-        setInviteAcceptedMessage('Share link opened. Tap Open Telegram link again to finish connecting alerts.')
-      }
       if (start.attemptId) {
         const status = await getTelegramLinkStatus(start.deviceId, start.attemptId)
         await handleTelegramLinkStatusResult(start.deviceId, 'invite', status)
@@ -1384,8 +1489,26 @@ function App() {
     setInviteCodeInput(inviteCodeFromUrl)
     clearInviteCodeFromUrl()
     setInviteCodeFromUrl(null)
+    if (recipientSharedDeviceId) return
+    if (telegramLinkFlow === 'invite' && telegramLinkAttemptId) {
+      if (telegramPopupFallbackUrl) {
+        try {
+          window.location.assign(telegramPopupFallbackUrl)
+        } catch {
+          setError('Unable to open Telegram automatically. Use the backup Telegram link below.')
+        }
+      }
+      return
+    }
     void handleAcceptInviteCode(inviteCodeFromUrl, { openedFromShareLink: true })
-  }, [handleAcceptInviteCode, inviteCodeFromUrl])
+  }, [
+    handleAcceptInviteCode,
+    inviteCodeFromUrl,
+    recipientSharedDeviceId,
+    telegramLinkAttemptId,
+    telegramLinkFlow,
+    telegramPopupFallbackUrl,
+  ])
 
   const handleSendTelegramTestAlert = useCallback(async () => {
     const resolvedDeviceId = await ensureDeviceId()
@@ -1413,11 +1536,11 @@ function App() {
   const handleConnectTelegram = async () => {
     setError(null)
     setInviteAcceptedMessage(null)
-    const preOpenedPopup = shouldPreOpenTelegramPopup()
-      ? window.open('', '_blank', 'noopener,noreferrer')
-      : null
+    const preferSameTabRedirect = shouldPreOpenTelegramPopup()
+    const preOpenedPopup: Window | null = null
     console.info('[TelegramOnboarding] Connect clicked', {
       preOpenedPopup: Boolean(preOpenedPopup),
+      preferSameTabRedirect,
     })
     try {
       const resolvedDeviceId = await ensureResolvedDeviceId()
@@ -1437,10 +1560,10 @@ function App() {
         deviceId: resolvedDeviceId,
         flow: 'device',
         preOpenedPopup,
+        preferSameTabRedirect,
       })
     } catch (err) {
       console.error(err)
-      preOpenedPopup?.close()
       setError('Unable to open Telegram link')
     }
   }
@@ -1659,6 +1782,10 @@ function App() {
     setAccountEmail(authSession.email)
   }, [authSession.email])
 
+  useEffect(() => {
+    telegramReadinessRef.current = telegramReadiness
+  }, [telegramReadiness])
+
   // Initial clip load and cleanup
   useEffect(() => {
     void refreshTelegramReadiness()
@@ -1720,6 +1847,33 @@ function App() {
     telegramLinkAttemptDeviceId,
     telegramLinkFlow,
     telegramLinkAttemptId,
+  ])
+
+  useEffect(() => {
+    if (requiresAccountSignIn || !isWaitingForTelegramConnect) return
+
+    const refreshOnReturn = () => {
+      void handleCheckTelegramReadiness()
+    }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void handleCheckTelegramReadiness()
+      }
+    }
+
+    window.addEventListener('focus', refreshOnReturn)
+    window.addEventListener('pageshow', refreshOnReturn)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      window.removeEventListener('focus', refreshOnReturn)
+      window.removeEventListener('pageshow', refreshOnReturn)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [
+    handleCheckTelegramReadiness,
+    isWaitingForTelegramConnect,
+    requiresAccountSignIn,
   ])
 
   useEffect(() => {
@@ -2012,6 +2166,8 @@ function App() {
                           </button>
                         </div>
 
+                        {/* Keep the "This phone" and "A different phone" Telegram paths aligned.
+                            If one path's setup/status actions or copy changes, review the other path too. */}
                         {selectedTelegramSetupPath === 'device' && (
                           <>
                             <div className="telegram-subsection telegram-onboarding">

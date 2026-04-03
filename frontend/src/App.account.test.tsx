@@ -105,6 +105,8 @@ describe('App account flows', () => {
       'Alert if a person enters the office.'
     )
 
-    expect(startButton).toBeEnabled()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /start monitoring/i })).toBeEnabled()
+    })
   })
 })

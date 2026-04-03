@@ -38,6 +38,14 @@ def test_deploy_vps_environment_script_maps_paths_and_ports_per_environment():
     assert 'backend_port="8000"' in content
 
 
+def test_deploy_vps_environment_defaults_to_https_domain_origin():
+    repo_root = Path(__file__).resolve().parents[2]
+    script = repo_root / "scripts" / "deploy-vps-environment"
+    content = script.read_text()
+
+    assert 'public_origin=${PING_WATCH_PUBLIC_ORIGIN:-https://alhajj.nl}' in content
+
+
 def test_deploy_vps_environment_script_passes_frontend_auth_flags_from_env_file():
     repo_root = Path(__file__).resolve().parents[2]
     script = repo_root / "scripts" / "deploy-vps-environment"
@@ -67,6 +75,14 @@ def test_build_frontend_static_script_accepts_auth_flags():
     assert 'auth_auto_login=${5:-${VITE_AUTH_AUTO_LOGIN:-}}' in content
     assert 'VITE_AUTH_REQUIRED="$auth_required"' in content
     assert 'VITE_AUTH_AUTO_LOGIN="$auth_auto_login"' in content
+
+
+def test_staging_environment_uses_absolute_public_ping_watch_url():
+    repo_root = Path(__file__).resolve().parents[2]
+    env_file = repo_root / "staging.env"
+    content = env_file.read_text()
+
+    assert "PING_WATCH_PUBLIC_URL=https://alhajj.nl/ping-watch-staging/" in content
 
 
 def test_deploy_vps_release_script_loads_environment_file_before_migrations():

@@ -10,7 +10,7 @@ repo_root=$(cd "$scripts_dir/.." && pwd)
 vps_host=${PING_WATCH_VPS_HOST:-217.154.253.21}
 vps_user=${PING_WATCH_VPS_USER:-root}
 vps_port=${PING_WATCH_VPS_PORT:-22}
-public_origin=${PING_WATCH_PUBLIC_ORIGIN:-http://$vps_host}
+public_origin=${PING_WATCH_PUBLIC_ORIGIN:-https://alhajj.nl}
 server_root=${PING_WATCH_SERVER_ROOT:-/var/www/ping-watch}
 ssh_key_path=${PING_WATCH_VPS_SSH_KEY:-$HOME/.ssh/websitekey}
 

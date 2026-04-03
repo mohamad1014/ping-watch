@@ -307,6 +307,27 @@ def _telegram_base_url() -> str:
     )
 
 
+def _public_ping_watch_url() -> str | None:
+    value = (os.environ.get("PING_WATCH_PUBLIC_URL") or "").strip()
+    if not value:
+        return None
+    return _normalize_absolute_url(value)
+
+
+def _build_ping_watch_return_url(*, device_id: str, attempt_id: str, invite_id: str | None) -> str | None:
+    public_url = _public_ping_watch_url()
+    if not public_url:
+        return None
+
+    parsed = urlparse(public_url)
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    params["telegram_link_device_id"] = [device_id]
+    params["telegram_link_attempt_id"] = [attempt_id]
+    params["telegram_link_flow"] = ["invite" if invite_id else "device"]
+    query = urlencode(params, doseq=True)
+    return urlunparse(parsed._replace(query=query))
+
+
 def _require_worker_api_token(request: Request) -> None:
     expected = (os.environ.get("WORKER_API_TOKEN") or "").strip()
     if not expected:
@@ -413,11 +434,42 @@ def _send_telegram_message(token: str, chat_id: str, text: str) -> None:
         logger.warning("Failed to send Telegram message: %s", exc)
 
 
-def _send_link_success_message(token: str, chat_id: str) -> None:
+def _send_link_success_message(token: str, chat_id: str, *, device_id: str, attempt_id: str, invite_id: str | None) -> None:
+    message = "Ping Watch is connected. Return to Ping Watch and tap Check Telegram status."
+    return_url = _build_ping_watch_return_url(
+        device_id=device_id,
+        attempt_id=attempt_id,
+        invite_id=invite_id,
+    )
+    if return_url:
+        message = f"{message}\n{return_url}"
     _send_telegram_message(
         token,
         chat_id,
-        "Ping Watch is connected. Return to Ping Watch and tap Check Telegram status.",
+        message,
+    )
+
+
+def _send_link_return_message(
+    token: str,
+    chat_id: str,
+    *,
+    message: str,
+    device_id: str,
+    attempt_id: str,
+    invite_id: str | None,
+) -> None:
+    return_url = _build_ping_watch_return_url(
+        device_id=device_id,
+        attempt_id=attempt_id,
+        invite_id=invite_id,
+    )
+    if return_url:
+        message = f"{message}\n{return_url}"
+    _send_telegram_message(
+        token,
+        chat_id,
+        message,
     )
 
 
@@ -477,10 +529,13 @@ def _process_start_token(
 
     if attempt.status == "linked":
         if send_user_feedback:
-            _send_telegram_message(
+            _send_link_return_message(
                 token,
                 chat_id_text,
-                "This device is already linked. Return to Ping Watch and tap Check Telegram status.",
+                message="This device is already linked. Return to Ping Watch and tap Check Telegram status.",
+                device_id=attempt.device_id,
+                attempt_id=attempt.attempt_id,
+                invite_id=attempt.invite_id,
             )
         logger.info(
             "Telegram %s received already-linked token for attempt %s",
@@ -571,7 +626,13 @@ def _process_start_token(
         attempt.device_id,
         attempt.attempt_id,
     )
-    _send_link_success_message(token, chat_id_text)
+    _send_link_success_message(
+        token,
+        chat_id_text,
+        device_id=attempt.device_id,
+        attempt_id=attempt.attempt_id,
+        invite_id=attempt.invite_id,
+    )
     return True
 
 
